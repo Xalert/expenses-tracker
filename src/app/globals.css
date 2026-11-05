@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens. Use the semantic utilities, never raw palette colours, so light/dark just work:
+ *   surfaces   bg-background  bg-surface  bg-surface-muted   border-border
+ *   text       text-foreground  text-muted-foreground
+ *   accent     bg-accent text-accent-foreground  bg-accent-soft text-accent  ring-ring
+ *   money      text-income  text-expense  text-transfer  (+ bg-income-soft / bg-expense-soft / bg-transfer-soft)
+ *   danger     text-danger  bg-danger  bg-danger-soft
+ * Dark mode follows prefers-color-scheme.
+ */
+:root {
+  --background: oklch(0.985 0.002 247.8); /* slate-50 */
+  --surface: #ffffff;
+  --surface-muted: oklch(0.968 0.007 247.9); /* slate-100 */
+  --border: oklch(0.929 0.013 255.5); /* slate-200 */
+  --border-strong: oklch(0.869 0.022 252.9); /* slate-300 */
+  --foreground: oklch(0.208 0.042 265.8); /* slate-900 */
+  --muted-foreground: oklch(0.446 0.043 257.3); /* slate-600 */
+
+  --accent: oklch(0.511 0.262 276.966); /* indigo-600 */
+  --accent-hover: oklch(0.457 0.24 277.023); /* indigo-700 */
+  --accent-foreground: #ffffff;
+  --accent-soft: oklch(0.962 0.018 272.314); /* indigo-50 */
+
+  --income: oklch(0.508 0.118 165.612); /* emerald-700 */
+  --income-soft: oklch(0.979 0.021 166.113); /* emerald-50 */
+  --expense: oklch(0.514 0.222 16.935); /* rose-700 */
+  --expense-soft: oklch(0.969 0.015 12.422); /* rose-50 */
+  --transfer: oklch(0.5 0.134 242.749); /* sky-700 */
+  --transfer-soft: oklch(0.977 0.013 236.62); /* sky-50 */
+
+  --danger: oklch(0.577 0.245 27.325); /* red-600 */
+  --danger-hover: oklch(0.505 0.213 27.518); /* red-700 */
+  --danger-soft: oklch(0.971 0.013 17.38); /* red-50 */
+
+  --ring: oklch(0.585 0.233 277.117); /* indigo-500 */
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.129 0.042 264.695); /* slate-950 */
+    --surface: oklch(0.208 0.042 265.755); /* slate-900 */
+    --surface-muted: oklch(0.249 0.042 265.8);
+    --border: oklch(0.279 0.041 260.031); /* slate-800 */
+    --border-strong: oklch(0.372 0.044 257.287); /* slate-700 */
+    --foreground: oklch(0.968 0.007 247.896); /* slate-100 */
+    --muted-foreground: oklch(0.704 0.04 256.788); /* slate-400 */
+
+    --accent: oklch(0.673 0.182 276.935); /* indigo-400 */
+    --accent-hover: oklch(0.785 0.115 274.713); /* indigo-300 */
+    --accent-foreground: oklch(0.129 0.042 264.695);
+    --accent-soft: oklch(0.257 0.09 281.288); /* indigo-950 */
+
+    --income: oklch(0.765 0.177 163.223); /* emerald-400 */
+    --income-soft: oklch(0.262 0.051 172.552); /* emerald-950 */
+    --expense: oklch(0.712 0.194 13.428); /* rose-400 */
+    --expense-soft: oklch(0.271 0.105 12.094); /* rose-950 */
+    --transfer: oklch(0.746 0.16 232.661); /* sky-400 */
+    --transfer-soft: oklch(0.293 0.066 243.157); /* sky-950 */
+
+    --danger: oklch(0.704 0.191 22.216); /* red-400 */
+    --danger-hover: oklch(0.808 0.114 19.571); /* red-300 */
+    --danger-soft: oklch(0.258 0.092 26.042); /* red-950 */
+
+    --ring: oklch(0.673 0.182 276.935);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-income: var(--income);
+  --color-income-soft: var(--income-soft);
+  --color-expense: var(--expense);
+  --color-expense-soft: var(--expense-soft);
+  --color-transfer: var(--transfer);
+  --color-transfer-soft: var(--transfer-soft);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-ring: var(--ring);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+}

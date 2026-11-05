@@ -1,0 +1,24 @@
+# Expenses Tracker — `docker compose up -d` is the whole install. Then open http://<host>:3000.
+services:
+  expenses-tracker:
+    build: .
+    # Built locally from this folder; point this at a registry image later and drop `build:` if you prefer.
+    image: expenses-tracker:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"           # host:container — change the left side to use another host port
+    environment:
+      # SQLite file inside the /data volume (created and migrated on first start).
+      DATABASE_URL: /data/app.db
+      # Session cookie `Secure` flag: auto = only when the request came in over HTTPS (X-Forwarded-Proto: https).
+      # Use true only if every request reaches the app through HTTPS; false never marks it secure.
+      COOKIE_SECURE: auto
+      # Set to "false" once your accounts exist to close sign-ups.
+      ALLOW_REGISTRATION: "true"
+      # Port the server listens on inside the container (keep the right side of `ports:` in sync).
+      PORT: 3000
+    volumes:
+      - expenses-data:/data   # all app data lives here (app.db + its -wal/-shm files)
+
+volumes:
+  expenses-data:
