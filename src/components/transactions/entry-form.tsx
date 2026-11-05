@@ -2,7 +2,19 @@
 
 import Link from "next/link";
 import { useActionState, useState } from "react";
-import { Card, CardBody, Field, FormError, Input, Select, SubmitButton, Textarea, buttonClasses } from "@/components/ui";
+import {
+  Card,
+  CardBody,
+  Field,
+  FieldError,
+  FormError,
+  Input,
+  Label,
+  Select,
+  SubmitButton,
+  Textarea,
+  buttonClasses,
+} from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { initialFormState, type FormState } from "@/lib/form";
 import { currencyDecimals } from "@/lib/money";
@@ -150,6 +162,8 @@ export function EntryForm({
   const kindCategories = categories.filter((c) => c.kind === kind);
 
   const transferBlocked = isTransfer && !canTransfer;
+  // Expense / income needs a category of that kind; without one the picker becomes an empty state.
+  const noCategories = !isTransfer && kindCategories.length === 0;
   const label = submitLabel ?? `Add ${KIND_LABEL[kind].toLowerCase()}`;
 
   function changeKind(next: EntryKind) {
@@ -295,24 +309,46 @@ export function EntryForm({
                     ))}
                   </Select>
                 </Field>
-                <Field id="categoryId" label="Category" error={err.categoryId}>
-                  <Select
-                    id="categoryId"
-                    name="categoryId"
-                    value={categoryId}
-                    onChange={(e) => setCategoryId(e.target.value)}
-                    error={err.categoryId}
-                  >
-                    <option value="" disabled>
-                      Choose a category
-                    </option>
-                    {kindCategories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
+                <div className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    {noCategories ? (
+                      <p className="text-sm font-medium text-foreground">Category</p>
+                    ) : (
+                      <Label htmlFor="categoryId">Category</Label>
+                    )}
+                    {/* Plain navigation: whatever was typed in this form is not kept. */}
+                    <Link href="/categories" className="text-xs font-medium text-accent hover:underline">
+                      Manage categories
+                    </Link>
+                  </div>
+                  {noCategories ? (
+                    <div className="rounded-lg border border-dashed border-border-strong px-3 py-2.5 text-sm text-muted-foreground">
+                      You have no {kind} categories.{" "}
+                      <Link href="/categories" className="font-medium text-accent hover:underline">
+                        Create one
+                      </Link>{" "}
+                      to record {kind === "expense" ? "an expense" : "income"}.
+                    </div>
+                  ) : (
+                    <Select
+                      id="categoryId"
+                      name="categoryId"
+                      value={categoryId}
+                      onChange={(e) => setCategoryId(e.target.value)}
+                      error={err.categoryId}
+                    >
+                      <option value="" disabled>
+                        Choose a category
                       </option>
-                    ))}
-                  </Select>
-                </Field>
+                      {kindCategories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                  <FieldError id="categoryId">{err.categoryId}</FieldError>
+                </div>
               </div>
               <Field id="amount" label="Amount" error={err.amount}>
                 <AmountInput
@@ -354,7 +390,7 @@ export function EntryForm({
             <Link href={returnTo} className={buttonClasses({ variant: "secondary" })}>
               Cancel
             </Link>
-            {!transferBlocked && <SubmitButton pendingLabel="Saving…">{label}</SubmitButton>}
+            {!transferBlocked && !noCategories && <SubmitButton pendingLabel="Saving…">{label}</SubmitButton>}
           </div>
         </form>
       </CardBody>

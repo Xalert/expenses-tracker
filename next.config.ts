@@ -9,8 +9,15 @@ const nextConfig: NextConfig = {
   // Migrations are read from disk at runtime; ship them inside the standalone output too.
   outputFileTracingIncludes: { "/**": ["./drizzle/**/*"] },
   serverExternalPackages: ["better-sqlite3"],
-  // The app serves no optimised images; this keeps `sharp` out of the standalone output (~20 MB smaller image).
+  // The app serves no optimised images, so the image optimiser is switched off.
   images: { unoptimized: true },
+  experimental: {
+    serverActions: {
+      // Import uploads (/data) are capped at 5 MB by the app itself (src/server/import.ts); this leaves room for
+      // the multipart overhead. Next's default is 1 MB. A reverse proxy in front needs a matching limit.
+      bodySizeLimit: "6mb",
+    },
+  },
   turbopack: {
     rules: {
       "*.css": {

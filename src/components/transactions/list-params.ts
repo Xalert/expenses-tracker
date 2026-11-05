@@ -61,3 +61,9 @@ export function listHref(p: ListParams, overrides: Partial<ListParams> = {}): st
   const s = qs.toString();
   return s ? `/transactions?${s}` : "/transactions";
 }
+
+/** `/api/export/transactions?…` carrying the list's filters (not the page): the "Export CSV" link. */
+export function exportCsvHref(p: ListParams): string {
+  const qs = listHref(p, { page: 1 }).split("?")[1];
+  return qs ? `/api/export/transactions?${qs}` : "/api/export/transactions";
+}

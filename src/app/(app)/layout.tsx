@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/brand";
-import { BottomTabs, SidebarNav } from "@/components/shell/nav";
+import { BottomTabs, SidebarNav, TopBarDataLink } from "@/components/shell/nav";
 import { PlusIcon } from "@/components/shell/icons";
 import { SignOutButton } from "@/components/shell/sign-out-button";
 import { buttonClasses } from "@/components/ui/button";
@@ -41,6 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </Link>
         <div className="flex min-w-0 items-center gap-1">
           <span className="truncate text-sm text-muted-foreground">{user.name}</span>
+          <TopBarDataLink />
           <SignOutButton compact />
         </div>
       </header>

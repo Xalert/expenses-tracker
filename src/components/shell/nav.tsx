@@ -3,13 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
-import { HomeIcon, ListIcon, PlusIcon, WalletIcon } from "./icons";
+import { DataIcon, HomeIcon, ListIcon, PlusIcon, TagIcon, WalletIcon } from "./icons";
 
 export const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: HomeIcon },
   { href: "/transactions", label: "Transactions", icon: ListIcon },
   { href: "/wallets", label: "Wallets", icon: WalletIcon },
+  { href: "/categories", label: "Categories", icon: TagIcon },
 ] as const;
+
+/** Sidebar-only entries, below the main ones. On mobile the bottom bar is full: these live in the top bar. */
+export const SECONDARY_NAV_ITEMS = [{ href: "/data", label: "Import & export", icon: DataIcon }] as const;
 
 function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
@@ -20,27 +24,28 @@ function isActive(pathname: string, href: string) {
 /** Vertical nav for the desktop sidebar. */
 export function SidebarNav() {
   const pathname = usePathname();
+  const link = ({ href, label, icon: Icon }: (typeof NAV_ITEMS | typeof SECONDARY_NAV_ITEMS)[number]) => {
+    const active = isActive(pathname, href);
+    return (
+      <Link
+        key={href}
+        href={href}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+          active ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
+        )}
+      >
+        <Icon className="size-5" />
+        {label}
+      </Link>
+    );
+  };
   return (
     <nav aria-label="Main" className="space-y-1">
-      {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-        const active = isActive(pathname, href);
-        return (
-          <Link
-            key={href}
-            href={href}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              active
-                ? "bg-accent-soft text-accent"
-                : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
-            )}
-          >
-            <Icon className="size-5" />
-            {label}
-          </Link>
-        );
-      })}
+      {NAV_ITEMS.map(link)}
+      <div className="my-3 border-t border-border" role="presentation" />
+      {SECONDARY_NAV_ITEMS.map(link)}
     </nav>
   );
 }
@@ -83,5 +88,25 @@ export function BottomTabs() {
         </Link>
       </div>
     </nav>
+  );
+}
+
+/** Mobile top-bar shortcut to /data (the bottom tab bar has no room for a sixth tab at 375px). */
+export function TopBarDataLink() {
+  const pathname = usePathname();
+  const active = isActive(pathname, "/data");
+  return (
+    <Link
+      href="/data"
+      aria-label="Import & export"
+      title="Import & export"
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+        active ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
+      )}
+    >
+      <DataIcon className="size-4" />
+    </Link>
   );
 }

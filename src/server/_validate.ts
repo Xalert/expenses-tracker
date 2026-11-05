@@ -36,11 +36,19 @@ export function normalizeNote(value: unknown): string | null {
   return note || null;
 }
 
-export function normalizeName(value: unknown, field = "name"): string {
+export function normalizeName(value: unknown, field = "name", maxLength = MAX_NAME_LENGTH): string {
   const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
   if (!name) throw new ServiceError("VALIDATION", "Enter a name.", field);
-  if (name.length > MAX_NAME_LENGTH) {
-    throw new ServiceError("VALIDATION", `Keep the name under ${MAX_NAME_LENGTH} characters.`, field);
+  if (name.length > maxLength) {
+    throw new ServiceError("VALIDATION", `Keep the name under ${maxLength} characters.`, field);
   }
   return name;
+}
+
+/** True for a SQLite UNIQUE violation, whether raw (better-sqlite3) or wrapped by Drizzle (`cause`). */
+export function isUniqueViolation(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e && depth < 3; e = (e as { cause?: unknown }).cause, depth++) {
+    if ((e as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") return true;
+  }
+  return false;
 }

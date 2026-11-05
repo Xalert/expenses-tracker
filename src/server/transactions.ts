@@ -136,7 +136,8 @@ function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
-function filterConditions(userId: number, f: TransactionFilters): SQL {
+/** WHERE clause for `listTransactions` filters (also used by the CSV export). Throws VALIDATION on bad input. */
+export function filterConditions(userId: number, f: TransactionFilters): SQL {
   const conds: SQL[] = [eq(transactions.userId, userId)];
   if (f.walletId !== undefined) conds.push(eq(transactions.walletId, assertId(f.walletId, "walletId", "wallet")));
   if (f.kind !== undefined) {

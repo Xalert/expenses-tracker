@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { PlusIcon } from "@/components/shell/icons";
+import { DownloadIcon, PlusIcon } from "@/components/shell/icons";
 import { ConfirmDeleteForm } from "@/components/transactions/confirm-delete-form";
 import { PencilIcon, TrashIcon } from "@/components/transactions/icons";
-import { hasFilters, listHref, PAGE_SIZE, parseListParams } from "@/components/transactions/list-params";
+import { exportCsvHref, hasFilters, listHref, PAGE_SIZE, parseListParams } from "@/components/transactions/list-params";
 import { TransactionFilters } from "@/components/transactions/transaction-filters";
 import { TransactionList, transactionLabel } from "@/components/transaction-list";
 import { Card, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
@@ -102,10 +102,24 @@ export default async function TransactionsPage({
             : undefined
         }
         actions={
-          <LinkButton href={withReturnTo("/transactions/new", currentHref)}>
-            <PlusIcon className="size-4" />
-            Add
-          </LinkButton>
+          <>
+            {total > 0 && (
+              // A plain <a>: the route handler answers with a file download (all matching rows, current filters).
+              <a
+                href={exportCsvHref(params)}
+                download
+                className={buttonClasses({ variant: "secondary" })}
+                title={filtered ? "Export the transactions matching these filters as CSV" : "Export all transactions as CSV"}
+              >
+                <DownloadIcon className="size-4" />
+                Export CSV
+              </a>
+            )}
+            <LinkButton href={withReturnTo("/transactions/new", currentHref)}>
+              <PlusIcon className="size-4" />
+              Add
+            </LinkButton>
+          </>
         }
       />
 

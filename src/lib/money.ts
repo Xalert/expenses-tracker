@@ -62,6 +62,30 @@ export function parseAmount(
   return negative ? -minor : minor;
 }
 
+/**
+ * Parse a plain signed decimal (`-24.5806912`, `+5`, `30`: dot as separator, no grouping) into integer minor units,
+ * rounding extra decimals **half away from zero** with string/BigInt arithmetic (never floats):
+ * `2.675` → 268, `-0.005` → 1 (negative), `-1500.4` JPY → 1500. Returns the magnitude plus the sign, and whether
+ * a non-zero digit was dropped; `null` for anything else or a magnitude beyond `Number.MAX_SAFE_INTEGER`.
+ * For importing other apps' exports; user input goes through `parseAmount`, which rejects extra decimals.
+ */
+export function parseDecimalRounded(
+  input: string,
+  currency: string,
+): { minor: number; negative: boolean; rounded: boolean } | null {
+  if (typeof input !== "string") return null;
+  const m = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(input.trim());
+  if (!m) return null;
+  const [, sign, whole, frac = ""] = m;
+  const decimals = currencyDecimals(currency);
+  const kept = frac.slice(0, decimals).padEnd(decimals, "0");
+  const dropped = frac.slice(decimals);
+  let digits = BigInt(whole + kept);
+  if (dropped !== "" && dropped[0] >= "5") digits += BigInt(1);
+  if (digits > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return { minor: Number(digits), negative: sign === "-", rounded: /[1-9]/.test(dropped) };
+}
+
 /** Format integer minor units with the currency, e.g. `formatMoney(-1250, "EUR", { signed: true })` → "-€12.50". */
 export function formatMoney(
   minor: number,

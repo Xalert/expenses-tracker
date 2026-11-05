@@ -2,6 +2,9 @@
 
 A multi-user, multi-currency expenses tracker. Log income, expenses and transfers across wallets held in
 different currencies; totals are always grouped per currency (no conversion).
+Expenses and income are filed under categories you manage at `/categories`: eight defaults to start with, which you can
+rename or remove, plus your own. Removing a category that is in use moves its transactions to another category of the
+same kind.
 
 Next.js (App Router, Server Components + Server Actions) · SQLite via Drizzle ORM + better-sqlite3 · Tailwind CSS v4 ·
 zod · vitest. The full build contract — data model, domain rules, service signatures, UI direction — is in
@@ -30,6 +33,58 @@ Demo login after seeding: `demo@example.com` / `demo-password`.
 | `npm test` | vitest (services run against an in-memory SQLite DB) |
 | `npm run db:generate` | generate a new migration into `drizzle/` after editing `src/db/schema.ts` |
 | `npm run db:seed` | idempotent demo data |
+
+## Import & export
+
+`/data` (sidebar → **Import & export**; on phones, the arrows icon in the top bar) has two downloads and an import.
+
+- **Full backup (JSON)** — `GET /api/export/backup`. The whole account, lossless: wallets (initial balance,
+  archived state), categories, transactions and transfers, versioned (`"version": 1`). Use it to back up an
+  account or move it to another instance. It never contains your email, password hash or sessions.
+- **Transactions (CSV)** — `GET /api/export/transactions`. One row per expense, income or transfer for
+  spreadsheets. The **Export CSV** button on `/transactions` exports exactly the rows matching the current filters
+  (all pages). A CSV has no initial balances, archived state or unused categories; use the backup to move an account.
+
+CSV columns (UTF-8 with BOM, CRLF, RFC 4180 quoting, ISO dates, amounts with a `.` and no thousands separator):
+
+```csv
+date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount
+2026-11-01,income,ING Current,EUR,4200.00,Salary,Monthly salary,,,
+2026-11-02,expense,ING Current,EUR,1150.00,Housing,Rent,,,
+2026-11-02,transfer,ING Current,EUR,300.00,,Top up lei account,BT Lei,RON,1492.50
+```
+
+A transfer is one row: `amount` leaves `wallet`, `to_amount` arrives in `to_wallet`. Text starting with `=`, `+`,
+`-`, `@` (or `'`) is written with a leading `'` so spreadsheets don't run it as a formula; the import removes it again.
+
+**Importing** (a backup, a CSV, or a Spendee CSV export; the format is detected from the content) always *adds* to the account you are signed
+in to — nothing is overwritten or deleted. It works in two steps: **Preview** checks the whole file and shows what
+will be added, which wallets and categories will be created, and every problem with its line number (CSV) or JSON
+path; **Import** re-checks it and saves everything in one database transaction, or nothing if there is any problem.
+
+- Wallets are matched by name + currency and categories by kind + name, both ignoring case; missing ones are created
+  (from a CSV: balance 0, active). Existing wallets are not modified.
+- The CSV reader accepts what spreadsheets save back: `,` `;` or tab separators, decimal commas (`12,50`),
+  `YYYY-MM-DD` or `DD.MM.YYYY` dates, columns in any order, extra columns (ignored), CRLF or LF.
+- **Duplicates** — "Skip transactions that already exist" (on by default) skips an entry when the account already
+  has one with the same wallet, type, category, date, amount and note (transfers: both wallets, date, both amounts
+  and note). Entries are matched one for one: a file with 3 identical coffees imported into an account that has 1
+  adds 2. So importing the same file twice adds nothing the second time.
+- New entries are never added to a wallet you archived; unarchive it first (rows that are duplicates are fine).
+  A backup restores archived wallets (with their history) as archived.
+- **Spendee exports** — a CSV exported from [Spendee](https://www.spendee.com) is recognised from its header and
+  imported as-is (shown as "Spendee export" in the preview):
+  - Expense and income rows only; **transfers are not supported** (such a row is reported as a problem).
+  - The date is kept and the time of day is dropped (no time-zone conversion).
+  - Spendee's signed amounts become positive amounts of the row's type. Amounts with more decimals than the
+    currency has (Spendee writes converted foreign purchases like `-24.5806912`) are **rounded half away from
+    zero** to the currency's decimals; the preview says how many were rounded. An amount that rounds to 0 is a problem.
+  - Missing wallets (by name + currency) are created with a **starting balance of 0** — set it afterwards if your
+    Spendee wallet had one. Missing categories are created per type, so "Other" can become both an expense and an
+    income category. The `First name` / `Last name` columns are ignored.
+- Limits: **5 MB** and **50,000 rows** per file. Behind a reverse proxy, its own upload limit must allow 5 MB too —
+  nginx's `client_max_body_size` defaults to **1 MB**, so add e.g. `client_max_body_size 6m;` to the `location`
+  block above, otherwise large imports fail with `413 Request Entity Too Large`.
 
 ## Self-hosting with Docker
 
@@ -98,6 +153,7 @@ location / {
     proxy_set_header Host              $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    client_max_body_size 6m;          # imports on /data accept files up to 5 MB (nginx default: 1 MB)
 }
 ```
 
@@ -216,12 +272,12 @@ The reverse-proxy and backup notes above apply unchanged.
 
 ```
 src/app/(auth)/        login + register pages and their Server Actions
-src/app/(app)/         signed-in area: layout (shell + nav), dashboard, wallets, transactions
+src/app/(app)/         signed-in area: layout (shell + nav), dashboard, wallets, transactions, categories, data (import/export)
 src/components/ui/     Button, Input, Select, Field, Card, Badge, Amount, EmptyState, FormError…
 src/components/        transaction-list.tsx, app shell pieces
 src/db/                Drizzle schema + connection (auto-migrate)
-src/lib/               auth, config (env), money, currencies, dates, errors, form-state helpers
-src/app/api/health/    health check route
+src/lib/               auth, config (env), money, currencies, dates, errors, form-state helpers, csv, backup format
+src/app/api/           health check + export downloads (/api/export/backup, /api/export/transactions)
 src/server/            service layer: every query is scoped by userId
 tests/                 vitest suites
 scripts/seed.ts        demo data
