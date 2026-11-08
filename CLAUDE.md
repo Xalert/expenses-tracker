@@ -133,7 +133,10 @@ must be built on Linux for its target platform because better-sqlite3 is a nativ
   an intercepted copy in `src/app/(app)/@modal/(.)…` rendering the same body component (`new-entry.tsx`,
   `new-wallet.tsx`, `edit-wallet.tsx` next to each page) inside `Dialog`. Change the body, not one of the copies.
   Every other `(app)` page needs a null `page.tsx` at the same path under `@modal/` (a parallel slot keeps stale
-  content on soft navigation; a catch-all breaks the `(auth)` pages); `tests/shell.test.tsx` enforces it.
+  content on soft navigation; a catch-all breaks the `(auth)` pages); `tests/shell.test.tsx` enforces it. A form
+  shown in a dialog posts a hidden `mode=dialog`; the create actions then return `{ ok: true }` (after
+  `revalidatePath("/", "layout")`) instead of redirecting, and the form closes itself with `router.back()` +
+  `router.refresh()`. Without that field the same actions redirect, which is what the full pages rely on.
 - **`returnTo` query parameters** must go through `safeReturnTo` (`src/lib/return-to.ts`), the open-redirect guard.
 - **Revalidation:** category and import changes affect every signed-in page, so those actions call
   `revalidatePath("/", "layout")`.

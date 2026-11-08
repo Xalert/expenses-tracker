@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { isValidDate } from "@/lib/dates";
 import { isServiceError } from "@/lib/errors";
 import { formValues, serviceErrorState, zodErrorState, type FormState } from "@/lib/form";
-import { currencyDecimals, parseAmount } from "@/lib/money";
+import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
 import { safeReturnTo } from "@/lib/return-to";
 import {
   createTransaction,
@@ -15,6 +15,7 @@ import {
   getTransaction,
   updateTransaction,
   type TransactionInput,
+  type TransactionView,
 } from "@/server/transactions";
 import {
   createTransfer,
@@ -22,6 +23,7 @@ import {
   getTransfer,
   updateTransfer,
   type TransferInput,
+  type TransferView,
 } from "@/server/transfers";
 import { getWallet } from "@/server/wallets";
 
@@ -79,6 +81,20 @@ function assertBoundId(value: unknown): number {
 
 function returnToOf(formData: FormData): string {
   return safeReturnTo(formData.get("returnTo"));
+}
+
+/**
+ * The Add dialog posts `mode=dialog`: the create actions then return `{ ok: true, message }` instead of
+ * redirecting, and the form closes the dialog (or clears itself for another entry) on the client.
+ */
+function isDialogMode(formData: FormData): boolean {
+  return formData.get("mode") === "dialog";
+}
+
+/** After a save from the dialog: every signed-in page may show the new entry (balances, lists, charts). */
+function savedInDialog(message: string): FormState {
+  revalidatePath("/", "layout");
+  return { ok: true, message };
 }
 
 function revalidateAll(walletIds: Iterable<number>) {
@@ -160,10 +176,15 @@ export async function createTransactionAction(_prev: FormState, formData: FormDa
   const values = formValues(formData);
   const parsed = parseTransaction(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
+  let created: TransactionView;
   try {
-    createTransaction(user.id, parsed.input);
+    created = createTransaction(user.id, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
+  }
+  if (isDialogMode(formData)) {
+    const amount = formatMoney(created.amountMinor, created.currency);
+    return savedInDialog(`Added ${amount} to ${created.categoryName ?? created.walletName}`);
   }
   revalidateAll([parsed.input.walletId]);
   redirect(returnToOf(formData));
@@ -213,10 +234,15 @@ export async function createTransferAction(_prev: FormState, formData: FormData)
   const values = formValues(formData);
   const parsed = parseTransfer(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
+  let created: TransferView;
   try {
-    createTransfer(user.id, parsed.input);
+    created = createTransfer(user.id, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
+  }
+  if (isDialogMode(formData)) {
+    const amount = formatMoney(created.from.amountMinor, created.from.currency);
+    return savedInDialog(`Moved ${amount} from ${created.from.walletName} to ${created.to.walletName}`);
   }
   revalidateAll([parsed.input.fromWalletId, parsed.input.toWalletId]);
   redirect(returnToOf(formData));

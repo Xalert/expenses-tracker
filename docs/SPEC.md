@@ -196,6 +196,8 @@ src/
   components/transaction-list.tsx                   # shared read-only list of TransactionView rows
   components/shell/  components/brand.tsx           # app shell pieces (top menu, account menu, Add button, icons)
   components/charts/                                # DayBars, RunningLine (redesign)
+  components/dashboard/                             # Overview pieces: MonthChart, WalletsCard / LatestCard, MonthSwitcher
+  lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
   app/(app)/@modal/                                 # intercepted dialog routes: (.)transactions/new, (.)wallets/new, (.)wallets/[id]/edit
   server/insights.ts                                # per-currency timelines and insight figures (redesign)
   db/schema.ts  db/index.ts                         # schema, connection, auto-migrate
@@ -440,7 +442,10 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   plus **`<input type="hidden" name={name} value="YYYY-MM-DD">`**: forms post exactly what a native date input
   would, so actions, zod schemas and services are unchanged. With `allowEmpty` an empty picker renders **no** hidden
   input (a GET form then leaves the parameter out of the URL) and a set one shows a "Clear date" × button.
-  Uncontrolled: it reads `defaultValue` once, so a form that must reset it remounts (`key`). The popover
+  Uncontrolled: it reads `defaultValue` once, so a form that must reset it remounts (`key`). Added in step 6:
+  `value?` + `onChange?(value)` make it controlled (the Add form's Today / Yesterday pills set the same value);
+  `display?: ReactNode` replaces the trigger's text, `'aria-label'?` names the trigger when no `<label for>` does, and
+  `triggerClassName?` replaces its field styling (the Add form draws it as a pill). The popover
   (`role="dialog"`, "Choose a date"): ‹ › month buttons, a "November 2026" button that switches to a `MonthGrid`
   (picking a month returns to the days; Escape there steps back instead of closing), a Monday-first 6-week grid
   (`role="grid"`, day buttons `role="gridcell"` with `aria-selected`, `aria-current="date"` for today and the full
@@ -484,15 +489,55 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     Add form, currency in the wallet form). Uncontrolled (remount with `key` to reset). A `<label for>` cannot name
     a group: label it with `aria-labelledby` pointing at a visible heading. With `id` and `error` it renders the
     error as `<id>-error` (same convention as `Field`) and sets `aria-invalid` / `aria-describedby` on the group.
+    Step 6 added `onChange?(value)` (it stays uncontrolled; the Add form mirrors the wallet choice to show its
+    currency) and exports `pillClasses({ selected?, error? })`, the pill look for buttons that are not radios.
   - Both are real `<input type="radio">`s (visually hidden, `sr-only`) inside `<label>`s, in a `role="radiogroup"`:
     the form posts `name=value`, arrow keys move the choice, and the focused option shows the focus ring
     (`peer-focus-visible`). `ChoiceOption` = `{ value: string; label: ReactNode }`.
   - `DayBars` `{ days: { date; value; tone? }[]; cap?; selectedDate?; hrefFor?(date) }` — the per-day bar row; with
     `hrefFor` each bar is a link.
+    As built (step 3, `@/components/charts`): `{ days: { date; value; tone?: 'accent'|'income'|'muted'|'future' }[];
+    max?; cap?: { date; label }; selectedDate?; hrefFor?(date); ariaLabelFor(date, value); height?; className? }`.
+    Server-renderable. A CSS grid, one column per day (`repeat(N, minmax(0,1fr))`, 2px gap, 5px from `sm`); each bar
+    is absolutely positioned at the bottom of its column with `height: value / max` (default `max` = the largest
+    value; values above `max` are clipped to full height); a day with value 0 shows a 2px stub (`--border`, or
+    `--chart-future` for tone `future`). With `selectedDate` the selected bar is accent and the others
+    `--border-strong`. With `hrefFor` each column is a `next/link` (`aria-label` from `ariaLabelFor`,
+    `aria-current="date"` on the selected one); without it the whole row is `aria-hidden`. `cap` adds a 24px label
+    row at the top: the pill ("Rent €1,150.00", accent fill, 11px/700, `z-10` so lines drawn over the chart do not
+    cover it) sits over the capped bar (aligned to its left edge in the first half of the month, its right edge in
+    the second), and the capped bar is drawn at full height with a square top and a 3px `--surface` gap near the
+    top (a "broken axis" mark). Without `height` the row fills its parent: size it with a wrapper (the Overview
+    puts it in an `absolute inset-0` div — do not pass `absolute` through `className`, `cn()` does not drop the
+    row's own classes). The cap is decided by `pickScale` (`lib/chart-scale.ts`, below).
   - `RunningLine` — the SVG overlay: current, previous (dashed) or balance series scaled to the same box.
+    As built (step 3): `{ series: { values; tone: 'foreground'|'muted'|'accent'; dashed? }[]; max; days; ariaLabel;
+    className? }` — an `absolute inset-0` `<svg viewBox="0 0 <days*20> 200" preserveAspectRatio="none" role="img">`
+    (put it in a `relative` box), `overflow-visible`, `pointer-events-none`; one `<polyline>` per series with
+    `stroke="currentColor"` and a `text-*` class (`muted` = `--border-strong`, the previous-month colour), stroke 2.5
+    (2 and `5 5` dashes when `dashed`), `vector-effect="non-scaling-stroke"`. Points (`linePoints(values, max, days)`):
+    a start at 0 on the left edge, then day i at x = i·20 + 10 (the middle of its column), y = 200 − value/max·200;
+    values past `days` are dropped.
   - `InsightCard` `{ title; value; sub?; tone? }`.
+    As built (step 3): `tone?: 'default'|'income'|'expense'` colours the value (`text-income` / `text-expense`);
+    a `<section>` card (18px radius), title an `<h2>` 13px/600 muted, value 22px (26px from `sm`)/800 tabular and
+    truncated, sub 13px muted.
   - `ExpandableRow` (client) — a row button + an in-place panel with one-open-at-a-time behaviour per list.
   - `CurrencySwitch` `{ currencies; value; hrefFor(code) }`.
+    As built (step 3): a `<nav aria-label="Currency">` (overridable with `aria-label`) holding a `Segmented`-styled
+    track of `next/link`s (`scroll={false}`, `title` = the currency name, `aria-current="true"` on `value`); a `value`
+    missing from `currencies` is added (codes sorted) so the selection always shows. The track scrolls sideways
+    inside itself instead of widening the page. Server-renderable.
+  - `MonthSwitcher` (client, `components/dashboard/month-switcher.tsx`) gained `extraParams?: Record<string,string>`
+    in step 3: kept on every link it builds (`{ currency: "RON" }` → `/?month=2026-10&currency=RON`, the current
+    month → `/?currency=RON`).
+  - Chart and Overview helpers (pure, step 3): `lib/chart-scale.ts` — `median`, `pickScale(days) → { max;
+    cappedDate? }` (cap the largest day when it is more than `CAP_FACTOR` = 3 × the median of the non-zero days
+    **and** more than `CAP_HEADROOM` = 1.2 × the next largest day; then `max` = that next day × 1.2; otherwise `max`
+    = the largest day; earliest on a tie), `cumulative(values)`, `axisTicks(monthShort, length, today | null)`.
+    `lib/overview.ts` — `resolveOverviewCurrency(requested, heldCurrencies, pickDefault)`, `overviewHref(month,
+    currency, maxMonth)`, `paceSummary(…)`, `toneOf(minor)`, `shortDateLabel(date, today)`, `monthName`,
+    `monthShortName`, `monthLength`.
   - `AccountMenu` (client, `components/shell/account-menu.tsx`) `{ displayName; username; email }` — the
     initials button (`initials(displayName)` from `lib/user-id.ts`: first letters of the first and last word, or
     the first two letters of a single word; `.`, `_`, `-` also split words) and a `Popover` with the Auth section's
@@ -558,10 +603,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
     the page's folder — `NewEntry` (`transactions/new/new-entry.tsx`), `NewWallet` (`wallets/new/new-wallet.tsx`),
     `walletToEdit` + `EditWallet` (`wallets/[id]/edit/edit-wallet.tsx`) — so the forms are not forked. The dialog
-    calls `requireUser()` itself. **Until step 6** the forms still redirect on success (Add → `/transactions`,
-    wallets → `/wallets/<id>`) and their Cancel is a link; both close the dialog because `Dialog` hides itself when
-    the path changes. The Add dialog ignores `?returnTo=` (always `/transactions`); the Add form still draws its own
-    card inside the dialog.
+    calls `requireUser()` itself. The wallet dialogs still redirect on success (→ `/wallets/<id>`) and their Cancel
+    is a link; both close the dialog because `Dialog` hides itself when the path changes. The Add dialog closes
+    itself since step 6 (see /transactions/new) and ignores `?returnTo=`.
 - **App shell, as built (step 1):** the top bar is a full-width `bg-surface` strip with a bottom border (not
   sticky); inside, the same `max-w-[1240px]` container as the page (16px side padding on phones, 24px from `sm`,
   32px from `lg`). From `sm` up it is one row — brand, menu (takes the remaining width and scrolls sideways if it
@@ -590,6 +634,44 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      plus the previous month's figure).
   3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
      with a link to Transactions), side by side from `lg` up.
+  - As built (step 3; `page.tsx`, `components/dashboard/month-chart.tsx`, `overview-lists.tsx`):
+    - **Currency**: `?currency=` is used when it is a valid code (`isValidCurrency`, uppercase only) of a wallet the
+      user holds, archived included; anything else falls back to `pickDefaultCurrency(userId, month)`
+      (`resolveOverviewCurrency`). The month switcher keeps `currency` in its links **only when it came from the
+      URL**; a defaulted currency is re-picked for each month. The currency switch's links keep the month
+      (`overviewHref`). The switch lists `listUserCurrencies` (plus the current value, see `CurrencySwitch`) and is
+      left out when that is a single currency equal to the current one. No wallets at all (or none active and so
+      no default) → the empty state with "Welcome, <displayName>" as before.
+    - The `<h1>` is the small "November 2026 · EUR" line over the big number (34px, 42px from `sm`); there is no
+      "Dashboard" title or "Hello" line. The month switcher and currency switch sit at the top right (wrapping under
+      the number on phones), then the legend, then the chart box (160px, 240px from `sm`), then the axis labels.
+    - **Chart scales**: the bars and the lines share the box but not the scale (the legend's `title` says so).
+      Bars: `pickScale` over the whole month's daily expenses, then divided by 0.6 so the tallest ordinary bar
+      reaches 60% of the bar area and the lines above stay readable; a capped day reaches the top under its label
+      (`largestDay.label` + amount, or the amount alone when there is no label). Bars after day N use tone
+      `future` (a future-dated entry shows as a `--chart-future` bar). Lines: max = the larger of the two plotted
+      running totals' last values; this month's line stops at day N; the previous month's line is cut to this
+      month's length (31 October is not drawn on a November chart).
+    - **Axis**: "1 Nov", 15, 22, the last day, and "<N> · today" for the current month; a fixed label closer than 4
+      days to today's is dropped (if that is "1 Nov", today's label becomes "2 Nov · today"). Labels sit under their
+      day's column; the first and last are aligned to the edges.
+    - **Text alternative**: the line SVG is the `role="img"` with the summary ("Spending in EUR, November 2026:
+      €1,401.39 by 8 Nov, against €1,434.05 by 8 Oct. Largest day: 2 Nov, €1,150.00 (Rent). Bars show each day; the
+      lines show running totals on their own scale."); the bars are `aria-hidden`; a `sr-only` table (Day / Spent /
+      Income) lists days 1..N plus any later day with entries.
+    - **Cards**: "Net this month" ("Net in October" for a past month), value signed, `toneOf`; "Top category" or
+      "—" with "No spending this month"; "Pace vs <previous month>": value = this month − previous through day N,
+      signed ("-€32.66" = less spent), income tone when less, expense tone when more, "the same as by 8 Oct" when
+      equal; for a past month the sub is "less/more spent over the whole month" when day N covers the whole
+      previous month, else "…than by 30 Oct" (a 30-day month against a 31-day one); "No-spend days" "1 of 8" /
+      "October had 8 of 31". Two columns on phones, four from `lg`.
+    - **Wallets**: `getDashboard().wallets` (active, every currency), change = `getWalletMonth(…).inMinor −
+      outMinor` for the shown month ("no change" when 0; `text-income` / `text-expense`), balance = today's balance
+      (`text-expense` when negative), a "Manage" link to `/wallets`; rows link to `/wallets/<id>` (`?month=` added
+      for a past month). **Latest**: `getDashboard().recent.slice(0, 5)`; a row is the dot (`bg-expense-dot` /
+      `bg-income` / `bg-transfer`), `transactionLabel`, "Today / Yesterday / 6 Nov · note · wallet", and the signed
+      amount (income `text-income`, expense `text-foreground`, transfers `text-transfer`; a cross-currency transfer
+      shows only its own leg).
 - **/transactions** — filter chips at the top (month, wallet, type, category; each opens a popover; a search field
   for the note text), then the **day strip**, then the list. **The default view is the current month**
   (`?month=YYYY-MM`, with "All time" in the month chip; explicit `from`/`to` still work and override `month`).
@@ -637,6 +719,36 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     and the submit button ("Add expense", "Add transfer"; Enter submits). `?wallet=` / `?kind=` preselect.
   Server Actions, field names and services are unchanged; the form still posts `walletId`, `categoryId`, `amount`,
   `date`, `note` (and the transfer fields), so the pills are radio inputs with those names.
+  - As built (step 6): one `EntryForm` (`components/transactions/entry-form.tsx`) with `variant: 'page' | 'dialog'`
+    serves the dialog (`NewEntry variant="dialog"` from the intercepted route), the full page and both edit pages;
+    it also takes `today` (the server's `todayISO()`, so the pills render the same on server and client).
+    **Dialog variant:** no `Card`; posts a hidden `mode=dialog`. With it `createTransactionAction` /
+    `createTransferAction` call `revalidatePath("/", "layout")` and return `{ ok: true, message }` instead of
+    redirecting — `message` is "Added €12.40 to Food" or "Moved €20.00 from Cash to Revolut USD", formatted on the
+    server. On `ok`: with "Keep open for another" checked, the form remounts (amount and note empty; type, wallet,
+    category and date are React state and stay), focus goes to the amount and the message shows in a
+    `role="status"` line in the footer; unchecked, it calls `router.back()` and, on the `popstate` that follows,
+    `router.refresh()`. The footer (status line, checkbox, Cancel = `router.back()`, submit) sits outside the keyed
+    `<form>` so the checkbox and the status line survive the remount; the submit joins the form with `form=<id>`
+    (Enter in a field still submits) and shows the pending state from `useActionState`. **Page variant** (full page,
+    edit pages): a `Card`, Cancel links to `returnTo`, the actions redirect as before; the edit pages keep Delete
+    in their header. After any failed action the form remounts with the echoed values and focus moves to the first
+    `aria-invalid` control (the checked or first radio of a pill group), so it never drops to `<body>` inside the
+    dialog.
+    **Layout:** type switch = `Segmented` `name="kind"` (the transaction edit page offers Expense / Income, the
+    transfer edit page no switch). The amount is a 72px-tall box with a 44px (48px from `sm`) extrabold
+    `tabular-nums` input and the currency text beside it (`<id>-currency`, in the input's `aria-describedby`):
+    "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
+    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then "Manage categories" as a dashed pill
+    after the pills (so Tab reaches it after the group). Wallet: `PillPicker name="walletId"` of the active wallets
+    plus an archived one the entry already uses ("Old card (archived)"). Transfer: From → To selects (the arrow
+    from `sm` up), Sent and Received side by side from `sm`, stacked below it, the no-rate line under them. Date:
+    "Today" and "Yesterday" are `aria-pressed` buttons in a `role="group"` labelled "Date", followed by the
+    `DatePicker` (controlled, owns `<input type="hidden" name="date">`) drawn as a third pill: "Other date" with a
+    calendar icon, or the date itself (selected style, neither pill pressed) when it is neither today nor
+    yesterday. Note: one `Input` (`name="note"`, placeholder "Note (optional)", `maxLength` 500, `sr-only`
+    label). Tab order: type → amount → category → Manage categories → wallet → Today → Yesterday → calendar → note
+    → footer.
 - **/categories** — month + currency switch at the top (default current month, `pickDefaultCurrency`). A "Spending
   split" card: the month's expense total and one segmented bar with a legend (one shade of the accent ramp per
   category, largest first). Then Expense and Income lists side by side: each row shows a swatch, the name, "N this

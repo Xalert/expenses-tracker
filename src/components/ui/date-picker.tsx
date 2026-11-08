@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { WEEKDAY_LABELS, WEEKDAY_NAMES, calendarWeeks, clampTo, dateInMonth, dateLabel, monthOf, moveDate } from "@/lib/calendar";
 import { cn } from "@/lib/cn";
 import { formatDate, formatMonth, isValidDate, shiftMonth, todayISO } from "@/lib/dates";
@@ -30,12 +30,23 @@ export type DatePickerProps = {
   align?: "start" | "end";
   placeholder?: string;
   className?: string;
+  /** Controlled: the `YYYY-MM-DD` value (or ""), paired with `onChange`. Without it the picker is uncontrolled. */
+  value?: string;
+  /** Called with the picked date (or "" when cleared), in both modes. */
+  onChange?: (value: string) => void;
+  /** Replaces the trigger's text (the formatted date or the placeholder), e.g. "Other date". */
+  display?: ReactNode;
+  /** An accessible name for the trigger when no `<label for>` names it. */
+  "aria-label"?: string;
+  /** Replaces the trigger's field styling (e.g. a pill next to other date pills). */
+  triggerClassName?: string;
 };
 
 /**
  * A themed date picker: a button showing the date ("5 Nov 2026") that opens a calendar popover, plus a hidden
  * input posting `YYYY-MM-DD` under `name`, so forms submit exactly what an `<input type="date">` would.
- * Uncontrolled: it starts from `defaultValue`.
+ * Uncontrolled (starts from `defaultValue`) unless `value` is given; `display` / `triggerClassName` restyle the
+ * trigger (the Add form's date pills).
  */
 export function DatePicker({
   id,
@@ -48,8 +59,19 @@ export function DatePicker({
   align = "start",
   placeholder = "Pick a date",
   className,
+  value: controlledValue,
+  onChange,
+  display,
+  "aria-label": ariaLabel,
+  triggerClassName,
 }: DatePickerProps) {
-  const [value, setValue] = useState(() => (isValidDate(defaultValue) ? defaultValue : ""));
+  const [ownValue, setOwnValue] = useState(() => (isValidDate(defaultValue) ? defaultValue : ""));
+  const controlled = controlledValue !== undefined;
+  const value = controlled ? (isValidDate(controlledValue) ? controlledValue : "") : ownValue;
+  const setValue = (next: string) => {
+    if (!controlled) setOwnValue(next);
+    onChange?.(next);
+  };
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -62,11 +84,12 @@ export function DatePicker({
         ref={trigger}
         type="button"
         id={id}
-        className={cn(controlClasses, "flex h-11 items-center gap-2 text-left")}
+        className={triggerClassName ?? cn(controlClasses, "flex h-11 items-center gap-2 text-left")}
         // A select-only combobox: the label names it, its text is the value, and (unlike a plain button) the role
         // supports aria-invalid / aria-required, so <Field> errors still attach the way they do for <Input>.
         role="combobox"
         aria-haspopup="dialog"
+        aria-label={ariaLabel}
         aria-expanded={open}
         aria-controls={open ? dialogId : undefined}
         aria-required={required || undefined}
@@ -74,12 +97,16 @@ export function DatePicker({
         aria-describedby={error ? `${id}-error` : undefined}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className={cn("min-w-0 flex-1 truncate tabular-nums", !value && "text-muted-foreground")}>
-          {value ? formatDate(value) : placeholder}
-        </span>
-        {/* Room for the clear button, which sits on top of the trigger (a button cannot contain a button). */}
-        {showClear && <span className="size-6 shrink-0" aria-hidden="true" />}
-        <CalendarIcon className="size-4 shrink-0 text-muted-foreground" />
+        {display ?? (
+          <>
+            <span className={cn("min-w-0 flex-1 truncate tabular-nums", !value && "text-muted-foreground")}>
+              {value ? formatDate(value) : placeholder}
+            </span>
+            {/* Room for the clear button, which sits on top of the trigger (a button cannot contain a button). */}
+            {showClear && <span className="size-6 shrink-0" aria-hidden="true" />}
+            <CalendarIcon className="size-4 shrink-0 text-muted-foreground" />
+          </>
+        )}
       </button>
       {showClear && (
         <button

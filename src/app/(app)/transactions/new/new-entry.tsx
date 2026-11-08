@@ -13,19 +13,29 @@ export type SearchParams = Record<string, string | string[] | undefined>;
  * (`transactions/new/page.tsx`) and the dialog (`@modal/(.)transactions/new/page.tsx`); the caller checks the session
  * and supplies the heading.
  */
-export function NewEntry({ userId, searchParams, returnTo }: { userId: number; searchParams: SearchParams; returnTo: string }) {
+export function NewEntry({
+  userId,
+  searchParams,
+  returnTo,
+  variant = "page",
+}: {
+  userId: number;
+  searchParams: SearchParams;
+  returnTo: string;
+  /** "dialog" from the intercepted route: no card, and a save closes the dialog instead of redirecting. */
+  variant?: "page" | "dialog";
+}) {
   const wallets = walletOptions(userId);
 
   if (wallets.length === 0) {
-    return (
-      <Card>
-        <EmptyState
-          title="Create a wallet first"
-          description="Transactions belong to a wallet — cash, a bank account, a card. Add one to start tracking."
-          action={<LinkButton href="/wallets/new">Create a wallet</LinkButton>}
-        />
-      </Card>
+    const empty = (
+      <EmptyState
+        title="Create a wallet first"
+        description="Transactions belong to a wallet — cash, a bank account, a card. Add one to start tracking."
+        action={<LinkButton href="/wallets/new">Create a wallet</LinkButton>}
+      />
     );
+    return variant === "dialog" ? empty : <Card>{empty}</Card>;
   }
 
   const kindParam = param(searchParams.kind);
@@ -33,11 +43,14 @@ export function NewEntry({ userId, searchParams, returnTo }: { userId: number; s
   const walletParam = parseId(searchParams.wallet);
   const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : undefined;
 
+  const today = todayISO();
   return (
     <EntryForm
+      variant={variant}
       wallets={wallets}
       categories={categoryOptions(userId)}
-      initial={{ kind, walletId, fromWalletId: walletId, date: todayISO() }}
+      initial={{ kind, walletId, fromWalletId: walletId, date: today }}
+      today={today}
       transactionAction={createTransactionAction}
       transferAction={createTransferAction}
       returnTo={returnTo}

@@ -4,6 +4,7 @@ import { ConfirmDeleteForm } from "@/components/transactions/confirm-delete-form
 import { EntryForm } from "@/components/transactions/entry-form";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { todayISO } from "@/lib/dates";
 import { minorToInputValue } from "@/lib/money";
 import { safeReturnTo } from "@/lib/return-to";
 import { getTransfer } from "@/server/transfers";
@@ -58,6 +59,7 @@ export default async function EditTransferPage({
           date: t.date,
           note: t.note ?? "",
         }}
+        today={todayISO()}
         transferAction={updateTransferAction.bind(null, t.id)}
         returnTo={returnTo}
         submitLabel="Save changes"

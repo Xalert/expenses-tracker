@@ -36,6 +36,25 @@ describe("DatePicker (closed)", () => {
     expect(html).toContain("1 Feb 2026");
   });
 
+  it("controlled: posts `value`, and `display` / `aria-label` / `triggerClassName` restyle the trigger", () => {
+    const html = renderToStaticMarkup(
+      <DatePicker
+        id="date"
+        name="date"
+        value="2026-11-07"
+        defaultValue="2026-01-01"
+        display="Other date"
+        aria-label="Choose another date"
+        triggerClassName="pill"
+      />,
+    );
+    expect(html).toContain('<input type="hidden" name="date" value="2026-11-07"/>');
+    expect(html).toContain('class="pill"');
+    expect(html).toContain('aria-label="Choose another date"');
+    expect(html).toContain(">Other date</button>");
+    expect(html).not.toContain("7 Nov 2026");
+  });
+
   it("treats an invalid default as empty", () => {
     const html = renderToStaticMarkup(<DatePicker id="d" name="d" allowEmpty defaultValue="2026-02-30" />);
     expect(html).toContain("Pick a date");

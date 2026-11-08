@@ -230,6 +230,25 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The largest day is the earliest on a tie and is chosen over the whole month, not only days 1..N; its label falls back to the category, then to an empty string | Ties and future-dated entries were unspecified; the chart draws every day of the month | built |
 | A currency argument must be a valid uppercase ISO code (`isValidCurrency`), else VALIDATION; a valid code the user holds no wallet in gives zeros rather than an error | The page already falls back when `?currency=` names no wallet of the user; the service only rejects what cannot be a currency | built |
 | `listCategoriesWithUsage` returns a new `CategoryWithMonthUsage` type and leaves `CategoryWithUsage` as it was | Code that builds `CategoryWithUsage` values (fixtures, components) keeps compiling; existing callers get the extra fields as zeros | built |
+| On the Overview chart the bars and the lines share the box but not the scale: bars are scaled so the tallest ordinary day reaches 60% of the box (a capped day reaches the top), the lines to the larger running total | Per-day amounts and running totals differ by an order of magnitude; on one scale the bars would be slivers. Keeping ordinary bars low leaves the upper part to the lines, as in the design. The legend's `title` and the chart's text alternative say so | built (step 3) |
+| A day is capped only when it is more than 3× the median of the non-zero days **and** more than 1.2× the next largest day | With two equal big days (two rent payments) capping one would not make the others any more readable; the median rule alone would still cap it | built (step 3) |
+| The month switcher keeps `?currency=` only when it came from the URL; a defaulted currency is picked again for each month | A currency the user chose should survive paging through months; one the page chose should follow each month's busiest currency, as on a first visit | built (step 3) |
+| The previous month's running line is aligned by day number and cut to the shown month's length (31 Oct is not drawn on a November chart); lines start at 0 on the left edge | Matches the pace card ("by 8 Oct"); stretching October over November's width would compare different days. Starting at 0 shows the first day's step and draws something on the 1st | built (step 3) |
+| For a past month the pace card says "over the whole month" only when day N covers the previous month; November against October says "…than by 30 Oct" | `getMonthInsights.pace` compares through min(N, previous length), so November is compared with 1–30 October, not all of it | built (step 3) |
+| The Overview's wallet rows show each wallet's balance today, with the change for the shown month (also for a past month) | "Balance" means the wallet's balance everywhere else; a balance as of a past month's end was not asked for | built (step 3) |
+| The currency switch is left out when the user holds one active currency and it is the one shown | A one-option switch is noise; the heading already names the currency | built (step 3) |
+| `CurrencyTotals`, `CategorySpending` and `components/dashboard/spending.ts` were removed with their tests; `WalletCard` (`components/wallets/wallet-card.tsx`) is now unused and was left for step 5 | The insight cards replace the per-currency totals; Categories (step 7) builds its own split bar; the wallet list is step 5's to redesign | built (step 3) |
+| The Add dialog's create actions switch on a hidden `mode=dialog` field and return `{ ok: true, message }`; the full page and the edit pages still redirect | One action per kind for both places; the no-JS full page keeps working because it never sends `mode` | built (step 6) |
+| The "Added €12.40 to Food" / "Moved €20.00 from Cash to Revolut USD" line is built by the action, not the form | The server has the parsed amount, the wallet's currency and the category name; the client would have to re-parse what it typed | built (step 6) |
+| Closing after a save is `router.back()` followed by `router.refresh()` on the next `popstate` | `back()` is asynchronous; refreshing straight away would refresh the dialog's URL. Seen working in the browser (the wallet list behind showed the new balance) | built (step 6) |
+| The dialog's footer is outside the keyed `<form>`, its submit attached with `form=`, pending state from `useActionState` | The form remounts after every result (the existing fix for React's form reset); the "Keep open" checkbox and the status line must survive that, and a live region that remounts with its text is not announced | built (step 6) |
+| Today / Yesterday are `aria-pressed` buttons, not radios; the calendar pill reads "Other date" unless a custom date is set | They are shortcuts that set the picker's value, not a choice that posts itself (MonthGrid uses the same pattern); a third radio could not represent "some other day" | built (step 6) |
+| "Today" is the server's date, passed to the form | The form renders on the server first; a browser in another time zone would otherwise disagree with the server's default date and cause a hydration mismatch | built (step 6) |
+| Sent and Received sit side by side from `sm` up and stack below it | Two 44px inputs with their currency codes do not fit side by side in a 375px sheet | built (step 6) |
+| "Manage categories" is a dashed pill after the category pills, not a link in the heading row | Keeps the Tab order amount → categories → wallet that the spec asks for | built (step 6) |
+| The type switch uses the neutral `Segmented` look (no expense/income/transfer colours) | The shared control; the submit label and the fields already say which kind is chosen | built (step 6) |
+| After a failed save, focus moves to the first invalid control | The form remounts, so focus would fall to `<body>`, outside the dialog's focus trap | built (step 6) |
+| `Popover` clears its own `translateX` before measuring | React StrictMode runs the layout effect twice in development; the second run measured the shifted panel, found a sub-pixel overflow and reset the shift to 0, so the calendar opened from the date pill stuck out of the 375px sheet | built (step 6) |
 
 ### Process
 
@@ -301,10 +320,14 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
 - Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
-- **Until redesign step 6, the Add / wallet dialogs still redirect after a save** (Add → `/transactions`, a
-  wallet → its page) instead of closing over the page they were opened from, and their Cancel is a link to that
-  page. Browser Back after such a save reopens the dialog (it is still in the history). The Add form also still
-  draws its own card inside the dialog.
+- **The wallet dialogs still redirect after a save** (to the wallet's page) instead of closing over the page they
+  were opened from, and their Cancel is a link. Browser Back after such a save reopens the dialog (it is still in
+  the history). The Add dialog closes itself since step 6; the wallet dialogs are step 5's.
+- **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
+  it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
+  Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
+- **A save from the Add dialog revalidates every page** (`revalidatePath("/", "layout")`) rather than the few the
+  full-page form revalidates: the dialog can sit over any page.
 - The bottom sheet's drag handle is decorative: there is no swipe-to-close (✕, Escape or the scrim close it).
 - **Unexplained `next dev` reload loop seen while verifying step 1:** in the real checkout the dev server several
   times got into a state where every load of some page logged "Compiled in 1ms" and the browser reloaded endlessly
@@ -356,6 +379,10 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
   the real `sample` (Haiku's actual answers, consent, rate limits, image limits), `db` (rules, snapshots, write
   errors), `user` and `downloads` were not. Real bank statements were never used (fixtures are synthetic), and
   the clipboard path was only seen failing over to the text box.
+- **The Overview with a currency held only in archived wallets** (the switch's extra option) was checked by a
+  rendering test, not in the browser: the demo data has no archived wallet. The Overview was checked on the demo
+  database at 375px and 1280px in both schemes (no horizontal overflow); its chart was not checked with a month of
+  many similar-sized days or with dozens of currencies in the switch.
 - **No automated end-to-end tests.** Browser checks were done by hand during the build; the automated suite covers
   services, parsers and a few rendered components.
 - **A real import of the owner's Spendee files** was run only against an in-memory database: the older single file

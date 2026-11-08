@@ -104,6 +104,9 @@ function PopoverPanel({
   useLayoutEffect(() => {
     const el = panelRef.current;
     if (!el) return;
+    // Measure the unshifted panel: StrictMode runs this twice in development, and measuring an already shifted panel
+    // found a sub-pixel overflow and overwrote the shift with `translateX(0px)`.
+    el.style.transform = "";
     const rect = el.getBoundingClientRect();
     const width = document.documentElement.clientWidth;
     let dx = 0;

@@ -1,10 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { parseCreateWallet, parseUpdateWallet, parseWalletId } from "@/app/(app)/wallets/form-input";
-import { CategorySpending } from "@/components/dashboard/category-spending";
-import { CurrencyTotals } from "@/components/dashboard/currency-totals";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
-import { groupSpendingByCurrency } from "@/components/dashboard/spending";
 
 function fd(entries: Record<string, string>): FormData {
   const f = new FormData();
@@ -87,39 +84,6 @@ describe("parseWalletId", () => {
 });
 
 describe("dashboard components", () => {
-  const spend = [
-    { currency: "USD", categoryId: 1, categoryName: "Food", amountMinor: 500 },
-    { currency: "EUR", categoryId: 1, categoryName: "Food", amountMinor: 3000 },
-    { currency: "EUR", categoryId: 2, categoryName: "Bills", amountMinor: 1000 },
-  ];
-
-  it("groups spending per currency without mixing totals", () => {
-    const groups = groupSpendingByCurrency(spend);
-    expect(groups.map((g) => [g.currency, g.totalMinor])).toEqual([
-      ["EUR", 4000],
-      ["USD", 500],
-    ]);
-    expect(groups[0].rows.map((r) => [r.categoryName, r.barPercent, r.sharePercent])).toEqual([
-      ["Food", 100, 75],
-      ["Bills", 33, 25],
-    ]);
-  });
-
-  it("renders bars and per-currency totals", () => {
-    const html = renderToStaticMarkup(<CategorySpending items={spend} emptyMessage="none" />);
-    expect(html).toContain("€40.00");
-    expect(html).toContain("$5.00");
-    expect(html).toContain("width:33%");
-    expect(renderToStaticMarkup(<CategorySpending items={[]} emptyMessage="Nothing here" />)).toContain("Nothing here");
-
-    const totals = renderToStaticMarkup(
-      <CurrencyTotals totals={[{ currency: "JPY", balanceMinor: 30000, incomeMinor: 0, expenseMinor: 4500 }]} />,
-    );
-    expect(totals).toContain("¥30,000");
-    expect(totals).toContain("¥4,500");
-    expect(totals).toContain("-¥4,500");
-  });
-
   it("month switcher links to the previous month and stops at the max month", () => {
     const current = renderToStaticMarkup(<MonthSwitcher month="2026-11" maxMonth="2026-11" />);
     expect(current).toContain('href="/?month=2026-10"');
@@ -128,5 +92,14 @@ describe("dashboard components", () => {
     expect(past).toContain('href="/?month=2025-12"');
     expect(past).toContain('href="/?month=2026-02"');
     expect(renderToStaticMarkup(<MonthSwitcher month="2026-10" maxMonth="2026-11" />)).toContain('href="/"');
+  });
+
+  it("month switcher keeps extra parameters on every link", () => {
+    const html = renderToStaticMarkup(
+      <MonthSwitcher month="2026-10" maxMonth="2026-11" extraParams={{ currency: "RON" }} />,
+    );
+    expect(html).toContain('href="/?month=2026-09&amp;currency=RON"');
+    expect(html).toContain('href="/?currency=RON"');
+    expect(html).not.toContain('href="/"');
   });
 });

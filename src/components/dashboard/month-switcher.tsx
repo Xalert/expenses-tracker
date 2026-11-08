@@ -16,20 +16,36 @@ const arrow =
 /**
  * "‹ November 2026 ›" — the month lives in the URL (`?month=YYYY-MM`); no navigating past `maxMonth`. The arrows are
  * plain links (they work without JS); the label opens a month picker to jump anywhere, and "This month" goes back.
+ * `extraParams` are kept on every link (e.g. `{ currency: "EUR" }` → `/?month=2026-10&currency=EUR`).
  */
-export function MonthSwitcher({ month, maxMonth, basePath = "/" }: { month: string; maxMonth: string; basePath?: string }) {
+export function MonthSwitcher({
+  month,
+  maxMonth,
+  basePath = "/",
+  extraParams,
+}: {
+  month: string;
+  maxMonth: string;
+  basePath?: string;
+  extraParams?: Record<string, string>;
+}) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const prev = shiftMonth(month, -1);
   const next = shiftMonth(month, 1);
-  const href = (m: string) => (m === maxMonth ? basePath : `${basePath}?month=${m}`);
+  const href = (m: string) => {
+    const params = new URLSearchParams(m === maxMonth ? {} : { month: m });
+    for (const [k, v] of Object.entries(extraParams ?? {})) params.set(k, v);
+    const qs = params.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  };
   const hasNext = next <= maxMonth;
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
       {month !== maxMonth && (
-        <Link href={basePath} scroll={false} className="text-xs font-medium text-accent hover:underline">
+        <Link href={href(maxMonth)} scroll={false} className="text-xs font-medium text-accent hover:underline">
           This month
         </Link>
       )}

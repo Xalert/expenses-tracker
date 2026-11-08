@@ -14,7 +14,20 @@ export type PillPickerProps = {
   "aria-labelledby"?: string;
   required?: boolean;
   className?: string;
+  /** Called with the chosen value (the picker stays uncontrolled). */
+  onChange?: (value: string) => void;
 };
+
+/** The look of one pill; `selected` is for pills that are not radios (e.g. the Add form's date buttons). */
+export function pillClasses({ selected, error }: { selected?: boolean; error?: boolean } = {}) {
+  return cn(
+    "inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full border px-4 text-sm font-semibold",
+    "transition-colors hover:border-border-strong sm:min-h-10",
+    selected
+      ? "border-accent bg-accent-soft text-accent-soft-foreground hover:border-accent"
+      : cn("bg-field text-foreground", error ? "border-danger" : "border-border"),
+  );
+}
 
 /**
  * A radio group drawn as wrapping pills (category and wallet in the Add form, currency in the wallet form). Real
@@ -30,6 +43,7 @@ export function PillPicker({
   id,
   required,
   className,
+  onChange,
   "aria-label": ariaLabel,
   "aria-labelledby": labelledBy,
 }: PillPickerProps) {
@@ -53,6 +67,7 @@ export function PillPicker({
               value={o.value}
               defaultChecked={defaultValue === o.value}
               required={required}
+              onChange={onChange ? () => onChange(o.value) : undefined}
               className="peer sr-only"
             />
             <span

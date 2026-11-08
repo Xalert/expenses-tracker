@@ -51,7 +51,11 @@ function DialogPanel({ title, description, onClose, className, children }: Dialo
   // Focus in on open, back to where it was on close; lock the page's scroll meanwhile.
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus({ preventScroll: true });
+    // From `sm` up a control marked `data-autofocus` (the Add form's amount) takes focus; on phones the panel does,
+    // so the keyboard does not open over half the bottom sheet before the person has seen it.
+    const wide = window.matchMedia("(min-width: 640px)").matches;
+    const first = wide ? panelRef.current?.querySelector<HTMLElement>("[data-autofocus]") : null;
+    (first ?? panelRef.current)?.focus({ preventScroll: true });
 
     const root = document.documentElement;
     const scrollbar = window.innerWidth - root.clientWidth;
