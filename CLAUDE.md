@@ -15,7 +15,11 @@ file, shipped as a Docker image.
   design decision, or leave something unfinished or unverified, add it there.**
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
-- `README.md` — user-facing: running, configuration, self-hosting, backup/restore, the CSV column format.
+- `README.md` — user-facing and short: run it (demo login, reset), debugging, scripts, the Compose quick start and
+  env vars, a pointer for each larger topic. Keep it under ~120 lines; long-form material goes in a `docs/` file.
+- `docs/SELF-HOSTING.md` — long-form operations: reverse proxy and `COOKIE_SECURE`, closing registration, where
+  the data lives, bind mounts (uid 1000), backup/restore, upgrading and the pre-migration copy, the user-ID
+  migration, the standalone build without Docker, database notes.
 - `docs/STATEMENT-IMPORTER.md` — the claude.ai Artifact in `tools/statement-importer/` that turns bank statements
   into this app's CSV (prompts, memory, harness). Not part of the Next.js app; eslint ignores `tools/**`, and
   `tests/statement-importer-csv.test.ts` keeps its CSV writer in line with `src/lib/csv.ts`.
@@ -23,11 +27,14 @@ file, shipped as a Docker image.
 ## Commands
 
 ```bash
-npm run dev                                   # dev server on :3000; the DB is created and migrated on first request
+npm run dev                                   # dev server on :3000 on data/app.db (the owner's REAL data — see below)
+npm run dev:demo                              # seed data/demo.db if needed, then the dev server on it
+npm run demo:reset                            # data/demo.db back to the fresh demo state, no prompt
 npm run db:seed                               # idempotent demo user + data; prints the demo login
+npm run db:reset -- --demo | --clean          # REAL DB: wipe every row, then demo data / empty (asks; see below)
 npm run typecheck                             # tsc --noEmit
 npm run lint                                  # eslint
-npm test                                      # vitest run (whole suite, under a second)
+npm test                                      # vitest run (whole suite, a few seconds)
 npx vitest run tests/money.test.ts            # one file
 npx vitest run tests/money.test.ts -t "JPY"   # tests whose name matches
 npm run build                                 # production build → .next/standalone (forces NODE_ENV=production)
@@ -35,6 +42,9 @@ npm run db:generate                           # after editing src/db/schema.ts: 
 docker compose up -d --build                  # the real deployment artefact
 npx tsx --conditions=react-server script.ts   # run a one-off script that imports src/server/* (needed for `server-only`)
 ```
+
+The DB is created and migrated on first request. `dev:demo` and `demo:reset` put `DATABASE_URL=data/demo.db`
+inside the npm script, so they never reach `data/app.db`.
 
 `build` and `start` set `NODE_ENV=production` inline on purpose: a globally exported `NODE_ENV=development`
 breaks `next build`. A production build is best validated with `docker build .`, which runs it on Linux.
@@ -121,3 +131,8 @@ must be built on Linux for its target platform because better-sqlite3 is a nativ
 - **Revalidation:** category and import changes affect every signed-in page, so those actions call
   `revalidatePath("/", "layout")`.
 - **No real user data in the repo.** Import tests use synthetic fixtures; `data/` and `.env*` are gitignored.
+- **`data/app.db` is the developer's real data. Never run a database script (`db:seed`, `db:reset`, one-off
+  `tsx` scripts) or a dev server against it from an agent.** Put `DATABASE_URL=<scratch file>` inline on the
+  same command every time (`DATABASE_URL=/tmp/x.db npm run db:reset -- --demo --yes`), never via `export` or
+  earlier in a `&&` chain: a failed step before it (zsh's "no matches found" on an empty glob, for one) silently
+  leaves the default database as the target. `db:reset --yes` refuses the default file for this reason.

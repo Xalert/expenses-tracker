@@ -24,6 +24,34 @@ this file in the same change and call the deviation out in your final report.
 - Tests live in `tests/*.test.ts(x)`. `tests/helpers.ts` gives `useFreshDb()` (fresh migrated `:memory:` DB installed
   via `setDb`) and `makeUser(db, email)` (user + default categories, `cat(name)` → category id).
 
+## Development helpers
+
+- **`npm run db:reset -- --demo`** puts the database into the demo state: every row of every table is deleted
+  inside one transaction, then the demo user and sample data are seeded (same as `db:seed`), and the demo login
+  is printed. **`npm run db:reset -- --clean`** deletes every row and leaves an empty, migrated database.
+  Both keep the file (so a running dev server keeps working — it holds the same file open), run migrations
+  first, write a copy `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database before touching it
+  (`--no-backup` skips it), and refuse to run against a database with data unless confirmed. **`--yes` is
+  honoured only when `DATABASE_URL` is set explicitly on that command** (scratch databases); the default
+  `data/app.db` always asks, and the answer must be the word `reset` — a stray `--yes` or `y` can never wipe
+  it. Not a terminal and no usable `--yes` → refuse. They refuse outright when `NODE_ENV=production`. Without
+  `--demo`/`--clean` they print usage and exit 1.
+- **Demo mode on its own file.** `npm run dev:demo` runs `db:seed` and then `next dev`, both with
+  `DATABASE_URL=data/demo.db` set inside the script; `npm run demo:reset` runs the reset with `--demo --yes
+  --no-backup` on that file. Neither can reach `data/app.db`. `npm run dev` stays on the real database.
+- **Demo login in the terminal.** When the dev server (`next dev`) opens the database and a user with user ID
+  `demo` exists, it logs one line: `[demo] Sign in with user ID demo / password demo-password (if unchanged)`.
+  Never in production builds. `db:seed` and `db:reset --demo` print the same line.
+- As built: `scripts/reset.ts` and `scripts/seed.ts` share `src/server/maintenance.ts` (`wipeAllData`,
+  `backupBeforeReset` via `VACUUM INTO`, `findDemoUser`, `seedDemoData`) and `src/lib/demo.ts` (`DEMO_USER`,
+  `demoLoginLine`). The wipe also clears `sqlite_sequence`, so ids start at 1 again, and keeps
+  `__drizzle_migrations`; `-y` is accepted for `--yes`. The startup line comes from `logDemoLogin` in
+  `src/db/index.ts`, called by `getDb()` only when `NEXT_RUNTIME` is set (the scripts print it themselves); since
+  the dev server opens the database lazily, the line appears on its first request, not at boot.
+- The README's "Run it" section is the five-minute path: install, run, demo login, reset, where the DB is.
+  Everything long-form (reverse proxies, backup/restore, bind mounts, upgrading, standalone without Docker)
+  lives in `docs/SELF-HOSTING.md`; the README links to it.
+
 ## Domain rules
 
 - **Money** is stored as integer **minor units** (`amountMinor`), never floats. The number of decimals comes
@@ -801,8 +829,8 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
 - `docker-compose.yml`: one service, named volume mounted at `/data`, port mapping, the env vars above with
   their defaults, `restart: unless-stopped`. `docker compose up -d` must be all a user needs.
 - `.dockerignore` keeps `node_modules`, `.next`, `data`, `.env*`, `.git` out of the build context.
-- README documents: quick start with compose, the env vars, running behind a reverse proxy (HTTPS, forwarded
-  headers), where the data lives, backup/restore of the SQLite file, and upgrading.
+- The README has the compose quick start and the env vars; `docs/SELF-HOSTING.md` documents running behind a
+  reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore of the SQLite file, and upgrading.
 
 ## UI direction
 

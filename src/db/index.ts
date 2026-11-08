@@ -3,6 +3,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { demoLoginLine, DEMO_USER } from "@/lib/demo";
 import * as schema from "./schema";
 
 export type DB = BetterSQLite3Database<typeof schema> & { $client: Database.Database };
@@ -137,12 +138,35 @@ export function migrateDatabase(
 }
 
 // Survives Next.js dev hot reloads, so we keep a single connection per process.
-const globalForDb = globalThis as unknown as { __expensesDb?: DB };
+const globalForDb = globalThis as unknown as { __expensesDb?: DB; __expensesDemoLineLogged?: boolean };
 
 /** The process-wide connection, created (and migrated) on first access. */
 export function getDb(): DB {
-  if (!globalForDb.__expensesDb) globalForDb.__expensesDb = createDatabase();
+  if (!globalForDb.__expensesDb) {
+    globalForDb.__expensesDb = createDatabase();
+    // Only inside the Next.js server: the seed and reset scripts print the line themselves, at the right moment.
+    if (process.env.NEXT_RUNTIME) logDemoLogin(globalForDb.__expensesDb);
+  }
   return globalForDb.__expensesDb;
+}
+
+/**
+ * Outside production, once per process: if a user with user ID `demo` exists, print how to sign in as it
+ * (`demoLoginLine`). `getDb()` calls this inside the Next.js server only; the dev server opens the database on
+ * its first request, so the line shows up then.
+ * Never throws — it is a hint, not part of opening the database.
+ */
+export function logDemoLogin(db: DB, nodeEnv: string | undefined = process.env.NODE_ENV): boolean {
+  if (nodeEnv === "production" || globalForDb.__expensesDemoLineLogged) return false;
+  try {
+    const demo = db.$client.prepare("SELECT 1 FROM users WHERE username = ?").get(DEMO_USER.username);
+    if (!demo) return false;
+    globalForDb.__expensesDemoLineLogged = true;
+    console.log(demoLoginLine());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Replace the process-wide connection (tests use this with `createDatabase(":memory:")`). */

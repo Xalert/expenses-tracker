@@ -159,6 +159,22 @@ All entries below date from the initial build, 2026-11-05.
 | All runtime configuration is environment variables | Standard for containers; nothing to bake into the image | planner |
 | In development, the machine's own LAN addresses (plus `ALLOWED_DEV_ORIGINS`) may load the dev server's scripts | Next.js allows only `localhost` by default; opened at a LAN address the app rendered but nothing client-side worked (the owner hit this: "Preview import" could not be pressed). Development only — production builds are unaffected | planner |
 
+### Development tools and documentation
+
+Added 2026-11-08.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
+| The reset writes `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database first (`--no-backup` skips it) and refuses with `NODE_ENV=production` | A reset is one typo away from losing real data; the command is a development tool | planner |
+| **`--yes` is honoured only with an explicit `DATABASE_URL` on the command; the default `data/app.db` always asks, and the answer must be the word `reset`** (not `y`). No terminal and no usable `--yes` → refuse | An agent wiped the developer's real database through a broken shell chain: a failed step before the command left `DATABASE_URL` unset, so the default file became the target. A `--yes` that reaches the default file by accident must not be able to wipe it | planner |
+| The dev server prints `[demo] Sign in with user ID demo / password demo-password (if unchanged)` once, when it opens the database and a `demo` user exists; never in production. The seed and reset print the same line | The demo login was only in the README; this puts it where the developer is looking. The database opens lazily, so the line appears on the first request rather than at boot | planner (line), built (timing) |
+| Demo mode runs on its own file: `npm run dev:demo` seeds `data/demo.db` if needed and serves it; `npm run demo:reset` restores it without a prompt (`--yes` is allowed because `DATABASE_URL` is set inside the script) | Demo mode runs on its own file so it can never replace real data | planner |
+| README cut to a five-minute path (run, debug, scripts, compose quick start, env vars, pointers); long-form operations moved to `docs/SELF-HOSTING.md` | The README had grown to 368 lines, mostly operations detail most readers never need | planner |
+| In "Run it" and "Debugging", every command is its own one-line `bash` code block with the explanation in a sentence above, no trailing `# comments` | The owner reads the README in an app that puts a Run button on each single-line block; multi-line blocks with comments render badly there. This took the README to about 170 lines instead of the ~120 aimed for | owner (format), built (length) |
+| The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
+| The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
+
 ### Interface
 
 | Decision | Why | Decided by |
@@ -196,7 +212,7 @@ All entries below date from the initial build, 2026-11-05.
 - **No profile screen: user ID, email and names cannot be changed after registration** (nor can an email be added
   later to an account created without one).
 - **Migrated accounts are not told their new user ID** other than by the shell after signing in with their email;
-  the README shows how an administrator can list them.
+  `docs/SELF-HOSTING.md` shows how an administrator can list them.
 - **Pre-migration copies are never cleaned up**; each one is a full copy of the database in the `/data` volume.
 - **A migration whose derived user IDs still collide after the `user<id>` fallback** (only possible with contrived
   emails) stops startup; it is rolled back and needs a manual fix of the colliding email before upgrading.
@@ -205,8 +221,10 @@ All entries below date from the initial build, 2026-11-05.
 - **No session management.** There is no "sign out everywhere", and expired sessions are only removed when their
   cookie is next presented.
 - **A reverse proxy must preserve the `Host` header** (or send `X-Forwarded-Host`); otherwise sign-in fails with a
-  500. Documented in the README, not detected or explained by the app.
+  500. Documented in `docs/SELF-HOSTING.md`, not detected or explained by the app.
 - **A reverse proxy's upload limit must allow 6 MB** for imports (nginx defaults to 1 MB).
+- **`db:reset` is development-only.** It refuses with `NODE_ENV=production` and is not shipped in the Docker image;
+  Docker users start over by taking a backup and removing the volume (`docker compose down -v`).
 - **No prebuilt image and no CI.** Self-hosters build from source; nothing runs the tests automatically.
 - **`build` / `start` scripts do not work in Windows `cmd`** because of the inline `NODE_ENV`. Docker users are
   unaffected.
@@ -228,6 +246,8 @@ All entries below date from the initial build, 2026-11-05.
 
 ### Rough edges
 
+- The import rules a user may want to read (Spendee transfers, time zones, labels, rounding) are documented only in
+  `docs/SPEC.md`, which is written as a build contract rather than a user guide.
 - "Manage categories" in the transaction form navigates away and loses what was typed.
 - Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
