@@ -76,14 +76,18 @@ function walletLabel(w: WalletOption) {
 /** A large amount input (`tabular-nums`, decimal keyboard) with a label above and the currency beside it. */
 function BigAmount({
   id,
+  name,
   label,
   currency,
   currencyText,
   defaultValue,
   error,
   autoFocus,
+  compact,
 }: {
   id: string;
+  /** The posted field name (`amount`, `receivedAmount`); the id may carry a prefix. */
+  name: string;
   label: string;
   currency: string | undefined;
   /** Shown beside the number, e.g. "EUR · from Cash". */
@@ -92,6 +96,8 @@ function BigAmount({
   error?: string;
   /** Marks the input for `Dialog` to focus when it opens (`data-autofocus`). */
   autoFocus?: boolean;
+  /** The in-place edit form: a 56px box with a 32px number. */
+  compact?: boolean;
 }) {
   return (
     <div className="min-w-0 space-y-1.5">
@@ -107,7 +113,7 @@ function BigAmount({
       >
         <input
           id={id}
-          name={id}
+          name={name}
           inputMode="decimal"
           autoComplete="off"
           required
@@ -117,8 +123,9 @@ function BigAmount({
           aria-invalid={error ? true : undefined}
           aria-describedby={cn(`${id}-currency`, error && `${id}-error`)}
           className={cn(
-            "h-[72px] w-full min-w-0 flex-1 bg-transparent text-[44px] leading-none font-extrabold tracking-[-0.03em]",
-            "text-foreground tabular-nums outline-none placeholder:text-muted-foreground/45 sm:text-[48px]",
+            compact ? "h-14 text-[32px]" : "h-[72px] text-[44px] sm:text-[48px]",
+            "w-full min-w-0 flex-1 bg-transparent leading-none font-extrabold tracking-[-0.03em]",
+            "text-foreground tabular-nums outline-none placeholder:text-muted-foreground/45",
           )}
         />
         <span
@@ -141,6 +148,10 @@ function BigAmount({
  * `variant="dialog"` is the Add dialog: no card, it posts `mode=dialog` so the create actions return
  * `{ ok: true, message }`, and on success it either closes the dialog (`router.back()`, then `router.refresh()`) or,
  * with "Keep open for another", clears amount and note and stays.
+ * `variant="inline"` is the in-place editor of a transactions-list row: no card, a compact amount, the footer outside
+ * the form (`footerStart` holds the Delete form and the "Open as page" link), Cancel calls `onCancel`, and a result
+ * with `ok` calls `onSaved(message)` (the inline update actions return form state instead of redirecting). Its ids
+ * carry `idPrefix` so they cannot clash with the Add dialog opened over the list; the posted names are unchanged.
  */
 export function EntryForm({
   wallets,
@@ -153,6 +164,10 @@ export function EntryForm({
   submitLabel,
   canTransfer,
   variant = "page",
+  idPrefix = "",
+  onCancel,
+  onSaved,
+  footerStart,
 }: {
   wallets: WalletOption[];
   categories: CategoryOption[];
@@ -166,12 +181,22 @@ export function EntryForm({
   submitLabel?: string;
   /** False when fewer than two wallets can take part in a transfer. */
   canTransfer: boolean;
-  variant?: "page" | "dialog";
+  variant?: "page" | "dialog" | "inline";
+  /** Prefix for every element id (not for the field names), e.g. "edit-42-". */
+  idPrefix?: string;
+  /** Inline: the Cancel button. */
+  onCancel?: () => void;
+  /** Inline: called with the action's message after a successful save. */
+  onSaved?: (message?: string) => void;
+  /** Inline: shown at the start of the footer (outside the form, so it may hold its own <form>). */
+  footerStart?: ReactNode;
 }) {
   const router = useRouter();
   const formId = useId();
   const formRef = useRef<HTMLFormElement>(null);
   const isDialog = variant === "dialog";
+  const isInline = variant === "inline";
+  const pid = (name: string) => `${idPrefix}${name}`;
 
   const kinds: EntryKind[] = [
     ...(transactionAction ? (["expense", "income"] as const) : []),
@@ -210,7 +235,9 @@ export function EntryForm({
     handled.current.add(state);
     const form = formRef.current;
     if (state.ok) {
-      if (keepOpen) {
+      if (isInline) {
+        onSaved?.(state.message);
+      } else if (keepOpen) {
         (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
       } else {
         // Refresh once the page behind is back, so it shows the new entry (back() is asynchronous).
@@ -225,7 +252,7 @@ export function EntryForm({
         ? (invalid.querySelector<HTMLElement>("input:checked") ?? invalid.querySelector<HTMLElement>("input"))
         : invalid;
     target?.focus();
-  }, [state, keepOpen, router]);
+  }, [state, keepOpen, router, isInline, onSaved]);
 
   const byId = (id: string) => wallets.find((w) => String(w.id) === id);
   const wallet = byId(walletId);
@@ -263,7 +290,7 @@ export function EntryForm({
       ref={formRef}
       key={`${stateId(txState)}-${stateId(trState)}`}
       action={isTransfer ? trFormAction : txFormAction}
-      className="space-y-6"
+      className={isInline ? "space-y-4" : "space-y-6"}
       noValidate
     >
       <input type="hidden" name="returnTo" value={returnTo} />
@@ -294,11 +321,11 @@ export function EntryForm({
         <>
           <div className="grid gap-4 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
             <div className="space-y-1.5">
-              <label htmlFor="fromWalletId" className={sectionLabel}>
+              <label htmlFor={pid("fromWalletId")} className={sectionLabel}>
                 From
               </label>
               <Select
-                id="fromWalletId"
+                id={pid("fromWalletId")}
                 name="fromWalletId"
                 value={fromWalletId}
                 onChange={(e) => setFromWalletId(e.target.value)}
@@ -310,17 +337,17 @@ export function EntryForm({
                   </option>
                 ))}
               </Select>
-              <FieldError id="fromWalletId">{err.fromWalletId}</FieldError>
+              <FieldError id={pid("fromWalletId")}>{err.fromWalletId}</FieldError>
             </div>
             <span aria-hidden="true" className="hidden h-11 items-center text-lg text-muted-foreground sm:flex">
               →
             </span>
             <div className="space-y-1.5">
-              <label htmlFor="toWalletId" className={sectionLabel}>
+              <label htmlFor={pid("toWalletId")} className={sectionLabel}>
                 To
               </label>
               <Select
-                id="toWalletId"
+                id={pid("toWalletId")}
                 name="toWalletId"
                 value={toWalletId}
                 onChange={(e) => setToWalletId(e.target.value)}
@@ -333,13 +360,15 @@ export function EntryForm({
                   </option>
                 ))}
               </Select>
-              <FieldError id="toWalletId">{err.toWalletId}</FieldError>
+              <FieldError id={pid("toWalletId")}>{err.toWalletId}</FieldError>
             </div>
           </div>
           <div className="space-y-2">
             <div className={cn("grid gap-4", crossCurrency && "sm:grid-cols-2")}>
               <BigAmount
-                id="amount"
+                id={pid("amount")}
+                name="amount"
+                compact={isInline}
                 label="Sent"
                 currency={from?.currency}
                 currencyText={from?.currency ?? ""}
@@ -349,7 +378,9 @@ export function EntryForm({
               />
               {crossCurrency && (
                 <BigAmount
-                  id="receivedAmount"
+                  id={pid("receivedAmount")}
+                  name="receivedAmount"
+                  compact={isInline}
                   label="Received"
                   currency={to?.currency}
                   currencyText={to?.currency ?? ""}
@@ -368,7 +399,9 @@ export function EntryForm({
       ) : (
         <>
           <BigAmount
-            id="amount"
+            id={pid("amount")}
+            name="amount"
+            compact={isInline}
             label="Amount"
             currency={wallet?.currency}
             currencyText={wallet ? `${wallet.currency} · from ${wallet.name}` : ""}
@@ -378,7 +411,7 @@ export function EntryForm({
           />
 
           <div className="space-y-2">
-            <p id="categoryId-label" className={sectionLabel}>
+            <p id={pid("categoryId-label")} className={sectionLabel}>
               Category
             </p>
             {noCategories ? (
@@ -394,9 +427,9 @@ export function EntryForm({
                 <PillPicker
                   // A new kind has other categories: remount so nothing stays checked.
                   key={kind}
-                  id="categoryId"
+                  id={pid("categoryId")}
                   name="categoryId"
-                  aria-labelledby="categoryId-label"
+                  aria-labelledby={pid("categoryId-label")}
                   required
                   options={kindCategories.map((c) => ({ value: String(c.id), label: c.name }))}
                   defaultValue={categoryId}
@@ -418,13 +451,13 @@ export function EntryForm({
           </div>
 
           <div className="space-y-2">
-            <p id="walletId-label" className={sectionLabel}>
+            <p id={pid("walletId-label")} className={sectionLabel}>
               Wallet
             </p>
             <PillPicker
-              id="walletId"
+              id={pid("walletId")}
               name="walletId"
-              aria-labelledby="walletId-label"
+              aria-labelledby={pid("walletId-label")}
               required
               options={wallets.map((w) => ({
                 value: String(w.id),
@@ -441,10 +474,10 @@ export function EntryForm({
       {!transferBlocked && (
         <>
           <div className="space-y-2">
-            <p id="date-label" className={sectionLabel}>
+            <p id={pid("date-label")} className={sectionLabel}>
               Date
             </p>
-            <div role="group" aria-labelledby="date-label" className="flex flex-wrap items-center gap-2">
+            <div role="group" aria-labelledby={pid("date-label")} className="flex flex-wrap items-center gap-2">
               {[
                 { value: today, label: "Today" },
                 { value: yesterday, label: "Yesterday" },
@@ -461,7 +494,7 @@ export function EntryForm({
               ))}
               {/* The picker owns the hidden <input name="date">; the pills above set the same value. */}
               <DatePicker
-                id="date"
+                id={pid("date")}
                 name="date"
                 required
                 value={date}
@@ -477,15 +510,15 @@ export function EntryForm({
                 }
               />
             </div>
-            <FieldError id="date">{err.date}</FieldError>
+            <FieldError id={pid("date")}>{err.date}</FieldError>
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="note" className="sr-only">
+            <label htmlFor={pid("note")} className="sr-only">
               Note
             </label>
             <Input
-              id="note"
+              id={pid("note")}
               name="note"
               maxLength={500}
               placeholder="Note (optional)"
@@ -493,12 +526,12 @@ export function EntryForm({
               defaultValue={v.note ?? initial.note}
               error={err.note}
             />
-            <FieldError id="note">{err.note}</FieldError>
+            <FieldError id={pid("note")}>{err.note}</FieldError>
           </div>
         </>
       )}
 
-      {!isDialog && (
+      {variant === "page" && (
         <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
           <Link href={returnTo} className={buttonClasses({ variant: "secondary" })}>
             Cancel
@@ -509,11 +542,33 @@ export function EntryForm({
     </form>
   );
 
-  if (!isDialog) {
+  if (variant === "page") {
     return (
       <Card>
         <CardBody>{form}</CardBody>
       </Card>
+    );
+  }
+
+  if (isInline) {
+    // Like the dialog, the footer sits outside the keyed <form>: it holds the Delete form (forms cannot nest).
+    return (
+      <div className="space-y-4">
+        {form}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border pt-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{footerStart}</div>
+          <div className="ml-auto flex gap-2">
+            <Button variant="secondary" onClick={onCancel}>
+              Cancel
+            </Button>
+            {canSubmit && (
+              <Button type="submit" form={formId} pending={pending}>
+                {pending ? "Saving…" : label}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
     );
   }
 

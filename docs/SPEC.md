@@ -209,7 +209,8 @@ src/
   app/api/health/route.ts                           # GET /api/health
   app/api/export/{backup,transactions,context}/route.ts  # downloads (session required)
   components/data/import-panel.tsx                  # client: two-step import UI
-  components/data/copy-context-button.tsx           # client: "Copy" for the wallets & categories export
+  components/data/import-preview.tsx                # the preview card, problems and success banner (no state)
+  components/data/copy-context-button.tsx           # client: "Copy to clipboard" for the wallets & categories export
   server/wallets.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
   server/users.ts  server/_validate.ts (internal helpers)
@@ -401,7 +402,9 @@ New Server Actions for in-place editing return form state instead of redirecting
 `updateTransactionInlineAction(id, prev, formData)`, `updateTransferInlineAction(transferId, prev, formData)` (same
 zod schemas and services as the edit pages; on success `{ ok: true }` + `revalidatePath("/", "layout")`), and the
 Add dialog's create actions gain a `mode: "dialog"` hidden field that makes them return `{ ok: true }` instead of
-redirecting.
+redirecting. As built (step 4): the inline actions return `{ ok: true, message }` — "Saved €4.80 · Food" / "Saved
+€60.00 from Cash to Bank" — which the list announces in a visually hidden status line when the row closes; errors come
+back as `{ fieldErrors, message?, values }` exactly like the edit pages' actions.
 
 `src/lib/money.ts`: `currencyDecimals(code)`, `parseAmount(input: string, currency, opts?: { allowNegative?: boolean }): number | null`
 (accepts `12`, `12.5`, `12,50`, `1 234.56`, `1,234.56`, `1.234,56`; a lone `,` is always the decimal separator; rejects
@@ -455,7 +458,7 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
 - `MonthGrid` (client) `{ value: 'YYYY-MM' | null; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
   year stepper (‹ 2026 ›) over a 3 × 4 grid of `aria-pressed` month buttons; months outside the bounds are
   disabled; the current month has a ring when not selected. Keyboard: see `moveMonth`; roving tabindex.
-- `Popover` (client) `{ open; onClose; anchor; trigger; align?: 'start'|'end'; id?; role?; 'aria-label'?; className? }` —
+- `Popover` (client) `{ open; onClose; anchor; trigger; align?: 'start'|'end'; id?; role?: 'dialog'|'listbox'; 'aria-label'?; className? }` —
   no portal: an absolutely positioned panel under `anchor` (the trigger's `relative` wrapper). Renders nothing when
   closed; closes on Escape (unless the panel already handled it with `preventDefault`), on pointer-down outside
   `anchor` and when focus moves outside it; returns focus to `trigger` unless the user clicked or tabbed elsewhere.
@@ -523,6 +526,16 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     a `<section>` card (18px radius), title an `<h2>` 13px/600 muted, value 22px (26px from `sm`)/800 tabular and
     truncated, sub 13px muted.
   - `ExpandableRow` (client) — a row button + an in-place panel with one-open-at-a-time behaviour per list.
+    As built (step 4, `components/ui/expandable-row.tsx`): `ExpandableList { children; defaultOpenId? }` holds the
+    open row id (one open row across everything inside it, e.g. every day group of a page) and renders a visually
+    hidden `role="status"` line; it renders no element of its own. `ExpandableRow { id; summary; panel; panelLabel;
+    className?; buttonClassName?; after? }` is an `<li>` (`bg-surface-open` while open) holding a full-width
+    `<button type="button" aria-expanded aria-controls>` with `summary` inside (phrasing content only), then `after`
+    (outside the button), then — only while open — `<div role="region" aria-label={panelLabel}>` with `panel`, so a
+    closed row costs nothing. Escape closes the open row and focuses its button when the event's target is inside
+    the row and nothing handled it first (listened on `window`, like `Dialog`, so an open date picker inside closes
+    first). `useExpandableRow()` (inside a panel) gives `close({ restoreFocus? })` (Cancel; focus back to the row
+    button by default) and `saved(message?)` (close + announce). `toggleOpen(current, id)` is the pure click rule.
   - `CurrencySwitch` `{ currencies; value; hrefFor(code) }`.
     As built (step 3): a `<nav aria-label="Currency">` (overridable with `aria-label`) holding a `Segmented`-styled
     track of `next/link`s (`scroll={false}`, `title` = the currency name, `aria-current="true"` on `value`); a `value`
@@ -690,6 +703,62 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     show inline in the open form. The edit pages (`/transactions/<id>/edit`, `/transactions/transfers/<id>/edit`)
     remain for direct links and no-JS use.
   - Pagination and "Export CSV" (current filters) stay; the export link moves into the chip row.
+  - As built (step 4; `page.tsx`, `components/transactions/{list-params,filter-chips,day-strip,day-list,inline-edit}`,
+    `lib/day-labels.ts`):
+    - **URL state** (`list-params.ts`): `month` (`YYYY-MM` or `all`; absent = the current month), `wallet`, `kind`,
+      `category`, `from`, `to`, `q`, `page`, and `currency` (a valid uppercase code; only picks the strip's currency,
+      not a filter). Invalid values are dropped. `resolveView(params, thisMonth)` → `{ type: 'month', month }`,
+      `{ type: 'all' }` or `{ type: 'range', from?, to? }` (any `from`/`to` wins over `month`); `listFilters` turns
+      that into `TransactionFilters`. `hasFilters` counts a month only when it differs from the current one
+      (`?month=<current>` is not a filter) and ignores `currency` and `page`. `monthHref` / `dayHref` keep the other
+      filters and the currency and leave the current month out of the URL; `exportCsvHref` drops page and currency.
+    - **Header**: "Transactions" and "N entries this month" / "N entries in October 2026" / "N entries" (all time) /
+      "N match your filters" (any wallet, type, category, search or date range). No Add button (the floating one).
+    - **Chip row** (`FilterChips`, client): Month · Wallet · Type · Category pills (`pillClasses`; the selected
+      style when set — the month chip only away from the current month), each opening a `Popover`. Wallet, Type and
+      Category: `aria-haspopup="listbox"`, a `role="listbox"` panel of `next/link` options (`role="option"`,
+      `aria-selected`, a ✓ on the chosen one; Category grouped Expense / Income in `role="group"`s; archived wallets
+      marked); opening focuses the selected option, Up / Down / Home / End move, Enter follows the link, Tab leaves.
+      A set chip shows the value ("Cash") with "Wallet:" visually hidden. **Month**: `aria-haspopup="dialog"` — a
+      `MonthGrid` (its own ‹ year › stepper; picking pushes the URL) over a row of links "‹ Oct", "All time", "Dec ›".
+      Its label is `viewLabel`: "November 2026", "All time", "5 Nov – 12 Nov", "3 Nov", "From 5 Nov", "Until 12 Nov"
+      (the year is added outside the current year). "Clear" (a text link to `/transactions`) when `hasFilters`. The
+      search is a GET `<form role="search" action="/transactions">` with hidden inputs for the other params (no-JS)
+      and `onSubmit` pushing a clean URL (an empty search drops `q`); then the Export CSV pill (hidden when the list
+      is empty). At 375px the chips wrap and the search + export share a full-width line.
+    - **Day strip** (`DayStrip`, server): shown when `stripMonth(view)` is a month — the month in view, or the month
+      of a single selected day (`from = to`) — and the list is not empty or a day is selected (no strip for all
+      time, other ranges or a month with no entries). Currency: the filtered wallet's (no switch then), else
+      `?currency=` / `pickDefaultCurrency` through `resolveOverviewCurrency` with a `CurrencySwitch` under the same
+      rule as the Overview. `getMonthTimeline(userId, { month, currency, walletId, categoryId })`; the type and
+      search filters do not apply (it always shows expenses). `DayBars` 48px tall (72 with a cap), scaled with
+      `pickScale` (one huge day capped, labelled with its amount), days after today `future`, inside a
+      `role="group"` labelled "Each day of November 2026: select a day to list only that day"; each bar links to
+      `dayHref(…, date)` with the `aria-label` "3 November: €64.20 spent"; with a selected day that bar is the
+      accent (`aria-current="date"`, label "… Shown; select to show the whole month") and links back to the month,
+      and the heading line reads "€64.20 on 3 November" with a "Show all of November 2026" link. Axis labels as on
+      the Overview (`axisTicks`). Title "Spent per day · EUR", then "€1,531.44 in November 2026".
+    - **List** (`DayList`, server, inside `InlineEditProvider` + `ExpandableList`): `groupByDate` over the page's
+      items; one 18px card per day: an `<h2>` with `dayHeaderLabel(date, today)` ("Today · Sunday 8", "Yesterday ·
+      Saturday 7", "Tuesday 3" in today's month, "Tue 3 Nov" in today's year, "Tue 3 Nov 2025") and on the right
+      `dayNetLabel` of `listDayTotals(userId, filters, datesOnThisPage)` ("-€133.85 · -lei 118.50 · -$15.99"; a day
+      whose transfers cancel out shows "€0.00"), muted. Rows (`ExpandableRow`): kind dot, `transactionLabel`, "note ·
+      wallet" muted, the signed amount bold (income `text-income`, expense `text-foreground`, transfers
+      `text-transfer`) and, for a cross-currency transfer leg, the other leg's amount small and muted under it. Each
+      row also has a `<noscript>` "Edit <label>" link to its edit page. `PAGE_SIZE` stays 50.
+    - **In-place editing** (`InlineEditPanel`, client): `EntryForm variant="inline"` — no card, no `mode`, a 56px
+      amount box with a 32px number, `space-y-4`, element ids prefixed `edit-<rowId>-` (names unchanged) so they
+      cannot clash with the Add dialog opened over the list. A transaction keeps the edit page's Expense / Income
+      switch; a transfer row (either leg) edits the whole transfer (From / To / Sent / Received, no switch). Wallets:
+      active plus the archived ones the entry uses. The footer sits outside the keyed form: Delete
+      (`ConfirmDeleteForm`, danger text, `confirm()`, the delete action redirects back to the list URL) and "Open as
+      page" (the edit page with `returnTo`) on the left, Cancel and Save (`form=`) on the right. Wallets, categories,
+      today and the list URL reach every panel once through `InlineEditProvider`. On `ok` the row closes, focus
+      returns to its button, the message is announced and `router.refresh()` runs; errors show inline and focus the
+      first invalid control.
+    - **Empty states**: no wallets / no transactions at all (as before); a month with nothing in it and no other
+      filter: "Nothing in December 2026." with "‹ November 2026" and "All time" buttons; otherwise "No matching
+      transactions" + "Clear filters". The chip row shows whenever the user has any transaction.
 - **/wallets** — header with "+ New wallet" (opens the dialog). Active wallets grouped by currency: a group heading
   (code, currency name, group total) over a grid of cards — name, entry count, balance, this month's change
   (coloured), and a small line of the balance through the month (flat and muted when nothing changed). Cards link
@@ -794,13 +863,15 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   the signed-in user, and answer with `Content-Disposition: attachment` and `Cache-Control: no-store`.
 - The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category, from, to,
   q) and exports **all** matching rows (no pagination). `/transactions` gets an "Export CSV" action that carries
-  its current filters.
+  its current filters. Since step 4 it also takes `month=YYYY-MM`; unlike the list, a missing `month` (or
+  `month=all`) means all time, so the list's link always writes out the month it shows (`exportCsvHref`) and a bare
+  `/api/export/transactions` still exports everything.
 - `GET /api/export/context` → `expenses-tracker-context-YYYY-MM-DD.json`: the account's **wallets and
   categories only** — `{ app: "expenses-tracker", kind: "context", version: 1, exportedAt, wallets: [{ name,
   currency, archived }], categories: [{ name, kind }] }` — small and free of transactions, so it can be handed
   to companion tools (the Statement Importer artifact) that need to know the user's wallets and categories
   without receiving their history. Same auth and headers as the other exports. The `/data` page offers it as a
-  third download, "Wallets & categories (JSON)", with one sentence saying what it is for, next to a "Copy"
+  third download, "Wallets & categories (JSON)", with one sentence saying what it is for, next to a "Copy to clipboard"
   button that puts the same JSON on the clipboard for pasting into the artifact (with a selectable fallback
   when the clipboard is refused). As built: wallets and categories are listed in creation order (as in the backup);
   Copy starts the clipboard write inside the click (a `ClipboardItem` whose text is the pending fetch, which Safari
@@ -981,6 +1052,22 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
   drop area ("Drop files here or choose files", accepts several), the chosen files as pills, then the preview card
   ("Ready to import · <format>", counts for transactions / transfers / duplicates skipped, new wallets and new
   categories, "Everything is saved in one step, or nothing is.", Cancel + "Import N entries").
+  As built (redesign step 8): each side is a `<section>` with an 18px/800 `<h2>` over its card. Export rows: a
+  44px `aria-hidden` format badge (the title carries a visually hidden "(JSON)" / "(CSV)"), title, one sentence, and
+  the actions, which sit to the right of the text when the row is wide enough and wrap under it otherwise; the
+  download links are 44px secondary pills (`<a download>`), "Copy to clipboard" is an accent text button beside the
+  third one, its fallback text box takes a line of its own. Import: the drop area is a `<label>` around the visually
+  hidden `<input type="file" multiple>` (named by "Drop files here or choose files", described by the hint line; its
+  focus ring is drawn on the area); dropping files replaces the selection exactly as choosing them does. The chosen
+  files are pills ("name · size", with a total line when there are several or a limit is exceeded); the longer
+  format, limit and Spendee text moved into a closed "What can be imported" `<details>`. "Preview import" stays (the
+  preview is still an explicit step). The preview card's footer has Cancel (clears the preview **and** the chosen
+  files, focus returns to the file input) and, when there is anything to import, "Import N entries" ("Import" when
+  only wallets / categories would be created); with nothing to import the card says so and offers only Cancel. A
+  category created under both kinds (Spendee's unpaired "Transfer") is listed with its kind. Problems use the same
+  card shape with a `bg-danger-soft` band (heading in the text colour) and the line labels in `text-danger` on the
+  surface; problems have no Cancel (choosing other files or "Preview import" again is the way on). Rendering is
+  covered by `tests/import-preview.test.tsx`.
 - Module layout: pure, dependency-free code for the formats in `src/lib/csv.ts` (parse / serialise) and
   `src/lib/backup-format.ts` / `src/lib/context-format.ts` (schema + types); `src/server/export.ts` and
   `src/server/import.ts` for the services (`buildBackup`, `buildContext`, `buildTransactionsCsv`, `previewImport`,
@@ -1176,7 +1263,7 @@ titles 13px/600 muted; body 14px; small 12–13px.
 | `--expense` / `--expense-soft` | `#B5452A` / `#F7E3DA` | `#FF9B80` / `#3A2620` | negative balances, the expense dot is `--expense-dot` |
 | `--expense-dot` *(new)* | `#D9824F` | `#FF9B80` | the small dot before an expense row |
 | `--transfer` / `--transfer-soft` | `#6E6257` / `#EFE7DB` | `#A3A5AC` / `#25272C` | transfer amounts |
-| `--danger` / `--danger-soft` | `#B5452A` / `#F7E3DA` | `#FF9B80` / `#3A2620` | delete/remove text buttons, errors |
+| `--danger` / `--danger-soft` | `#A83F26` / `#F7E3DA` | `#FF9B80` / `#3A2620` | delete/remove text buttons, errors |
 | `--chart-future` *(new)* | `#EFE7DB` | `#25272C` | bars for days after today |
 | `--chart-ramp-1…5` *(new)* | `#BC522C #D9824F #E8B48C #CDBFAE #8C7E70` | `#FF7A59 #D9694E #A85643 #7A4639 #4E515A` | category shares, largest first; the 6th and later categories reuse 5 |
 | `--scrim` *(new)* | `rgba(43,36,31,.45)` | `rgba(0,0,0,.6)` | behind dialogs |

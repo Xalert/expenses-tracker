@@ -188,7 +188,7 @@ Added 2026-11-08.
 | `DatePicker` is a button plus a hidden `YYYY-MM-DD` input, not a typed text field | Forms post exactly what the native input posted, so no action, schema or service changed, and there is no date-parsing of typed text. The cost is that a date cannot be typed, so the grid is fully keyboard-operable instead (arrows, Home/End, PageUp/PageDown, Shift+PageUp/PageDown, Enter/Space, Escape) | planner |
 | The trigger button carries `role="combobox"` (with `aria-haspopup="dialog"`) | A plain `button` role does not support `aria-invalid` / `aria-required` (eslint's jsx-a11y flags it); a select-only combobox does, and its text is read as its value, so `<Field>` errors attach the same way as for `<Input>` | built |
 | Calendar weeks start on Monday; dates show en-GB ("5 Nov 2026", "Thursday 5 November 2026") | The app formats every date en-GB already; no locale setting exists to follow | planner |
-| An empty optional `DatePicker` (`allowEmpty`, the transaction filters) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
+| An empty optional `DatePicker` (`allowEmpty`, the transaction filters — that form was replaced by the chip row in redesign step 4; `allowEmpty` is kept) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
 
@@ -249,6 +249,22 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The type switch uses the neutral `Segmented` look (no expense/income/transfer colours) | The shared control; the submit label and the fields already say which kind is chosen | built (step 6) |
 | After a failed save, focus moves to the first invalid control | The form remounts, so focus would fall to `<body>`, outside the dialog's focus trap | built (step 6) |
 | `Popover` clears its own `translateX` before measuring | React StrictMode runs the layout effect twice in development; the second run measured the shifted panel, found a sub-pixel overflow and reset the shift to 0, so the calendar opened from the date pill stuck out of the 375px sheet | built (step 6) |
+| /data's export sentences were cut to one each (the CSV one still points to the backup and to Export CSV on Transactions) and the long import text (limits, separators, Spendee pairing, "nothing is changed or deleted") moved into a closed "What can be imported" disclosure | The redesign asks for one sentence per export and a clean drop area; nothing was dropped, only folded away | built (step 8) |
+| Cancel on the import preview clears the chosen files as well as the preview; "Preview import" stays as its own button | Cancel reads as "never mind"; changing the duplicates option or the files already discards a preview, so there is no need for a Cancel that keeps them. Previewing on file choice would change the two-step flow | built (step 8) |
+| Files can be dropped on the drop area; a drop replaces the selection like choosing does and is not filtered by the picker's `accept` list | The panel already keeps the `File`s in state, so it was a handful of lines; the server detects formats by content anyway, so an odd file becomes a problem in the preview | built (step 8) |
+| The problem card's heading is in the text colour on `--danger-soft`, with `text-danger` only for the line labels on the surface | `--danger` on `--danger-soft` measured 4.4:1 in Sand at the time; the planner then darkened the Sand `--danger` to `#A83F26` (5.0:1 on the soft tone, 6.0:1 on cards), so `FormError` and the labels now pass too | built (step 8) |
+| The 44px touch targets on /data are kept at every width (download pills, Copy to clipboard, Cancel / Import, the disclosure) | One size for phones and desktop; the badges are 44px too, so the rows line up | built (step 8) |
+| /transactions keeps `month` in the URL as given and treats an absent month as the current one; `?month=<current month>` is not counted as a filter, and links the page builds leave the current month out | The default view needs no parameter, so a bookmark of `/transactions` always opens on "this month"; spelling the month out must not light up "Clear" | built (step 4) |
+| The CSV export route keeps "no `month` = all time"; the list's Export CSV link always writes the month it shows | A bare `/api/export/transactions` (the /data page's link) must keep exporting everything, while the list's export must match the list | built (step 4) |
+| The month chip opens a dialog (a `MonthGrid` plus "‹ Oct · All time · Dec ›" links), not a listbox like the other chips | A month grid is not a list of options; the grid's own ‹ › step years, so previous / next month are links in the footer | built (step 4) |
+| The in-place editor of an expense or income keeps the Expense / Income switch | It is the edit page's form; changing the kind of a mistaken entry is the same edit in both places | built (step 4) |
+| Both legs of a transfer stay in the list (unless a wallet is filtered) and either leg opens the whole transfer | Each leg is a row in its wallet's history; editing one side alone would break the transfer | built (step 4) |
+| The day strip shows only for a month with entries or a selected day, ignores the type and search filters and is always expenses; its tallest day is capped like on the Overview | A strip of zeros adds nothing; "expenses per day" for an income filter or a note search would be a different chart. Without the cap a rent day flattens every other bar in a 48px strip | built (step 4) |
+| One card per day group; the day's net is muted, not coloured | Matches the day-grouped design; a net mixes income, expenses and transfers in several currencies, so a colour would suggest a judgement it cannot make | built (step 4) |
+| The inline form's element ids carry a per-row prefix (`edit-<id>-`); the posted names are unchanged | The Add dialog (N) can open over the list while a row is open, and both forms would otherwise have `id="amount"` | built (step 4) |
+| The row's `summary`, `panel` and `after` elements carry explicit keys | Without them a soft navigation between list URLs logged React's "unique key" warning for `ExpandableRow` (seen in the browser, not on a direct load); the cause was not traced further than that | built (step 4) |
+| Each row has a `<noscript>` link to its edit page, besides "Open as page" inside the open row | Without JavaScript the row button does nothing, so the link inside the panel alone would never be reachable | built (step 4) |
+| The floating Add button is hidden (CSS `:has([data-expandable-open])`) and the N shortcut stands down while a row is open for in-place editing | At the bottom of the viewport the button covered the open form's Save button on phones and clipped the amount's currency label on desktop; the dialog case was already handled by the scrim | planner |
 
 ### Process
 
@@ -310,7 +326,14 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 - Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
 - The currency picker is not searchable.
-- Submitting the transaction filters leaves empty parameters in the URL (harmless).
+- Without JavaScript, an empty note search on /transactions leaves `q=` in the URL (harmless); with it the URL is
+  clean. The filter chips themselves need JavaScript (popovers); without it only the search, the day-strip links,
+  pagination and the per-row edit links work.
+- The /transactions day-strip bars are about 9px wide at 375px, well under the 44px touch target; the month chip and
+  the list are the comfortable path on phones.
+- Opening a /transactions row does not move focus into its form (Tab from the row button reaches it next); after a
+  Delete from inside a row, or a Save that moves the entry to another page or month, focus falls back to the page.
+- With a day selected in the strip, a capped day's amount pill stays in the accent colour while its bar is muted.
 - The name-length message says "under 40 characters" although exactly 40 is allowed (wallet and category names;
   first name / surname now say "80 characters or fewer").
 - An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
@@ -372,6 +395,8 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 - **The /data "Copy" button never reached a real clipboard**: in the in-app browser pane the clipboard was refused
   and the selectable text box appeared; the "Copied" path was checked with a stubbed `navigator.clipboard`. Real
   drag-and-drop of a file onto the artifact's panel was simulated with a synthetic `drop` event in the harness.
+- **Dropping files on /data's import area** was only simulated (a synthetic `drop` event with a `DataTransfer` in
+  headless Chrome); no real drag from Finder or Explorer, and not in Safari / Firefox.
 - **The 0001 migration on the owner's real database** was not run by the implementer (it is not theirs to touch);
   it is covered by synthetic populated databases in `tests/migrations.test.ts` and a browser upgrade check on a
   scratch database.

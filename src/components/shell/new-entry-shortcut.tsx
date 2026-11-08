@@ -14,6 +14,8 @@ export function NewEntryShortcut() {
       if (!isNewEntryShortcut(e)) return;
       // Focus can sit on <body> while a dialog is open (after a click on its text): never stack a second one.
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // A row open for in-place editing owns the page for now (the Add button is hidden by CSS meanwhile).
+      if (document.querySelector("[data-expandable-open]")) return;
       // Follow the Add button that is shown: a page may point it somewhere else (see AddButton).
       const button =
         document.querySelector<HTMLAnchorElement>('[data-add-button="page"]') ??

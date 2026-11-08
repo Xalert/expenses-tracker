@@ -204,3 +204,59 @@ describe("EntryForm date pills", () => {
     expect(html).not.toContain("<textarea");
   });
 });
+
+describe("EntryForm, inline variant (the /transactions row editor)", () => {
+  function inline(edit: "transaction" | "transfer") {
+    return renderToStaticMarkup(
+      <EntryForm
+        variant="inline"
+        idPrefix="edit-42-"
+        wallets={WALLETS}
+        categories={CATEGORIES}
+        initial={
+          edit === "transfer"
+            ? { kind: "transfer", fromWalletId: 1, toWalletId: 3, amount: "10.00", receivedAmount: "1600", date: TODAY }
+            : { kind: "expense", walletId: 1, categoryId: 10, amount: "3.80", date: TODAY, note: "Coffee" }
+        }
+        today={TODAY}
+        transactionAction={edit === "transaction" ? noopAction : undefined}
+        transferAction={edit === "transfer" ? noopAction : undefined}
+        returnTo="/transactions"
+        submitLabel="Save"
+        canTransfer
+        footerStart={<button type="submit">Delete</button>}
+      />,
+    );
+  }
+
+  it("draws no card, posts no mode, prefixes ids but not names, and has a compact amount", () => {
+    const html = inline("transaction");
+    expect(html).not.toContain("rounded-[20px]");
+    expect(html).not.toContain('name="mode"');
+    const amount = tag(html, "input", 'name="amount"');
+    expect(amount).toContain('id="edit-42-amount"');
+    expect(amount).toContain("text-[32px]");
+    expect(html).toContain('for="edit-42-amount"');
+    expect(html).toContain('id="edit-42-note"');
+    expect(html).not.toContain('id="amount"');
+    expect(radios(html, "kind")).toEqual({ expense: true, income: false });
+    expect(radios(html, "categoryId")["10"]).toBe(true);
+  });
+
+  it("puts Delete, Cancel and Save in a footer outside the form, Save joined to it with form=", () => {
+    const html = inline("transaction");
+    const formId = /<form id="([^"]+)"/.exec(html)![1];
+    const formEnd = html.indexOf("</form>");
+    expect(html.indexOf(">Delete</button>")).toBeGreaterThan(formEnd);
+    expect(html).toMatch(/<button type="button"[^>]*>Cancel<\/button>/);
+    expect(html).toMatch(new RegExp(`<button type="submit"[^>]*form="${formId}"[^>]*>Save</button>`));
+    expect(html).not.toContain("Keep open for another");
+  });
+
+  it("a transfer has no type switch and shows Sent / Received across currencies", () => {
+    const html = inline("transfer");
+    expect(radios(html, "kind")).toEqual({});
+    expect(tag(html, "input", 'name="receivedAmount"')).toContain('id="edit-42-receivedAmount"');
+    expect(tag(html, "select", 'name="fromWalletId"')).toContain('id="edit-42-fromWalletId"');
+  });
+});

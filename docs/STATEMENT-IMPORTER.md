@@ -59,7 +59,7 @@ their titles once statements are added, and each says "done" when it is.
 **1. Wallets & categories panel.** The tracker exports a small **context file** made for this page: `/data` →
 "Wallets & categories (JSON)" (`GET /api/export/context`: `{ app: "expenses-tracker", kind: "context", version: 1,
 exportedAt, wallets: [{ name, currency, archived }], categories: [{ name, kind }] }`). The panel takes it three
-ways: a file picker, drag-and-drop anywhere on the panel, or a paste box ("Copy" on the tracker's /data page puts
+ways: a file picker, drag-and-drop anywhere on the panel, or a paste box ("Copy to clipboard" on the tracker's /data page puts
 the same JSON on the clipboard, for phones and for when downloads are awkward). A full backup JSON
 (`/api/export/backup`) is still accepted — only `wallets[]` and `categories[]` are read from it — but the page
 steers to the context file, which carries no history. Archived wallets are left out. A preview says how many

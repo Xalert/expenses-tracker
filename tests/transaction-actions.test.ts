@@ -1,8 +1,10 @@
 // The create Server Actions behind the Add form: `mode=dialog` returns `{ ok: true }` (the dialog closes or clears
 // itself), the full page still redirects to `returnTo`. Next's request APIs are mocked; the services run for real.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listTransactions } from "@/server/transactions";
+import { createTransaction, getTransaction, listTransactions } from "@/server/transactions";
+import { createTransfer, getTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
+import { getDb } from "@/db";
 import { makeUser, useFreshDb } from "./helpers";
 
 const session = vi.hoisted(() => ({ userId: 0 }));
@@ -26,7 +28,8 @@ class RedirectSignal extends Error {
   }
 }
 
-const { createTransactionAction, createTransferAction } = await import("@/app/(app)/transactions/actions");
+const { createTransactionAction, createTransferAction, updateTransactionInlineAction, updateTransferInlineAction } =
+  await import("@/app/(app)/transactions/actions");
 
 function fd(entries: Record<string, string>): FormData {
   const f = new FormData();
@@ -140,5 +143,93 @@ describe("createTransferAction", () => {
     expect(missing.fieldErrors?.receivedAmount).toBe("Enter the amount received in JPY.");
     const ok = await createTransferAction({}, transfer({ mode: "dialog", toWalletId: String(yen), receivedAmount: "8000" }));
     expect(ok.ok).toBe(true);
+  });
+});
+
+describe("updateTransactionInlineAction (the in-place row editor)", () => {
+  let id: number;
+  beforeEach(() => {
+    id = createTransaction(user.id, {
+      kind: "expense",
+      walletId: cash,
+      categoryId: user.cat("Food"),
+      amountMinor: 380,
+      date: "2026-11-08",
+      note: "Coffee",
+    }).id;
+  });
+
+  it("saves, revalidates every page and returns ok with a message instead of redirecting", async () => {
+    const state = await updateTransactionInlineAction(id, {}, expense({ amount: "4.80", note: "Coffee", date: "2026-11-08" }));
+    expect(state).toEqual({ ok: true, message: "Saved €4.80 · Food" });
+    expect(next.revalidated).toEqual([["/", "layout"]]);
+    expect(getTransaction(user.id, id)).toMatchObject({ amountMinor: 480, note: "Coffee" });
+  });
+
+  it("returns field errors with the values echoed, saving nothing", async () => {
+    const state = await updateTransactionInlineAction(id, {}, expense({ amount: "abc" }));
+    expect(state.ok).toBeUndefined();
+    expect(state.fieldErrors?.amount).toMatch(/valid amount in EUR/);
+    expect(state.values).toMatchObject({ amount: "abc", walletId: String(cash) });
+    expect(next.revalidated).toEqual([]);
+    expect(getTransaction(user.id, id)?.amountMinor).toBe(380);
+
+    const wrongCategory = await updateTransactionInlineAction(id, {}, expense({ categoryId: String(user.cat("Salary")) }));
+    expect(wrongCategory.fieldErrors?.categoryId).toBeTruthy();
+  });
+
+  it("treats another user's transaction as missing", async () => {
+    const other = makeUser(getDb(), "bob@example.com");
+    session.userId = other.id;
+    const bobCash = createWallet(other.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 }).id;
+    const state = await updateTransactionInlineAction(
+      id,
+      {},
+      expense({ walletId: String(bobCash), categoryId: String(other.cat("Food")) }),
+    );
+    expect(state.ok).toBeUndefined();
+    expect(state.message).toBe("Transaction not found.");
+    expect(next.revalidated).toEqual([]);
+    expect(getTransaction(user.id, id)?.amountMinor).toBe(380);
+  });
+
+  it("rejects a bound id that is not a positive integer", async () => {
+    await expect(updateTransactionInlineAction(-1, {}, expense())).rejects.toThrow("Invalid id.");
+  });
+});
+
+describe("updateTransferInlineAction", () => {
+  let transferId: number;
+  beforeEach(() => {
+    transferId = createTransfer(user.id, { fromWalletId: cash, toWalletId: bank, amountMinor: 5000, date: "2026-11-08" }).id;
+  });
+
+  function transfer(extra: Record<string, string> = {}) {
+    return fd({
+      fromWalletId: String(cash),
+      toWalletId: String(bank),
+      amount: "60",
+      date: "2026-11-08",
+      note: "",
+      returnTo: "/transactions",
+      ...extra,
+    });
+  }
+
+  it("rewrites the transfer and returns ok without redirecting", async () => {
+    const state = await updateTransferInlineAction(transferId, {}, transfer());
+    expect(state).toEqual({ ok: true, message: "Saved €60.00 from Cash to Bank" });
+    expect(next.revalidated).toEqual([["/", "layout"]]);
+    expect(getTransfer(user.id, transferId)).toMatchObject({ from: { amountMinor: 6000 }, to: { amountMinor: 6000 } });
+  });
+
+  it("echoes errors (same wallet twice, missing received amount across currencies)", async () => {
+    const same = await updateTransferInlineAction(transferId, {}, transfer({ toWalletId: String(cash) }));
+    expect(same.fieldErrors?.toWalletId).toBe("Choose two different wallets.");
+    expect(same.values).toMatchObject({ amount: "60" });
+    const cross = await updateTransferInlineAction(transferId, {}, transfer({ toWalletId: String(yen) }));
+    expect(cross.fieldErrors?.receivedAmount).toBe("Enter the amount received in JPY.");
+    expect(next.revalidated).toEqual([]);
+    expect(getTransfer(user.id, transferId)?.from.amountMinor).toBe(5000);
   });
 });

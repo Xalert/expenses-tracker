@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CopyIcon } from "@/components/shell/icons";
-import { Button, controlClasses } from "@/components/ui";
+import { Spinner, controlClasses } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 const CONTEXT_URL = "/api/export/context";
@@ -20,12 +20,13 @@ async function fetchContext(): Promise<string> {
 }
 
 /**
- * "Copy" for the Wallets & categories export: fetches the same JSON as the download and puts it on the clipboard.
+ * "Copy to clipboard" for the Wallets & categories export: fetches the same JSON as the download and puts it on the clipboard.
  * The clipboard write is started inside the click (a ClipboardItem with a pending Blob, which Safari needs) and
  * falls back to `writeText` after the fetch; when the browser refuses, the JSON is shown in a read-only, selected
- * text box to copy by hand.
+ * text box to copy by hand. `children` (the download link) is grouped with the button; the fallback box takes a
+ * line of its own in the parent's wrapping row.
  */
-export function CopyContextButton() {
+export function CopyContextButton({ children }: { children?: ReactNode }) {
   const [state, setState] = useState<CopyState>({ status: "idle" });
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -65,14 +66,23 @@ export function CopyContextButton() {
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={copy} pending={state.status === "pending"}>
-        {state.status !== "pending" && <CopyIcon className="size-4" />}
-        Copy
-      </Button>
-      <span role="status" aria-live="polite" className="self-center text-sm">
-        {state.status === "copied" && <span className="text-income">Copied</span>}
-        {state.status === "error" && <span className="text-danger">{state.message}</span>}
-      </span>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-2">
+        {children}
+        <button
+          type="button"
+          onClick={copy}
+          disabled={state.status === "pending"}
+          aria-busy={state.status === "pending" || undefined}
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm font-semibold whitespace-nowrap text-accent-hover transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60"
+        >
+          {state.status === "pending" ? <Spinner /> : <CopyIcon className="size-4" />}
+          Copy to clipboard
+        </button>
+        <span role="status" aria-live="polite" className="text-sm">
+          {state.status === "copied" && <span className="text-income">Copied</span>}
+          {state.status === "error" && <span className="text-danger">{state.message}</span>}
+        </span>
+      </div>
       {state.status === "fallback" && (
         <div className="basis-full space-y-1.5">
           <p className="text-sm text-muted-foreground">

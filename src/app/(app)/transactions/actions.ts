@@ -91,7 +91,10 @@ function isDialogMode(formData: FormData): boolean {
   return formData.get("mode") === "dialog";
 }
 
-/** After a save from the dialog: every signed-in page may show the new entry (balances, lists, charts). */
+/**
+ * After a save from the dialog or an in-place row: every signed-in page may show the change (balances, lists,
+ * charts).
+ */
 function savedInDialog(message: string): FormState {
   revalidatePath("/", "layout");
   return { ok: true, message };
@@ -210,6 +213,30 @@ export async function updateTransactionAction(
   redirect(returnToOf(formData));
 }
 
+/**
+ * The in-place editor of a /transactions row: same parsing and service as the edit page, but it returns
+ * `{ ok: true, message }` (and revalidates every page) instead of redirecting; the row closes itself on `ok`.
+ */
+export async function updateTransactionInlineAction(
+  transactionId: number,
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  transactionId = assertBoundId(transactionId);
+  const values = formValues(formData);
+  const parsed = parseTransaction(user.id, formData, values);
+  if (!parsed.ok) return parsed.state;
+  let updated: TransactionView;
+  try {
+    updated = updateTransaction(user.id, transactionId, parsed.input);
+  } catch (err) {
+    return serviceErrorState(err, values);
+  }
+  const amount = formatMoney(updated.amountMinor, updated.currency);
+  return savedInDialog(`Saved ${amount} · ${updated.categoryName ?? updated.walletName}`);
+}
+
 /** Plain form action (`id`, `returnTo` fields). Already-deleted rows are treated as done. */
 export async function deleteTransactionAction(formData: FormData): Promise<void> {
   const user = await requireUser();
@@ -270,6 +297,27 @@ export async function updateTransferAction(
     ...(previous ? [previous.from.walletId, previous.to.walletId] : []),
   ]);
   redirect(returnToOf(formData));
+}
+
+/** The in-place editor of a transfer row: as `updateTransferAction`, but returns `{ ok: true, message }`. */
+export async function updateTransferInlineAction(
+  transferId: number,
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  transferId = assertBoundId(transferId);
+  const values = formValues(formData);
+  const parsed = parseTransfer(user.id, formData, values);
+  if (!parsed.ok) return parsed.state;
+  let updated: TransferView;
+  try {
+    updated = updateTransfer(user.id, transferId, parsed.input);
+  } catch (err) {
+    return serviceErrorState(err, values);
+  }
+  const amount = formatMoney(updated.from.amountMinor, updated.from.currency);
+  return savedInDialog(`Saved ${amount} from ${updated.from.walletName} to ${updated.to.walletName}`);
 }
 
 /** Plain form action (`id` = transfer id, `returnTo`). Removes the transfer and both legs. */

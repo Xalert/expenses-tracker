@@ -6,6 +6,7 @@ export { CurrencySwitch } from "./currency-switch";
 export { DatePicker, type DatePickerProps } from "./date-picker";
 export { Dialog, type DialogProps } from "./dialog";
 export { EmptyState } from "./empty-state";
+export { ExpandableList, ExpandableRow, toggleOpen, useExpandableRow } from "./expandable-row";
 export { Field, FieldError } from "./field";
 export { FormError } from "./form-error";
 export { InsightCard, type InsightCardTone } from "./insight-card";

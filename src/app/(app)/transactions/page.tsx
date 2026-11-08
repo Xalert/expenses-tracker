@@ -1,21 +1,45 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { DownloadIcon, PlusIcon } from "@/components/shell/icons";
-import { ConfirmDeleteForm } from "@/components/transactions/confirm-delete-form";
-import { PencilIcon, TrashIcon } from "@/components/transactions/icons";
-import { exportCsvHref, hasFilters, listHref, PAGE_SIZE, parseListParams } from "@/components/transactions/list-params";
-import { TransactionFilters } from "@/components/transactions/transaction-filters";
-import { TransactionList, transactionLabel } from "@/components/transaction-list";
-import { Card, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
+import { DayList } from "@/components/transactions/day-list";
+import { DayStrip } from "@/components/transactions/day-strip";
+import { FilterChips } from "@/components/transactions/filter-chips";
+import { InlineEditProvider } from "@/components/transactions/inline-edit";
+import {
+  dayHref,
+  exportCsvHref,
+  hasFilters,
+  hasNonDateFilters,
+  listFilters,
+  listHref,
+  monthHref,
+  PAGE_SIZE,
+  parseListParams,
+  resolveView,
+  stripMonth,
+  type ListParams,
+  type ListView,
+} from "@/components/transactions/list-params";
+import { Card, CurrencySwitch, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
-import { withReturnTo } from "@/lib/return-to";
+import { currentMonth, formatMonth, shiftMonth, todayISO } from "@/lib/dates";
+import { resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
-import { listTransactions, type TransactionView } from "@/server/transactions";
+import { getMonthTimeline, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
+import { listDayTotals, listTransactions } from "@/server/transactions";
 import { listWallets } from "@/server/wallets";
-import { deleteTransactionAction, deleteTransferAction } from "./actions";
 
 export const metadata: Metadata = { title: "Transactions" };
+
+/** "12 entries this month", "12 entries in October 2026", "12 entries" (all time), "3 match your filters". */
+function describeCount(total: number, params: ListParams, view: ListView, thisMonth: string): string {
+  if (hasNonDateFilters(params) || view.type === "range") {
+    return `${total} ${total === 1 ? "matches" : "match"} your filters`;
+  }
+  const n = `${total} ${total === 1 ? "entry" : "entries"}`;
+  if (view.type === "all") return n;
+  return view.month === thisMonth ? `${n} this month` : `${n} in ${formatMonth(view.month)}`;
+}
 
 export default async function TransactionsPage({
   searchParams,
@@ -24,15 +48,14 @@ export default async function TransactionsPage({
 }) {
   const user = await requireUser();
   const params = parseListParams(await searchParams);
-  const filtered = hasFilters(params);
+  const thisMonth = currentMonth();
+  const today = todayISO();
+  const view = resolveView(params, thisMonth);
+  const filters = listFilters(params, thisMonth);
+  const filtered = hasFilters(params, thisMonth);
 
   const { items, total } = listTransactions(user.id, {
-    walletId: params.wallet,
-    kind: params.kind,
-    categoryId: params.category,
-    from: params.from,
-    to: params.to,
-    q: params.q,
+    ...filters,
     limit: PAGE_SIZE,
     offset: (params.page - 1) * PAGE_SIZE,
   });
@@ -44,123 +67,134 @@ export default async function TransactionsPage({
   const currentHref = listHref(params);
   const wallets = listWallets(user.id, { includeArchived: true });
   const categories = listCategories(user.id);
-  const anyAtAll = filtered && total === 0 ? listTransactions(user.id, { limit: 1 }).total > 0 : total > 0;
+  const anyAtAll = total > 0 || listTransactions(user.id, { limit: 1 }).total > 0;
+  const totals = listDayTotals(user.id, filters, [...new Set(items.map((t) => t.date))]);
 
-  const renderActions = (t: TransactionView) => {
-    const label = transactionLabel(t);
-    const editHref =
-      t.transferId !== null ? `/transactions/transfers/${t.transferId}/edit` : `/transactions/${t.id}/edit`;
-    const iconButton = buttonClasses({ variant: "ghost", size: "sm", className: "size-8 shrink-0 px-0!" });
-    return (
-      <>
-        <Link href={withReturnTo(editHref, currentHref)} className={iconButton} aria-label={`Edit ${label}`} title="Edit">
-          <PencilIcon className="size-4" />
-        </Link>
-        {t.transferId !== null ? (
-          <ConfirmDeleteForm
-            action={deleteTransferAction}
-            id={t.transferId}
-            returnTo={currentHref}
-            confirmMessage="Delete this transfer? Both sides of it will be removed. This cannot be undone."
-            variant="ghost"
-            size="sm"
-            className="size-8 shrink-0 px-0! hover:text-danger!"
-            aria-label={`Delete ${label}`}
-            title="Delete transfer"
-          >
-            <TrashIcon className="size-4" />
-          </ConfirmDeleteForm>
-        ) : (
-          <ConfirmDeleteForm
-            action={deleteTransactionAction}
-            id={t.id}
-            returnTo={currentHref}
-            confirmMessage={`Delete this ${t.kind}? This cannot be undone.`}
-            variant="ghost"
-            size="sm"
-            className="size-8 shrink-0 px-0! hover:text-danger!"
-            aria-label={`Delete ${label}`}
-            title="Delete"
-          >
-            <TrashIcon className="size-4" />
-          </ConfirmDeleteForm>
-        )}
-      </>
-    );
-  };
+  // The day strip: only when one month is in view (or one day of it is selected).
+  const strip = anyAtAll ? stripMonth(view) : null;
+  let stripNode: React.ReactNode = null;
+  if (strip && (total > 0 || strip.selectedDate)) {
+    const walletFilter = params.wallet ? wallets.find((w) => w.id === params.wallet) : undefined;
+    const held = [...new Set(wallets.map((w) => w.currency))];
+    const currency = walletFilter
+      ? walletFilter.currency
+      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month)).currency;
+    if (currency) {
+      const timeline = getMonthTimeline(user.id, {
+        month: strip.month,
+        currency,
+        walletId: walletFilter?.id,
+        categoryId: params.category,
+      });
+      const activeCurrencies = listUserCurrencies(user.id);
+      const showSwitch = !walletFilter && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
+      stripNode = (
+        <DayStrip
+          month={strip.month}
+          currency={currency}
+          timeline={timeline}
+          today={today}
+          selectedDate={strip.selectedDate}
+          hrefFor={(date) => dayHref(params, strip.month, date, thisMonth)}
+          monthHref={dayHref(params, strip.month, null, thisMonth)}
+          currencySwitch={
+            showSwitch ? (
+              <CurrencySwitch
+                currencies={activeCurrencies}
+                value={currency}
+                hrefFor={(code) => listHref(params, { currency: code })}
+              />
+            ) : undefined
+          }
+        />
+      );
+    }
+  }
 
   const first = total === 0 ? 0 : (params.page - 1) * PAGE_SIZE + 1;
   const last = Math.min(params.page * PAGE_SIZE, total);
+  const walletOptions = wallets.map((w) => ({
+    id: w.id,
+    name: w.name,
+    currency: w.currency,
+    archived: w.archivedAt !== null,
+  }));
+  const categoryOptions = categories.map(({ id, name, kind }) => ({ id, name, kind }));
+
+  let empty: React.ReactNode = null;
+  if (total === 0) {
+    if (!anyAtAll) {
+      empty =
+        wallets.length === 0 ? (
+          <EmptyState
+            title="No transactions yet"
+            description="Create a wallet first, then start logging your expenses and income."
+            action={<LinkButton href="/wallets/new">Create a wallet</LinkButton>}
+          />
+        ) : (
+          <EmptyState
+            title="No transactions yet"
+            description="Log an expense, an income or a transfer between your wallets."
+            action={<LinkButton href="/transactions/new">Add a transaction</LinkButton>}
+          />
+        );
+    } else if (view.type === "month" && !hasNonDateFilters(params)) {
+      const previous = shiftMonth(view.month, -1);
+      empty = (
+        <EmptyState
+          title={`Nothing in ${formatMonth(view.month)}.`}
+          description="No expenses, income or transfers are dated in this month."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <LinkButton href={monthHref(params, previous, thisMonth)} variant="secondary">
+                ‹ {formatMonth(previous)}
+              </LinkButton>
+              <LinkButton href={monthHref(params, "all", thisMonth)} variant="secondary">
+                All time
+              </LinkButton>
+            </div>
+          }
+        />
+      );
+    } else {
+      empty = (
+        <EmptyState
+          title="No matching transactions"
+          description="Nothing matches these filters. Try another month or clear a filter."
+          action={
+            <LinkButton href="/transactions" variant="secondary">
+              Clear filters
+            </LinkButton>
+          }
+        />
+      );
+    }
+  }
 
   return (
     <>
-      <PageHeader
-        title="Transactions"
-        description={
-          total > 0
-            ? `${total} ${total === 1 ? "transaction" : "transactions"}${filtered ? (total === 1 ? " matches your filters" : " match your filters") : ""}`
-            : undefined
-        }
-        actions={
-          <>
-            {total > 0 && (
-              // A plain <a>: the route handler answers with a file download (all matching rows, current filters).
-              <a
-                href={exportCsvHref(params)}
-                download
-                className={buttonClasses({ variant: "secondary" })}
-                title={filtered ? "Export the transactions matching these filters as CSV" : "Export all transactions as CSV"}
-              >
-                <DownloadIcon className="size-4" />
-                Export CSV
-              </a>
-            )}
-            <LinkButton href={withReturnTo("/transactions/new", currentHref)}>
-              <PlusIcon className="size-4" />
-              Add
-            </LinkButton>
-          </>
-        }
-      />
+      <PageHeader title="Transactions" description={anyAtAll ? describeCount(total, params, view, thisMonth) : undefined} />
 
-      {(anyAtAll || filtered) && (
-        <TransactionFilters
+      {anyAtAll && (
+        <FilterChips
           params={params}
-          wallets={wallets.map((w) => ({ id: w.id, name: w.name, currency: w.currency, archived: w.archivedAt !== null }))}
-          categories={categories}
-          queryKey={currentHref}
+          thisMonth={thisMonth}
+          wallets={walletOptions}
+          categories={categoryOptions}
+          exportHref={total > 0 ? exportCsvHref(params, thisMonth) : null}
+          showClear={filtered}
         />
       )}
 
-      <Card>
-        {total === 0 ? (
-          anyAtAll ? (
-            <EmptyState
-              title="No matching transactions"
-              description="Nothing matches these filters. Try widening the date range or clearing a filter."
-              action={
-                <LinkButton href="/transactions" variant="secondary">
-                  Clear filters
-                </LinkButton>
-              }
-            />
-          ) : wallets.length === 0 ? (
-            <EmptyState
-              title="No transactions yet"
-              description="Create a wallet first, then start logging your expenses and income."
-              action={<LinkButton href="/wallets/new">Create a wallet</LinkButton>}
-            />
-          ) : (
-            <EmptyState
-              title="No transactions yet"
-              description="Log an expense, an income or a transfer between your wallets."
-              action={<LinkButton href="/transactions/new">Add a transaction</LinkButton>}
-            />
-          )
-        ) : (
-          <TransactionList items={items} renderActions={renderActions} />
-        )}
-      </Card>
+      {stripNode}
+
+      {empty ? (
+        <Card>{empty}</Card>
+      ) : (
+        <InlineEditProvider wallets={walletOptions} categories={categoryOptions} today={today} returnTo={currentHref}>
+          <DayList items={items} totals={totals} today={today} returnTo={currentHref} />
+        </InlineEditProvider>
+      )}
 
       {total > 0 && (
         <nav

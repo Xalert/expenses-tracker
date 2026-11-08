@@ -41,8 +41,8 @@
   --transfer: #6e6257;
   --transfer-soft: #efe7db;
 
-  --danger: #b5452a;
-  --danger-hover: #9a3a22; /* not in the token table: only the solid danger button's hover */
+  --danger: #a83f26;
+  --danger-hover: #8e3520; /* not in the token table: only the solid danger button's hover */
   --danger-soft: #f7e3da;
 
   --chart-future: #efe7db;
@@ -168,5 +168,11 @@
  * steps aside. Unlayered so it beats the button's display utility; works without JavaScript.
  */
 body:has([data-add-button="page"]) [data-add-button="default"] {
+  display: none;
+}
+
+/* While a row is open for in-place editing, the floating Add button would cover the form's footer (right-aligned
+ * Save on phones) — hide it; the N shortcut stands down too (see new-entry-shortcut.tsx). */
+body:has([data-expandable-open]) [data-add-button] {
   display: none;
 }
