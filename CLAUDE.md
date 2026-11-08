@@ -16,6 +16,9 @@ file, shipped as a Docker image.
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — user-facing: running, configuration, self-hosting, backup/restore, the CSV column format.
+- `docs/STATEMENT-IMPORTER.md` — the claude.ai Artifact in `tools/statement-importer/` that turns bank statements
+  into this app's CSV (prompts, memory, harness). Not part of the Next.js app; eslint ignores `tools/**`, and
+  `tests/statement-importer-csv.test.ts` keeps its CSV writer in line with `src/lib/csv.ts`.
 
 ## Commands
 
@@ -39,7 +42,7 @@ breaks `next build`. A production build is best validated with `docker build .`,
 ## Architecture
 
 **Request flow.** There is no REST layer. Pages are Server Components that call the service layer directly;
-mutations are Server Actions. The only route handlers are `GET /api/health` and the two `GET /api/export/*`
+mutations are Server Actions. The only route handlers are `GET /api/health` and the three `GET /api/export/*`
 downloads — route handlers are not covered by the `(app)` layout, so they check the session themselves.
 
 ```
@@ -66,19 +69,28 @@ one DB transaction; legs are only edited or deleted through the transfer. Cross-
 amounts. A check constraint ties `kind`, `categoryId` and `transferId` together.
 
 **Database (`src/db/index.ts`).** `getDb()` lazily opens the file from `DATABASE_URL` (default `data/app.db`),
-enables foreign keys + WAL, and applies the migrations in `drizzle/` — so migrations must ship with the build
+sets WAL, and applies the migrations in `drizzle/` through `migrateDatabase` — foreign keys OFF around the
+migrator, a copy `<file>.before-migration-<tag>.bak` of a populated file DB first, then foreign keys ON and
+`PRAGMA foreign_key_check` (startup throws if it finds anything). Migrations must ship with the build
 (`outputFileTracingIncludes` in `next.config.ts`, and an explicit copy in the Dockerfile). Never edit an
-existing migration; generate a new one.
+existing migration that has shipped; generate a new one. **A generated migration that rebuilds a table**
+(`__new_x` + `DROP TABLE x`) needs reading by hand: drizzle-kit can only copy columns, and its `PRAGMA
+foreign_keys` lines are no-ops inside the migrator's transaction (see `drizzle/0001_user_ids.sql`,
+`tests/migrations.test.ts`). `drizzle-kit generate` prompts (rename vs create) need a TTY.
 
-**Auth (`src/lib/auth.ts`).** Email + password (scrypt), DB-backed sessions, sha256 of the cookie token stored.
+**Auth (`src/lib/auth.ts`).** User ID (or email) + password (scrypt), DB-backed sessions, sha256 of the cookie
+token stored. Email, first name and surname are optional; show people by `user.displayName` (rules in
+`src/lib/user-id.ts`), never by assembling names yourself.
 `requireUser()` is called in the `(app)` layout **and** in every Server Action. `COOKIE_SECURE` and
 `ALLOW_REGISTRATION` are read through `src/lib/config.ts`.
 
 **Import pipeline (`src/server/import.ts` + `src/server/import-formats/`).** Each format is a module with
-`detect` + `parse` that produces the same parsed form; `FORMATS` in `import.ts` lists them in detection order
+`detect` + `parse` that produces the same parsed form (plus an optional `finalize` that runs once on the merged
+selection — Spendee pairs transfer rows that live in different files there); `FORMATS` in `import.ts` lists them in detection order
 (the native CSV accepts anything, so it stays last). Planning, duplicate skipping, preview and the
 all-or-nothing write are shared and format-agnostic. Adding a provider means one module plus one entry in that
-list — do not loosen the native CSV rules to fit a provider. `previewImport` and `runImport` share one path, and
+list — do not loosen the native CSV rules to fit a provider. A selection of several files is one import (parsed per file, then merged). `previewImport` and `runImport`
+share one path, and
 `runImport` re-validates inside the transaction it writes in.
 
 **Deployment.** `output: "standalone"`; the Docker image runs `node server.js` as the non-root `node` user with
@@ -88,7 +100,7 @@ must be built on Linux for its target platform because better-sqlite3 is a nativ
 ## Conventions and gotchas
 
 - **Tests** live in `tests/` (not next to the code). Service tests call `useFreshDb()` in `beforeEach` and
-  `makeUser(db, email)` from `tests/helpers.ts`, which installs an in-memory migrated DB via `setDb`.
+  `makeUser(db, email)` from `tests/helpers.ts` (user ID derived from the whole email), which installs an in-memory migrated DB via `setDb`.
   `server-only` is stubbed in `vitest.config.mts`.
 - **Cache Components is deliberately off** (`next.config.ts`): every page is per-user and reads the session
   cookie. Don't add `'use cache'`.
@@ -97,6 +109,10 @@ must be built on Linux for its target platform because better-sqlite3 is a nativ
 - **Forms after a failed Server Action:** React resets uncontrolled forms, and a `<select>` ignores a changed
   `defaultValue`. Echo the submitted `values` back and either `key` the select on its value or `key` the whole
   form on the action result (both approaches are in the codebase).
+- **A dev page that renders but whose buttons do nothing** was opened under a hostname Next.js does not allow
+  for dev scripts (it logs "Blocked cross-origin request to Next.js dev resource"). `next.config.ts` allows
+  `localhost`, this machine's own LAN addresses and `ALLOWED_DEV_ORIGINS`. Plain `<form action>` pages still
+  work without scripts, which hides the problem until a client-only component (the import panel) is used.
 - **Theme tokens** (`bg-surface`, `text-muted-foreground`, `text-income`, `text-expense`, `text-transfer`, …)
   are defined in `src/app/globals.css` for light and dark; use them instead of raw colours.
 - **The mobile bottom bar is full** at 375px (five entries). New top-level destinations go in the desktop

@@ -7,11 +7,21 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { shouldUseSecureCookie } from "./config";
+import { displayName } from "./user-id";
 
 export const SESSION_COOKIE = "et_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type CurrentUser = { id: number; name: string; email: string };
+export type CurrentUser = {
+  id: number;
+  /** The user ID people sign in with. */
+  username: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  /** First name + surname when either is set, otherwise the user ID (`displayName` in src/lib/user-id.ts). */
+  displayName: string;
+};
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -52,8 +62,10 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       sessionId: sessions.id,
       expiresAt: sessions.expiresAt,
       id: users.id,
-      name: users.name,
+      username: users.username,
       email: users.email,
+      firstName: users.firstName,
+      lastName: users.lastName,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -65,7 +77,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     db.delete(sessions).where(eq(sessions.id, row.sessionId)).run();
     return null;
   }
-  return { id: row.id, name: row.name, email: row.email };
+  const { id, username, email, firstName, lastName } = row;
+  return { id, username, email, firstName, lastName, displayName: displayName(row) };
 });
 
 /** The signed-in user; redirects to /login when signed out. Use in the (app) layout, pages and every Server Action. */

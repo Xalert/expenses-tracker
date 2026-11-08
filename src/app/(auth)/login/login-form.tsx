@@ -12,15 +12,17 @@ export function LoginForm() {
   return (
     <form action={formAction} className="space-y-4" noValidate>
       <FormError message={state.message} />
-      <Field id="email" label="Email" error={err.email}>
+      <Field id="identifier" label="User ID or email" error={err.identifier}>
         <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
+          id="identifier"
+          name="identifier"
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           required
-          defaultValue={state.values?.email}
-          error={err.email}
+          defaultValue={state.values?.identifier}
+          error={err.identifier}
         />
       </Field>
       <Field id="password" label="Password" error={err.password}>

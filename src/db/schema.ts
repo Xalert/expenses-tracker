@@ -21,8 +21,12 @@ export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  email: text("email").notNull().unique(),
-  name: text("name").notNull(),
+  /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
+  username: text("username").notNull().unique(),
+  /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
+  email: text("email").unique(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
   passwordHash: text("password_hash").notNull(),
   createdAt: createdAt(),
 });

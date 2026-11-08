@@ -2,35 +2,60 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
-import { IMPORT_MAX_BYTES } from "@/lib/constants";
-import { previewImport, runImport, type ImportPreview, type ImportResult } from "@/server/import";
+import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES } from "@/lib/constants";
+import {
+  previewImport,
+  runImport,
+  type ImportFileInput,
+  type ImportOptions,
+  type ImportPreview,
+  type ImportResult,
+} from "@/server/import";
 
 /**
- * What the /data import panel shows. `error` is a request-level failure (no file, too large); problems inside
- * the file are in `preview.problems`.
+ * What the /data import panel shows. `error` is a request-level failure (no file, too large, too many); problems
+ * inside the files are in `preview.problems`.
  */
 export type ImportActionState = {
   error?: string;
-  fileName?: string;
+  fileNames?: string[];
   preview?: ImportPreview;
   result?: ImportResult;
 };
 
-const TOO_LARGE = `The file is larger than ${IMPORT_MAX_BYTES / 1024 / 1024} MB. Split it into smaller files and import them one by one.`;
+const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 
 async function readUpload(
   formData: FormData,
-): Promise<{ ok: true; text: string; fileName: string; skipDuplicates: boolean } | { ok: false; error: string }> {
-  const file = formData.get("file");
-  if (!(file instanceof File) || (file.name === "" && file.size === 0)) return { ok: false, error: "Choose a file to import." };
-  if (file.size === 0) return { ok: false, error: "The file is empty." };
-  if (file.size > IMPORT_MAX_BYTES) return { ok: false, error: TOO_LARGE };
+): Promise<{ ok: true; files: ImportFileInput[]; opts: ImportOptions } | { ok: false; error: string }> {
+  const uploads = formData.getAll("file").filter((f): f is File => f instanceof File && !(f.name === "" && f.size === 0));
+  if (uploads.length === 0) return { ok: false, error: "Choose a file to import." };
+  if (uploads.length > IMPORT_MAX_FILES) {
+    return { ok: false, error: `${uploads.length} files were selected; the limit is ${IMPORT_MAX_FILES} per import.` };
+  }
+  const total = uploads.reduce((n, f) => n + f.size, 0);
+  if (total > IMPORT_MAX_BYTES) {
+    return {
+      ok: false,
+      error:
+        uploads.length === 1
+          ? `The file is larger than ${MB} MB. Split it into smaller files and import them one by one.`
+          : `The selected files are larger than ${MB} MB in total. Import them in smaller groups.`,
+    };
+  }
+  if (uploads.length === 1 && uploads[0].size === 0) return { ok: false, error: "The file is empty." };
+  const timeZone = formData.get("timeZone");
   return {
     ok: true,
-    text: await file.text(),
-    fileName: file.name,
-    // Checkbox semantics: on unless explicitly turned off.
-    skipDuplicates: formData.get("skipDuplicates") !== "off",
+    files: await Promise.all(uploads.map(async (f) => ({ name: f.name, text: await f.text() }))),
+    opts: {
+      // Checkbox semantics: on unless explicitly turned off.
+      skipDuplicates: formData.get("skipDuplicates") !== "off",
+      // Validated (and replaced by UTC when invalid) in the service.
+      timeZone: typeof timeZone === "string" ? timeZone : undefined,
+      // Off unless explicitly turned on.
+      unpairedTransfersAsEntries: formData.get("unpairedTransfers") === "on",
+    },
   };
 }
 
@@ -40,8 +65,8 @@ export async function previewImportAction(formData: FormData): Promise<ImportAct
   const upload = await readUpload(formData);
   if (!upload.ok) return { error: upload.error };
   return {
-    fileName: upload.fileName,
-    preview: previewImport(user.id, upload.text, { skipDuplicates: upload.skipDuplicates }),
+    fileNames: upload.files.map((f) => f.name),
+    preview: previewImport(user.id, upload.files, upload.opts),
   };
 }
 
@@ -50,14 +75,15 @@ export async function runImportAction(formData: FormData): Promise<ImportActionS
   const user = await requireUser();
   const upload = await readUpload(formData);
   if (!upload.ok) return { error: upload.error };
+  const fileNames = upload.files.map((f) => f.name);
   let result: ImportResult;
   try {
-    result = runImport(user.id, upload.text, { skipDuplicates: upload.skipDuplicates });
+    result = runImport(user.id, upload.files, upload.opts);
   } catch (err) {
     // Validation should make this unreachable; the DB transaction has rolled back either way.
     console.error("[import] unexpected failure", err);
-    return { fileName: upload.fileName, error: "The import failed unexpectedly and nothing was saved. Please try again." };
+    return { fileNames, error: "The import failed unexpectedly and nothing was saved. Please try again." };
   }
   if (result.imported) revalidatePath("/", "layout");
-  return { fileName: upload.fileName, result };
+  return { fileNames, result };
 }

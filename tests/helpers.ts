@@ -9,11 +9,15 @@ export function useFreshDb(): DB {
   return db;
 }
 
-/** Insert a user directly (skips scrypt for speed) and seed default categories. */
+/**
+ * Insert a user directly (skips scrypt for speed) and seed default categories. The user ID is the email with
+ * `@` (and anything else not allowed) turned into `-`, so distinct emails give distinct user IDs.
+ */
 export function makeUser(db: DB, email: string) {
+  const username = email.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
   const user = db
     .insert(users)
-    .values({ email, name: email.split("@")[0], passwordHash: "x" })
+    .values({ username, email, firstName: email.split("@")[0], passwordHash: "x" })
     .returning()
     .get();
   seedDefaultCategories(user.id);

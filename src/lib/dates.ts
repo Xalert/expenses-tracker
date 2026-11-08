@@ -81,3 +81,31 @@ export function formatMonth(month: string): string {
     new Date(Date.UTC(y, m - 1, 1)),
   );
 }
+
+/**
+ * A browser-supplied IANA time zone, checked with `Intl` (canonical spelling, e.g. "Europe/Brussels"). Missing or
+ * invalid → "UTC", with `fallback` true when something was supplied but not recognised.
+ */
+export function resolveTimeZone(value: unknown): { timeZone: string; fallback: boolean } {
+  if (typeof value !== "string" || value.trim() === "") return { timeZone: "UTC", fallback: false };
+  const v = value.trim();
+  if (v.length > 100) return { timeZone: "UTC", fallback: true };
+  try {
+    return { timeZone: new Intl.DateTimeFormat("en-US", { timeZone: v }).resolvedOptions().timeZone, fallback: false };
+  } catch {
+    return { timeZone: "UTC", fallback: true };
+  }
+}
+
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** The calendar date (`YYYY-MM-DD`) of an instant (ms since the epoch) in a valid IANA time zone. */
+export function dateInTimeZone(instant: number, timeZone: string): string {
+  let fmt = zoneFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", calendar: "gregory", numberingSystem: "latn" });
+    zoneFormatters.set(timeZone, fmt);
+  }
+  const parts = Object.fromEntries(fmt.formatToParts(new Date(instant)).map((p) => [p.type, p.value]));
+  return `${String(parts.year).padStart(4, "0")}-${parts.month}-${parts.day}`;
+}

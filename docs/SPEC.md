@@ -62,7 +62,7 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
 
 | table | columns |
 |---|---|
-| `users` | `id`, `email` (unique, stored lowercased), `name`, `passwordHash`, `createdAt` |
+| `users` | `id`, `username` (the "user ID": unique, stored lowercased, required), `email` (nullable; unique when present, stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt` |
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
 | `wallets` | `id`, `userId` → users (cascade), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt` |
 | `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `createdAt`; unique (`userId`, `kind`, `name`) |
@@ -71,7 +71,64 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
 
 ## Auth
 
-- Email + password. Open registration at `/register`, sign-in at `/login`, sign-out action in the app shell.
+- **User ID + password.** Every account has a user ID (`username`) that the user chooses at registration and signs
+  in with. Email, first name and surname are all **optional**. Open registration at `/register`, sign-in at
+  `/login`, sign-out action in the app shell.
+  - User ID rules: 3–32 characters from `a–z`, `0–9`, `.`, `_`, `-`; must start with a letter or digit; compared
+    and stored lowercased (so `Alex` and `alex` are the same account); never contains `@`, which is what keeps it
+    distinguishable from an email. Unique.
+  - Email, when given: valid, stored lowercased, unique among accounts that have one. An empty field means "no
+    email" (stored as NULL, never as an empty string).
+  - First name / surname, when given: trimmed, at most 80 characters each; empty → NULL.
+  - **Sign-in takes one identifier field, "User ID or email"**: a value containing `@` is looked up as an email,
+    anything else as a user ID. Both are case-insensitive. Accounts created before user IDs existed keep signing in
+    with their email, and also get a user ID (below).
+  - Display name everywhere (shell, greeting): first name + surname when either is set, otherwise the user ID. The
+    shell's secondary line shows the user ID (and the email when there is one).
+  - As built: the rules live in `src/lib/user-id.ts` (client-safe: `USER_ID_RE`, `USER_ID_HINT`, `NAME_MAX`,
+    `normalizeUserId`, `userIdProblem`, `displayName`). Lookups compare `lower(username)` / `lower(email)`, so an
+    email the migration carried over in mixed case is still found and still blocks a duplicate. A user ID problem
+    is reported in this order: empty, contains `@`, too short, too long, bad first character, other characters.
+    Desktop sidebar: display name, then the user ID (when it differs from the display name), then the email (when
+    there is one), one per line; mobile top bar: display name with the user ID under it when they differ (the
+    block's tooltip is `<user ID> · <email>`). Long values truncate with an ellipsis and a tooltip.
+  - There is no profile screen yet: the user ID, email and names cannot be changed after registration.
+- **Migration of existing accounts** (`drizzle/0001_*`): `email` becomes nullable; `name` is split at the first
+  space into `first_name` / `last_name`; `username` is derived from the email's local part, lowercased, with any
+  character outside the allowed set replaced by `-`, falling back to `user<id>` when that leaves nothing valid,
+  and suffixed with `-<id>` when it collides with another account. No account, wallet, category, transaction,
+  transfer or session may be lost or altered by it.
+  - As built (hand-written SQL in `drizzle/0001_user_ids.sql`, a recursive CTE walks the local part character by
+    character): the local part is everything before the first `@`; after replacing, leading `.`/`_`/`-` are
+    dropped and the result is cut to 32 characters; fewer than 3 characters left → `user<id>`. "Collides" means an
+    account with a lower id has the same value; the suffixed form shortens the base so it stays ≤ 32. A suffixed
+    value that equals another account's plain one (`bob-5`) makes the higher id fall back to `user<id>`; anything
+    still colliding fails the unique index, which rolls the whole migration back (startup then fails with the
+    backup's location). The name is trimmed first, split at the first space; the surname is trimmed, empty → NULL;
+    a blank name → both NULL. Email, password hash, `created_at` and `id` are copied unchanged (emails keep their
+    case). The `PRAGMA foreign_keys` lines drizzle-kit writes into the file were removed (no-ops in a transaction).
+- **Applying migrations safely (`src/db/index.ts`).** Changing a column's nullability in SQLite rebuilds the
+  table, and dropping the old `users` table while foreign keys are enforced would cascade-delete every row that
+  references a user. So: migrations run with `PRAGMA foreign_keys = OFF` set **before** the migrator starts (the
+  pragma is ignored inside a transaction, which is why a `PRAGMA` line inside the migration file is not enough),
+  then foreign keys are switched back on and `PRAGMA foreign_key_check` must come back empty, otherwise startup
+  fails loudly. Before applying pending migrations to an existing database file that already has data, a copy of
+  it is written next to it (`<file>.before-migration-<tag>.bak`), so a bad upgrade can be undone by hand.
+  - As built (`migrateDatabase(db, { file, migrationsFolder? })` in `src/db/index.ts`, called by `createDatabase`):
+    (1) `foreign_keys = OFF`; (2) pending = journal entries newer than the last row of `__drizzle_migrations`
+    (drizzle's own rule); (3) if any are pending, `file` is not `:memory:` and the database has at least one table,
+    `VACUUM INTO '<file>.before-migration-<first pending tag>.bak'` (a self-contained, non-WAL file; if that name
+    exists, `.<ISO timestamp>` is added before `.bak` — a copy is never overwritten) and a `[db] …` line is
+    logged; (4) drizzle's `migrate` (all pending migrations in one transaction); (5) `foreign_keys = ON` (in a
+    `finally`); (6) `PRAGMA foreign_key_check` — **on every start, not only after migrating** — must be empty,
+    else it throws "Database integrity check failed: N row(s) … Refusing to start." naming up to five rows and
+    the copy. A failed migration is rethrown as "Database migration failed: … Nothing was changed (the migration
+    was rolled back); a copy is at …". On any error the connection is closed.
+  - Why (measured, `tests/migrations.test.ts`): with foreign keys ON, `DROP TABLE users` in the rebuild is an
+    implicit `DELETE FROM users`. In a database with no transactions the migration "succeeds" and every wallet,
+    category and session is cascade-deleted. With at least one transaction the cascade reaches `wallets` before
+    `transactions`, `transactions.wallet_id` is `ON DELETE RESTRICT`, the statement fails with "FOREIGN KEY
+    constraint failed" and the migration is rolled back — no loss, but the app could never start.
 - Passwords hashed with `node:crypto` scrypt (random salt, timing-safe compare). Min length 8.
 - DB-backed sessions: random 32-byte token in an `httpOnly`, `sameSite=lax` cookie (30-day expiry) whose `secure`
   flag follows `COOKIE_SECURE` (see Deployment; logic in `src/lib/config.ts`); only its sha256 is stored. Logout
@@ -80,14 +137,21 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
   is disabled" card, `registerAction` returns an error without creating anything, `/login` hides the sign-up link.
 - `src/lib/auth.ts` exposes `getCurrentUser(): Promise<CurrentUser | null>` (React `cache`, per request),
   `requireUser(): Promise<CurrentUser>` (redirects to `/login`), `createSession(userId)`, `destroySession()`,
-  `redirectIfSignedIn()`; `CurrentUser = { id: number; name: string; email: string }`. Cookie name `et_session`.
+  `redirectIfSignedIn()`; `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string }`. Cookie name `et_session`.
   The `(app)` layout calls `requireUser()`; every Server Action calls it too (layouts don't protect actions).
   Signed-in users visiting `/login` or `/register` are redirected to `/`.
 - Password hashing lives in `src/lib/password.ts` (`hashPassword`, `verifyPassword`); user creation/login in
-  `src/server/users.ts`: `registerUser({ name, email, password }): Promise<UserView>` (user + default categories in
-  one DB transaction; CONFLICT on `email` if taken) and `authenticateUser(email, password): Promise<UserView | null>`.
+  `src/server/users.ts`: `registerUser({ username, password, email?, firstName?, lastName? }): Promise<UserView>`
+  (user + default categories in one DB transaction; CONFLICT on `username` or `email` if taken) and
+  `authenticateUser(identifier, password): Promise<UserView | null>` (identifier = user ID or email).
+  `UserView` has the same shape as `CurrentUser`; `toUserView(row)` builds it. Uniqueness is checked before
+  hashing and again inside the insert's transaction; a unique-index error from a lost race is mapped to the right
+  field. Inputs are named `username`, `password`, `email`, `firstName`, `lastName`; the action passes empty optional
+  fields through and the service turns them into NULL.
   Sign-out is `signOutAction` in `src/app/(app)/actions.ts`.
-- Login failures return one generic message ("Invalid email or password").
+- Login failures return one generic message ("Invalid user ID, email or password"), taking similar time whether
+  or not the account exists. The login form field is named `identifier`; an empty or blank identifier never
+  matches an account (also not one without email).
 
 ## Layout
 
@@ -106,10 +170,12 @@ src/
   db/schema.ts  db/index.ts                         # schema, connection, auto-migrate
   lib/auth.ts  lib/money.ts  lib/currencies.ts  lib/dates.ts  lib/errors.ts
   lib/form.ts  lib/password.ts  lib/constants.ts  lib/cn.ts  lib/config.ts (env: ALLOW_REGISTRATION, COOKIE_SECURE)
-  lib/csv.ts  lib/backup-format.ts                  # pure import/export formats
+  lib/user-id.ts                                    # user ID rules + displayName (client-safe)
+  lib/csv.ts  lib/backup-format.ts  lib/context-format.ts  # pure import/export formats
   app/api/health/route.ts                           # GET /api/health
-  app/api/export/{backup,transactions}/route.ts     # downloads (session required)
+  app/api/export/{backup,transactions,context}/route.ts  # downloads (session required)
   components/data/import-panel.tsx                  # client: two-step import UI
+  components/data/copy-context-button.tsx           # client: "Copy" for the wallets & categories export
   server/wallets.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
   server/users.ts  server/_validate.ts (internal helpers)
@@ -117,7 +183,9 @@ scripts/seed.ts  tests/  drizzle/
 ```
 
 `src/db/index.ts`: `getDb()` (process-wide connection, created + migrated on first access, survives HMR),
-`createDatabase(url?)`, `setDb(db)` (tests), `type DB`, `type DBOrTx`. `DATABASE_URL` accepts a path,
+`createDatabase(url?)`, `migrateDatabase(db, { file, migrationsFolder? })` and `pendingMigrations(db, folder?)` (see
+"Applying migrations safely"), `setDb(db)` (tests), `type DB` (includes `$client`, the better-sqlite3 handle),
+`type DBOrTx`. `DATABASE_URL` accepts a path,
 `file:./x.db` or `:memory:` (parent dir created if missing). Migrations folder: `MIGRATIONS_DIR` or
 `<cwd>/drizzle`; `next.config.ts` traces `drizzle/**` into `.next/standalone`, so `node server.js` run from
 `.next/standalone` auto-migrates without extra copying.
@@ -134,8 +202,8 @@ Only `registerUser`/`authenticateUser` are async (scrypt). Ids are `number`. Acc
 behaves exactly like a missing row: getters return `null`, mutations throw `NOT_FOUND`.
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `kind`, `categoryId`, `amount`,
-`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `email`, `password`,
-`moveToCategoryId`.
+`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
+`firstName`, `lastName`, `password`, `moveToCategoryId`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -290,12 +358,17 @@ colours: `bg-background`, `bg-surface`, `bg-surface-muted`, `border-border`, `bo
 
 ## Screens
 
-- **/login, /register** — centered card, inline field errors, link between the two.
+- **/login, /register** — centered card, inline field errors, link between the two. Login: "User ID or email" +
+  password. Register: user ID and password (required), then email, first name and surname, each visibly marked
+  optional, with a hint under the user ID stating the allowed characters. As built: first name and surname share a
+  row from `sm` up; values are echoed back after an error (never the password); `autocomplete` is `username` /
+  `current-password` on login and `username` / `new-password` / `email` / `given-name` / `family-name` on
+  register; the user ID and identifier inputs turn off autocapitalise / autocorrect / spellcheck.
 - **App shell** — sidebar on desktop, bottom tab bar on mobile: Dashboard, Transactions, Wallets, Categories (plus
-  "Add" in the tab bar); user name +
+  "Add" in the tab bar); display name (with the user ID / email line, see Auth) +
   sign out. "Import & export" (`/data`) is a secondary sidebar entry below a divider and, on mobile, an icon link
   in the top bar next to sign out (the bottom bar stays at five items). A prominent "Add transaction" entry point is reachable from every page.
-- **/** Dashboard — wallet cards with balances; per-currency totals with this month's income / expenses
+- **/** Dashboard — greeting with the display name ("Hello, …" / "Welcome, …"); wallet cards with balances; per-currency totals with this month's income / expenses
   (month switcher); spending by category for the month (simple horizontal bars, per currency); recent
   transactions. Friendly empty state that sends a new user to create their first wallet.
 - **/wallets** — list (active, then archived) with balance; create wallet (name, currency picker, initial
@@ -332,7 +405,8 @@ colours: `bg-background`, `bg-surface`, `bg-surface-muted`, `border-border`, `bo
 
 Purpose: data portability for a self-hosted app — back up an account, move it to another instance, and get
 transactions in and out of a spreadsheet. Importing bank statements in arbitrary formats (column mapping,
-per-bank presets) is **out of scope**.
+per-bank presets) is **out of scope** for the app; the separate Statement Importer artifact
+(`docs/STATEMENT-IMPORTER.md`) turns statements into this CSV.
 
 ### Formats
 
@@ -358,11 +432,22 @@ per-bank presets) is **out of scope**.
 - The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category, from, to,
   q) and exports **all** matching rows (no pagination). `/transactions` gets an "Export CSV" action that carries
   its current filters.
+- `GET /api/export/context` → `expenses-tracker-context-YYYY-MM-DD.json`: the account's **wallets and
+  categories only** — `{ app: "expenses-tracker", kind: "context", version: 1, exportedAt, wallets: [{ name,
+  currency, archived }], categories: [{ name, kind }] }` — small and free of transactions, so it can be handed
+  to companion tools (the Statement Importer artifact) that need to know the user's wallets and categories
+  without receiving their history. Same auth and headers as the other exports. The `/data` page offers it as a
+  third download, "Wallets & categories (JSON)", with one sentence saying what it is for, next to a "Copy"
+  button that puts the same JSON on the clipboard for pasting into the artifact (with a selectable fallback
+  when the clipboard is refused). As built: wallets and categories are listed in creation order (as in the backup);
+  Copy starts the clipboard write inside the click (a `ClipboardItem` whose text is the pending fetch, which Safari
+  needs) and falls back to `writeText`; when the browser refuses, the JSON appears selected in a read-only text box
+  under the buttons. A successful copy shows "Copied" for 2.5 s.
 
 ### Import
 
-- Accepts a backup JSON or a transactions CSV (detected from content, not the file name). Limits: 5 MB and
-  50 000 rows; raise the Server Action / request body limit accordingly and reject anything larger with a clear
+- Accepts a backup JSON or a transactions CSV (detected from content, not the file name), or several files at once
+  (see "Importing several files at once"). Limits: 5 MB and 50 000 rows (for the whole selection); raise the Server Action / request body limit accordingly and reject anything larger with a clear
   message.
 - CSV reading is tolerant of what spreadsheets do to files: optional BOM, `,` / `;` / tab delimiter (auto-detected
   from the header line), CRLF or LF, quoted cells with embedded newlines, header names case-insensitive and in
@@ -434,15 +519,105 @@ There is no export in provider formats.
   - Text cells are taken literally (no `'` formula-prefix removal: Spendee doesn't write one). Problem messages are
     prefixed with Spendee's column names (`Amount: …`).
 
+**Spendee — per-wallet export with transfers (the current Spendee export)**
+
+Spendee now exports **one file per wallet**, with a different dialect from the older single-file export. Both
+dialects are the same provider format ("Spendee export") and are detected the same way.
+
+```
+Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
+2026-08-08T11:06:15+00:00,Joint,Expense,Groceries,-83.93000000,EUR,,,"Jane Doe"
+2026-08-17T08:41:32+00:00,Savings,Outgoing Transfer,,-300.00000000,EUR,rent share,,"Jane Doe"     ← in the Savings file
+2026-08-17T08:41:34+00:00,Joint,Incoming Transfer,,300.00000000,EUR,rent share,,"Jane Doe"        ← in the Joint file
+```
+
+- `,`-separated, LF, cells quoted only when needed, UTF-8. The note column is `Note` (older dialect: `Notes`);
+  accept either. `Labels` and `Author` are new; `Author` is ignored.
+- `Type` is `Expense`, `Income`, `Outgoing Transfer` or `Incoming Transfer` (compare case-insensitively).
+- `Date` is an ISO timestamp **with a UTC offset**. A timestamp with an offset is converted to the importing
+  user's time zone and that local calendar date is used (an entry made at 00:30 local time must not land on the
+  previous day, or the previous month). The browser sends its IANA time zone with the upload; if it is missing or
+  invalid, UTC is used. A timestamp without an offset (the older dialect) is still taken as written. The preview
+  carries a notice naming the time zone used.
+- `Amount` has 8 decimals; trailing zeros are not "rounding". Genuinely over-precise amounts (currency
+  conversions) are rounded as before, with the notice.
+- `Labels`: this app has no labels. They are kept by appending them to the note (`note · labels`, or just the
+  labels when there is no note), with a notice counting the affected entries.
+- **Transfers** are written as two rows in two different wallets' files: an `Outgoing Transfer` (negative) in the
+  source wallet and an `Incoming Transfer` (positive) in the destination, with an empty category, the same note,
+  and timestamps at most a couple of seconds apart. The importer pairs them into one transfer:
+  - candidates for an outgoing row are incoming rows in a **different wallet**, with the **same note**, within
+    **10 seconds**, and — when both wallets have the same currency — the **same amount**; different currencies may
+    have different amounts (sent vs. received);
+  - pairs are assigned closest-in-time first, each row used once; a tie that cannot be resolved by time is a
+    problem naming both lines, never a guess;
+  - the transfer takes the outgoing row's date and note; the two rows count as **one** transfer in the preview and
+    for duplicate skipping;
+  - a transfer row left **without a partner** is a blocking problem that says which file and line, and that the
+    other wallet's export must be included in the same import. Because that would be a dead end when the other
+    wallet no longer exists, the import has an option — off by default, offered where that problem is shown — to
+    import unpaired transfer rows as plain income / expense entries in a category named `Transfer` instead.
+  - a category on a transfer row is ignored.
+
+### Importing several files at once
+
+- The file picker accepts multiple files, and the whole selection is **one import**: one preview, one
+  confirmation, one all-or-nothing DB transaction. This is what makes Spendee's per-wallet files usable, since a
+  transfer's two rows live in different files.
+- A selection may mix native CSVs and provider CSVs. A **backup must be imported on its own** (its wallets are
+  identified by position, which cannot be merged with other files); combining it with other files is a problem.
+- Limits apply to the selection as a whole: 5 MB in total, 50 000 rows in total, at most 50 files.
+- Problems and notices name the file they came from (file name + line) whenever more than one file is selected.
+- The same file selected twice (identical content) is used once, with a notice — otherwise its entries would
+  count double inside the multiset duplicate rule.
+- Duplicate skipping, wallet/category matching and creation work across the whole selection exactly as for one
+  file. The preview lists the files with the format detected for each.
+- Rules settled while building (Spendee per-wallet dialect and multi-file):
+  - Both Spendee dialects accept all four types; `Note` is used when present, else `Notes`; problem messages use the
+    column name as written (`Note: …`). A note that exceeds 500 characters only once the labels are added is a
+    problem ("… (with the labels added)"). Labels are trimmed with inner whitespace collapsed and kept as written.
+  - Timestamps: `YYYY-MM-DD`, then optionally `[ T]HH:MM[:SS[.fraction]]`, then optionally `Z` or `±HH[:]MM`. The
+    offset is applied and the date read in the zone with `Intl.DateTimeFormat` (`dateInTimeZone`). The zone is
+    validated with `Intl` (`resolveTimeZone`: canonical name, ≤ 100 chars; missing → UTC; invalid → UTC and the
+    notice says the browser's zone was not recognised). Offset-less values keep the written date.
+  - Pairing: the "same note" is the `Note` cell (trimmed) **without labels**; the transfer's note is the outgoing
+    row's note + its labels, or + the incoming row's labels when the outgoing row has none. Offset-less times are
+    read as written for pairing; a bare date counts as 00:00. The window is inclusive (10 s pairs, 11 s does not).
+    Candidates are processed by distance; at one distance, rows competing for each other form a group: a group of
+    one outgoing and one incoming row pairs; a group whose outgoing rows are all identical and whose incoming rows
+    are all identical (wallet, amount, instant, date, note) pairs them one-to-one in file order; any other group is
+    **one** blocking problem listing every row (file, line, amount, wallet) and those rows are not reported again as
+    unpaired (the unpaired option does not apply to them).
+  - Unpaired rows (option off): one problem per row, at its file + line, e.g. "Outgoing transfer of 40.00 EUR from
+    “Savings” on 2026-08-01 has no matching Incoming Transfer row in another wallet (same note, at most 10 seconds
+    apart). Select the other wallet's Spendee export too … or … turn on “Import unpaired transfers as income /
+    expense”." Option on: outgoing → expense, incoming → income, category `Transfer` of that kind (matched / created
+    like any category), the row's note; notice `unpaired-transfers`. `ImportPreview.unpairedTransfers` counts such
+    rows either way, so the UI can offer the option.
+  - Spendee notices are selection-wide (no `file`), in this order: `time-zone` (count = rows with an offset;
+    "Spendee records the time of each entry; dates are taken in your time zone, Europe/Brussels. 5 entries fall on
+    a different day than the UTC date in the file."), `labels` (rows with labels), `amounts-rounded` (per currency,
+    as before), `unpaired-transfers`. A file selected twice adds `duplicate-file` first, with `file` set.
+  - Selection checks, in order: no files → "No file was received."; more than 50 files; total UTF-8 size over 5 MB
+    ("The selected files are larger than 5 MB in total."; one file keeps the old message); identical texts are
+    used once; a backup with any other (distinct) file → one problem naming the backup(s), nothing parsed; each
+    file is parsed by its own detected format (an empty file is a problem for that file); total rows over 50 000;
+    then each format's `finalize`. Problems are ordered by file, then line; whole-file problems first.
+  - One file (string or one-element list) behaves exactly as before: no `file` on problems or notices. With
+    several files, wallets are merged by name + currency and categories by kind + name (first spelling wins),
+    `walletMatching` is `merge`, and `format` is the common format or `null` when they differ (`formatLabel` then
+    joins the distinct labels with " + ").
+
 ### Screen
 
-- **/data** ("Import & export") — an Export card (backup JSON, transactions CSV, one sentence each on what it is
-  for) and an Import card (file picker, the duplicate checkbox, preview summary, confirm). After a successful
+- **/data** ("Import & export") — an Export card (backup JSON, transactions CSV, wallets & categories JSON with a
+  Copy button, one sentence each on what it is for) and an Import card (file picker, the duplicate checkbox, preview summary, confirm). After a successful
   import: a summary of what was added and links to the dashboard and transactions. Reachable from the desktop
   sidebar and on mobile without adding a sixth bottom tab (the bar is full at 375px) — e.g. from the top bar.
 - Module layout: pure, dependency-free code for the formats in `src/lib/csv.ts` (parse / serialise) and
-  `src/lib/backup-format.ts` (schema + types); `src/server/export.ts` and `src/server/import.ts` for the
-  services (`buildBackup`, `buildTransactionsCsv`, `previewImport`, `runImport`). Each importable format is one
+  `src/lib/backup-format.ts` / `src/lib/context-format.ts` (schema + types); `src/server/export.ts` and
+  `src/server/import.ts` for the services (`buildBackup`, `buildContext`, `buildTransactionsCsv`, `previewImport`,
+  `runImport`). Each importable format is one
   module in `src/server/import-formats/` (`backup.ts`, `transactions-csv.ts`, `spendee.ts`; the parsed form and
   shared helpers in `shared.ts`), registered in the `FORMATS` list in `src/server/import.ts`.
 
@@ -455,27 +630,50 @@ detectDelimiter(text) / stripBom(text) / toCsv(rows, opts?: { delimiter?; bom? =
 escapeFormula(v) / unescapeFormula(v)
 // src/lib/backup-format.ts (pure): BACKUP_APP, BACKUP_VERSION = 1, BACKUP_LIMITS, backupSchema (zod), types Backup…,
 //   formatIssuePath(path) → "transactions[3].amountMinor"
-// src/lib/constants.ts: IMPORT_MAX_BYTES = 5 MiB, IMPORT_MAX_ROWS = 50 000 (shared by the browser check and the server)
+// src/lib/context-format.ts (pure): CONTEXT_KIND = "context", CONTEXT_VERSION = 1, contextSchema (zod; strips unknown
+//   fields), types ContextExport, ContextWallet, ContextCategory. Nothing in the app imports a context file yet; the
+//   schema is there so it can be validated the same way when something does.
+// src/lib/constants.ts: IMPORT_MAX_BYTES = 5 MiB, IMPORT_MAX_ROWS = 50 000, IMPORT_MAX_FILES = 50 — all for the whole
+//   selection (shared by the browser check and the server)
+// src/lib/dates.ts: resolveTimeZone(value) → { timeZone /* canonical IANA or "UTC" */; fallback }, dateInTimeZone(instantMs, zone)
 
 // src/server/export.ts
 buildBackup(userId, now?): Backup
+buildContext(userId, now?): ContextExport   // every wallet (incl. archived, flagged) + category, creation order; no ids
 buildTransactionsCsv(userId, filters?: Omit<TransactionFilters, 'limit' | 'offset'>): string   // uses filterConditions
 // src/server/import.ts
-type ImportOptions = { skipDuplicates?: boolean /* default true */ }
-type ImportProblem = { line?: number; path?: string; message: string }
-type ImportNotice = { code: string; message: string; count?: number }   // non-blocking, e.g. "amounts-rounded"
-type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null; formatLabel: string | null /* "Spendee export" */;
+type ImportOptions = { skipDuplicates?: boolean /* default true */; timeZone?: string /* IANA, from the browser */;
+  unpairedTransfersAsEntries?: boolean /* default false */ }
+type ImportFileInput = { name: string; text: string }
+type ImportInput = string /* one unnamed file, as before */ | ImportFileInput[]
+type ImportProblem = { file?: string /* only with several files */; line?: number; path?: string; message: string }
+type ImportNotice = { code: string; message: string; count?: number; file?: string }   // non-blocking, e.g. "amounts-rounded"
+type ImportFileSummary = { name; format: ImportFormatId | null; formatLabel: string | null; rows: number | null /* null = not read */;
+  duplicateOf?: string /* name of the identical earlier file */ }
+type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also when files differ */;
+  formatLabel: string | null /* "Spendee export"; "Spendee export + Transactions (CSV)" */; files: ImportFileSummary[];
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
   walletsToCreate: { name; currency; archived }[]; categoriesToCreate: { name; kind }[];
-  problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */ }
-previewImport(userId, fileText, opts?): ImportPreview
-runImport(userId, fileText, opts?): ImportPreview & { imported: boolean }   // never throws for bad files
+  problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
+  unpairedTransfers: number /* Spendee transfer rows without a partner */ }
+previewImport(userId, input: ImportInput, opts?): ImportPreview
+runImport(userId, input: ImportInput, opts?): ImportPreview & { imported: boolean }   // never throws for bad files
+parseImportFiles(input, opts?): { file: ParsedFile /* the merged selection */; files: ImportFileSummary[] }
 
 // src/server/import-formats/shared.ts — the seam between formats and the shared planner
-type ImportFormat = { id: ImportFormatId; label: string; detect(source: ImportSource): boolean; parse(source: ImportSource): ParsedFile }
+type ImportFormat = { id: ImportFormatId; label: string; detect(source: ImportSource): boolean;
+  parse(source: ImportSource, ctx: ImportContext): ParsedFile;
+  finalize?(combined: ParsedFile, ctx: ImportContext): void /* once per selection containing this format, after merging */ }
+type ImportContext = { timeZone /* validated */; timeZoneFallback: boolean; unpairedTransfersAsEntries: boolean }
 type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, non-empty */; csvHeader(): string[] /* lower-cased, lazy */ }
 type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[];
-  entries: EntrySpec[]; transfers: TransferSpec[]; problems: ImportProblem[]; notices: ImportNotice[] }
+  entries: EntrySpec[]; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
+  problems: ImportProblem[]; notices: ImportNotice[]; unpairedTransferRows: number; rowCount: number;
+  tallies: Map<string, number> /* per-format counters summed over the selection, e.g. "rounded:RON" */ }
+type Loc = { line?; path?; file?; fileIndex? /* internal ordering; stripped before reaching the UI */ }
+type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; date; instant /* ms */; matchKey; note; bareNote; labels; loc }
+// src/server/import-formats/spendee.ts: parseSpendeeTimestamp(value, zone) → { date; instant; converted; shifted } | null,
+//   TRANSFER_PAIR_WINDOW_MS = 10 000, UNPAIRED_TRANSFER_CATEGORY = "Transfer"
 // helpers: readCsvTable (quoting errors, header → column map, missing columns, row limit), cellReader, specBuilder
 //   (walletFor / categoryFor by key), currencyCell, check, normalizeWalletName / normalizeCategoryName
 // src/server/import.ts: FORMATS = [backupFormat, spendeeFormat, transactionsCsvFormat] — first `detect` wins; the
@@ -493,13 +691,18 @@ type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: Wa
   assigns them in VALUES order). Measured: 50 000 CSV rows (45 000 entries + 5 000 transfers, 2.5 MB) into a
   file-backed DB in ≈ 1 s; preview ≈ 0.1 s; re-import of the same file (all duplicates) ≈ 0.25 s.
 - Upload: two Server Actions in `src/app/(app)/data/actions.ts` (`previewImportAction(formData)`,
-  `runImportAction(formData)` → `ImportActionState = { error?; fileName?; preview?; result? }`). The panel shows
-  `formatLabel` and lists `notices` under "Good to know" in the preview (also next to problems) and after a
-  successful import. The client keeps the
-  chosen `File` in state and sends a fresh `FormData` for each step (a `<form action>` would reset the file input
-  after the preview). `experimental.serverActions.bodySizeLimit = "6mb"` (5 MB file + multipart overhead; this
-  limit applies to all actions). The 5 MB cap is checked in the browser, again in the action (`file.size`) and in
-  the service (UTF-8 byte length), each with the same message.
+  `runImportAction(formData)` → `ImportActionState = { error?; fileNames?; preview?; result? }`). The FormData has
+  one `file` entry per selected file, `skipDuplicates` (`off` turns it off), `unpairedTransfers` (`on` turns it on)
+  and `timeZone` (`Intl.DateTimeFormat().resolvedOptions().timeZone`); both steps send all of them and the service
+  re-validates everything. The panel (`<input type="file" multiple>`) keeps the chosen `File`s in state, lists them
+  with their sizes, and sends a fresh `FormData` for each step (a `<form action>` would reset the file input after
+  the preview). The preview lists the files with their detected format and row count (several files), shows
+  `notices` under "Good to know" (also next to problems) and after a successful import, prefixes problems with their
+  file, and shows the "Import unpaired transfers as income / expense" checkbox whenever `unpairedTransfers > 0` or
+  it is on; toggling it re-runs the preview, choosing other files turns it off.
+  `experimental.serverActions.bodySizeLimit = "6mb"` (5 MB of files + multipart overhead; this limit applies to all
+  actions). The 5 MB / 50-file caps are checked in the browser, again in the action (`file.size` sum, count) and
+  in the service (UTF-8 byte length), with the same messages.
 - Rules settled while building:
   - **Archived wallets**: an import never adds a *new* entry to a wallet that is archived in the account (backup or
     CSV, either side of a transfer) — that is a line-numbered problem ("unarchive it first"), mirroring the services.

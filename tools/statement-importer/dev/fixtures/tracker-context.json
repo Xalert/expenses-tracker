@@ -1,0 +1,93 @@
+{
+  "app": "expenses-tracker",
+  "kind": "context",
+  "version": 1,
+  "exportedAt": "2026-11-01T10:00:00.000Z",
+  "wallets": [
+    {
+      "name": "ING Current",
+      "currency": "RON",
+      "archived": false
+    },
+    {
+      "name": "Savings",
+      "currency": "RON",
+      "archived": false
+    },
+    {
+      "name": "Northbank",
+      "currency": "GBP",
+      "archived": false
+    },
+    {
+      "name": "Wise EUR",
+      "currency": "EUR",
+      "archived": false
+    },
+    {
+      "name": "Card EUR",
+      "currency": "EUR",
+      "archived": false
+    },
+    {
+      "name": "Cash",
+      "currency": "RON",
+      "archived": false
+    },
+    {
+      "name": "Old Visa",
+      "currency": "USD",
+      "archived": true
+    }
+  ],
+  "categories": [
+    {
+      "name": "Food",
+      "kind": "expense"
+    },
+    {
+      "name": "Groceries",
+      "kind": "expense"
+    },
+    {
+      "name": "Bills",
+      "kind": "expense"
+    },
+    {
+      "name": "Transport",
+      "kind": "expense"
+    },
+    {
+      "name": "Housing",
+      "kind": "expense"
+    },
+    {
+      "name": "Subscriptions",
+      "kind": "expense"
+    },
+    {
+      "name": "Fees",
+      "kind": "expense"
+    },
+    {
+      "name": "Shopping",
+      "kind": "expense"
+    },
+    {
+      "name": "Salary",
+      "kind": "income"
+    },
+    {
+      "name": "Refund",
+      "kind": "income"
+    },
+    {
+      "name": "Extra Income",
+      "kind": "income"
+    },
+    {
+      "name": "Interest",
+      "kind": "income"
+    }
+  ]
+}

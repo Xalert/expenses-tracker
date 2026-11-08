@@ -1,0 +1,14 @@
+BANCA EXEMPLU SA
+Cont de economii / Savings account
+Titular: Ion Popescu
+IBAN: RO09 BCYP 0000 0012 3456 7890      Moneda: RON
+Perioada: 01.10.2026 - 31.10.2026
+
+Data        Descriere                                          Suma          Sold
+-----------------------------------------------------------------------------------
+01.10.2026  Sold initial                                                12.400,00
+04.10.2026  Transfer intern de la RO49AAAA1B31007593840000   +1.000,00     13.400,00
+            Economii luna octombrie
+31.10.2026  Dobanda bonificata                                   +4,17     13.404,17
+31.10.2026  Impozit dobanda 10%                                  -0,42     13.403,75
+31.10.2026  Sold final                                                  13.403,75

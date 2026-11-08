@@ -11,18 +11,33 @@ import { normalizeName } from "../_validate";
 // The importer's format-agnostic parsed form, and the helpers the format parsers share. A format module turns a
 // file into a `ParsedFile`; planning, duplicate detection and writing (src/server/import.ts) only see this.
 
-/** One thing wrong with the file: a CSV line number or a JSON path, plus a readable message. Blocks the import. */
-export type ImportProblem = { line?: number; path?: string; message: string };
+/**
+ * One thing wrong with the file: a CSV line number or a JSON path, plus a readable message. Blocks the import.
+ * `file` names the file it came from when several files are imported together.
+ */
+export type ImportProblem = { file?: string; line?: number; path?: string; message: string };
 
 /**
  * Something the user should know about the file that does not block the import (e.g. amounts that were rounded).
- * `code` is stable for tests and the UI; `count` is how many rows it concerns.
+ * `code` is stable for tests and the UI; `count` is how many rows it concerns; `file` as for problems (absent for
+ * notices about the whole selection).
  */
-export type ImportNotice = { code: string; message: string; count?: number };
+export type ImportNotice = { code: string; message: string; count?: number; file?: string };
+
+/** What the importing request adds to the files: used by formats whose content depends on it (Spendee). */
+export type ImportContext = {
+  /** A valid IANA time zone (already checked; "UTC" when the browser sent none or an invalid one). */
+  timeZone: string;
+  /** True when a time zone was sent but was not a valid IANA zone, so UTC was used instead. */
+  timeZoneFallback: boolean;
+  /** Import transfer rows that have no partner as plain income / expense in a "Transfer" category. */
+  unpairedTransfersAsEntries: boolean;
+};
 
 export type ImportFormatId = "backup" | "csv" | "spendee";
 
-export type Loc = { line?: number; path?: string };
+/** Where something came from: a CSV line or JSON path, plus the file (set when several files are imported). */
+export type Loc = { line?: number; path?: string; file?: string; fileIndex?: number };
 
 export type WalletSpec = {
   name: string;
@@ -52,6 +67,28 @@ export type TransferSpec = {
   loc: Loc;
 };
 
+/**
+ * Half of a transfer that a format could not pair on its own because the other half may be in another file
+ * (Spendee writes each side in its own wallet's export). The format's `finalize` pairs them across the selection.
+ */
+export type TransferLeg = {
+  direction: "out" | "in";
+  wallet: number; // index into wallets
+  currency: string;
+  amountMinor: number;
+  date: string;
+  /** Milliseconds since the epoch (as written, when the source has no UTC offset), for pairing by time. */
+  instant: number;
+  /** What must be equal for two legs to pair (e.g. the note without labels). */
+  matchKey: string;
+  /** The note the resulting transfer or entry gets (the row's note with its labels). */
+  note: string | null;
+  /** The row's note without labels, and its labels ("" when none). */
+  bareNote: string | null;
+  labels: string;
+  loc: Loc;
+};
+
 export type ParsedFile = {
   format: ImportFormatId | null;
   /**
@@ -64,8 +101,16 @@ export type ParsedFile = {
   categories: CategorySpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];
+  /** Unpaired transfer halves; a format's `finalize` turns them into `transfers` (or entries / problems). */
+  transferLegs: TransferLeg[];
   problems: ImportProblem[];
   notices: ImportNotice[];
+  /** Transfer rows left without a partner (whether reported as problems or imported as entries). */
+  unpairedTransferRows: number;
+  /** Data rows read (CSV) or transactions + transfers (backup); limits apply to the selection's total. */
+  rowCount: number;
+  /** Per-format counters summed across the files of a selection (e.g. `rounded:RON`), read by `finalize`. */
+  tallies: Map<string, number>;
 };
 
 /** What a format module gets to look at when deciding whether a file is its own. */
@@ -84,7 +129,12 @@ export type ImportFormat = {
   /** Shown in the preview, e.g. "Spendee export". */
   label: string;
   detect(source: ImportSource): boolean;
-  parse(source: ImportSource): ParsedFile;
+  parse(source: ImportSource, ctx: ImportContext): ParsedFile;
+  /**
+   * Optional: runs once on the whole selection (all files merged, wallet indexes shared) when at least one file
+   * is in this format — e.g. to pair transfer legs that live in different files, and to add selection-wide notices.
+   */
+  finalize?(combined: ParsedFile, ctx: ImportContext): void;
 };
 
 export const walletKey = (name: string, currency: string) => `${name.toLowerCase()}\u0000${currency}`;
@@ -98,9 +148,17 @@ export function emptyParsed(format: ParsedFile["format"], problems: ImportProble
     categories: [],
     entries: [],
     transfers: [],
+    transferLegs: [],
     problems,
     notices: [],
+    unpairedTransferRows: 0,
+    rowCount: 0,
+    tallies: new Map(),
   };
+}
+
+export function addTally(out: ParsedFile, key: string, n = 1): void {
+  out.tallies.set(key, (out.tallies.get(key) ?? 0) + n);
 }
 
 /** Run a `_validate` helper and turn its ServiceError into a problem message. */
@@ -145,8 +203,9 @@ export function currencyCell(raw: string, column: string, problem: (c: string, m
  * wallet / category per key, created on first use.
  */
 export function specBuilder(out: ParsedFile) {
-  const walletByKey = new Map<string, number>();
-  const categoryByKey = new Map<string, number>();
+  // Seeded from what `out` already has, so it can also extend a merged selection.
+  const walletByKey = new Map(out.wallets.map((w, i) => [w.key, i] as const));
+  const categoryByKey = new Map(out.categories.map((c, i) => [c.key, i] as const));
   return {
     walletFor(name: string, currency: string): number {
       const key = walletKey(name, currency);
@@ -203,6 +262,7 @@ export function readCsvTable<C extends string>(
     return null;
   }
   const rows = rest.filter((r) => r.cells.some((c) => c.trim() !== ""));
+  out.rowCount = rows.length;
   if (rows.length > IMPORT_MAX_ROWS) {
     out.problems.push({
       message: `The file has ${fmtCount(rows.length)} rows; the limit is ${fmtCount(IMPORT_MAX_ROWS)} per import. Split it into smaller files.`,

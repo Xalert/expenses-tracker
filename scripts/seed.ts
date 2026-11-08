@@ -1,9 +1,10 @@
 /**
  * Demo data for local development: `npm run db:seed`.
- * Idempotent: if the demo user already exists nothing is written.
+ * Idempotent: if the demo user already exists nothing is written. A demo user seeded before user IDs existed
+ * (found by its email; the 0001 migration derived the user ID `demo` for it) counts as existing.
  * Uses the same DB as the app (data/app.db, or DATABASE_URL).
  */
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { getDb, resolveDatabasePath } from "@/db";
 import { users } from "@/db/schema";
 import { currentMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
@@ -13,19 +14,30 @@ import { createTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
 import { registerUser } from "@/server/users";
 
-const DEMO = { name: "Demo User", email: "demo@example.com", password: "demo-password" };
+const DEMO = {
+  username: "demo",
+  email: "demo@example.com",
+  firstName: "Demo",
+  lastName: "User",
+  password: "demo-password",
+};
 
-function printLogin() {
-  console.log(`\n  Demo login → email: ${DEMO.email}   password: ${DEMO.password}\n`);
+function printLogin(username: string = DEMO.username) {
+  console.log(`\n  Demo login → user ID: ${username} (or email: ${DEMO.email})   password: ${DEMO.password}\n`);
 }
 
 async function main() {
   const db = getDb();
   console.log(`Database: ${resolveDatabasePath()}`);
 
-  if (db.select({ id: users.id }).from(users).where(eq(users.email, DEMO.email)).get()) {
+  const existing = db
+    .select({ id: users.id, username: users.username })
+    .from(users)
+    .where(or(eq(users.username, DEMO.username), eq(users.email, DEMO.email)))
+    .get();
+  if (existing) {
     console.log("Demo user already exists — nothing to do.");
-    printLogin();
+    printLogin(existing.username); // a migrated demo user may have been given a suffixed user ID
     return;
   }
 

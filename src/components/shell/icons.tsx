@@ -48,6 +48,13 @@ export const DownloadIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
   </svg>
 );
+/** Two overlapping sheets. */
+export const CopyIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <rect x="9" y="9" width="12" height="12" rx="2" />
+    <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+  </svg>
+);
 /** Import & export: arrows in and out of a tray. */
 export const DataIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}>

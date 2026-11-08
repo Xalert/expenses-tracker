@@ -4,6 +4,7 @@ import { alias } from "drizzle-orm/sqlite-core";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, transfers, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
+import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
 import { minorToInputValue } from "@/lib/money";
 import { filterConditions, type TransactionFilters } from "./transactions";
@@ -113,6 +114,37 @@ export function buildBackup(userId: number, now: Date = new Date()): Backup {
         receivedAmountMinor: t.receivedAmountMinor,
         receivedAmount: minorToInputValue(t.receivedAmountMinor, currencyOf.get(t.toWalletId)!),
       })),
+    };
+  });
+}
+
+/**
+ * The "Wallets & categories" context file: every wallet (name, currency, archived) and category (name, kind) of the
+ * account, in creation order, and nothing else (no ids, balances or transactions). Made for companion tools such as
+ * the Statement Importer artifact.
+ */
+export function buildContext(userId: number, now: Date = new Date()): ContextExport {
+  const db = getDb();
+  return db.transaction((tx) => {
+    const walletRows = tx
+      .select({ name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
+      .from(wallets)
+      .where(eq(wallets.userId, userId))
+      .orderBy(asc(wallets.id))
+      .all();
+    const categoryRows = tx
+      .select({ name: categories.name, kind: categories.kind })
+      .from(categories)
+      .where(eq(categories.userId, userId))
+      .orderBy(asc(categories.id))
+      .all();
+    return {
+      app: BACKUP_APP,
+      kind: CONTEXT_KIND,
+      version: CONTEXT_VERSION,
+      exportedAt: now.toISOString(),
+      wallets: walletRows.map((w) => ({ name: w.name, currency: w.currency, archived: w.archivedAt !== null })),
+      categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind })),
     };
   });
 }

@@ -1,0 +1,54 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Length 938 >>
+stream
+BT /F1 10 Tf 13.50 TL 40 742 Td
+(EXAMPLE CARD SERVICES - MONTHLY STATEMENT) Tj T*
+(Card holder: Ion Popescu) Tj T*
+(Card: **** **** **** 4417        Currency: EUR) Tj T*
+(Period: 01/10/2026 - 31/10/2026) Tj T*
+() Tj T*
+(Date        Description                          Amount EUR) Tj T*
+(----------------------------------------------------------) Tj T*
+(06/10/2026  UBER *TRIP HELP.UBER.COM                 -14.20) Tj T*
+(07/10/2026  BOLT.EU/O/2610                            -8.90) Tj T*
+(12/10/2026  NETFLIX.COM AMSTERDAM                    -13.99) Tj T*
+(15/10/2026  AMAZON EU SARL REFUND                    +29.99) Tj T*
+(20/10/2026  UBER *TRIP HELP.UBER.COM                  -9.80) Tj T*
+(24/10/2026  LIDL DIENSTLEISTUNG                      -18.75) Tj T*
+(            Neckarsulm DE, card present) Tj T*
+(----------------------------------------------------------) Tj T*
+(Opening balance 450.00      Closing balance 414.35) Tj T*
+ET
+endstream
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+5 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+6 0 obj
+<< /Title (Synthetic statement fixture) /Producer (make-fixtures.py) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000110 00000 n 
+0000000167 00000 n 
+0000001156 00000 n 
+0000001282 00000 n 
+0000001331 00000 n 
+trailer
+<< /Size 7 /Root 5 0 R /Info 6 0 R >>
+startxref
+1418
+%%EOF

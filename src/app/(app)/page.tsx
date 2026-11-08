@@ -19,12 +19,12 @@ export default async function DashboardPage({ searchParams }: Props) {
   const requested = typeof raw === "string" && isValidMonth(raw) ? raw : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
   const data = getDashboard(user.id, { month });
-  const firstName = user.name.split(" ")[0];
+  const greetingName = user.displayName;
 
   if (data.wallets.length === 0) {
     return (
       <>
-        <PageHeader title={`Welcome, ${firstName}`} />
+        <PageHeader title={`Welcome, ${greetingName}`} />
         <Card>
           <EmptyState
             icon={<WalletIcon className="size-8" />}
@@ -54,7 +54,7 @@ export default async function DashboardPage({ searchParams }: Props) {
 
   return (
     <>
-      <PageHeader title="Dashboard" description={`Hello, ${firstName}.`} actions={<MonthSwitcher month={month} maxMonth={maxMonth} />} />
+      <PageHeader title="Dashboard" description={`Hello, ${greetingName}.`} actions={<MonthSwitcher month={month} maxMonth={maxMonth} />} />
 
       <div className="space-y-8">
         <section aria-labelledby="wallets-heading">

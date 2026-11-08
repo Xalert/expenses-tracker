@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Statement Importer harness</title>
+<style>
+  /* The publish skeleton's reset, so the page renders as it will on claude.ai. */
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+  /* Harness panel: not part of the page. */
+  #harness { position: fixed; left: 8px; bottom: 8px; z-index: 50; font: 12px system-ui, sans-serif; color: #111; background: #fffbe8; border: 1px solid #b59a3a; border-radius: 8px; max-width: min(380px, calc(100% - 16px)); box-shadow: 0 4px 18px rgba(0,0,0,.2); }
+  #harness summary { cursor: pointer; padding: 6px 10px; font-weight: 600; }
+  #harness .body { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow: auto; }
+  #harness .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #harness button, #harness select, #harness input { font: inherit; color: #111; background: #fff; border: 1px solid #aaa; border-radius: 4px; padding: 2px 6px; }
+  #harness pre { white-space: pre-wrap; margin: 0; max-height: 220px; overflow: auto; background: #fff; border: 1px solid #ddd; padding: 4px; }
+</style>
+</head>
+<body>
+<script src="mock-claude.js"></script>
+<details id="harness">
+  <summary>Harness (mock runtime)</summary>
+  <div class="body">
+    <div class="row">
+      <button type="button" id="h-add-all">Add all fixtures</button>
+      <select id="h-fixture" aria-label="Fixture"></select>
+      <button type="button" id="h-add-one">Add</button>
+    </div>
+    <div class="row">
+      <span>Wallets &amp; categories:</span>
+      <button type="button" id="h-ctx-pick">Context (picker)</button>
+      <button type="button" id="h-ctx-drop">Context (drop)</button>
+      <button type="button" id="h-ctx-paste">Context (paste)</button>
+      <button type="button" id="h-backup">Backup</button>
+    </div>
+    <div class="row">
+      <label for="h-fail">Fail</label>
+      <select id="h-fail">
+        <option>none</option><option>rate_limited</option><option>invalid_json</option><option>not_granted</option>
+        <option>sampling_disabled</option><option>prompt_too_large</option><option>image_rejected</option>
+        <option>refused</option><option>empty_completion</option><option>session_expired</option><option>upstream_error</option>
+      </select>
+      <select id="h-scope" aria-label="Which calls fail"><option value="extraction">extraction</option><option value="categorisation">categorisation</option><option value="any">any</option></select>
+      <label><input type="checkbox" id="h-once"> once</label>
+    </div>
+    <div class="row">
+      <label for="h-delay">Thinking delay ms</label><input id="h-delay" type="number" min="0" step="100" style="width: 80px">
+      <label><input type="checkbox" id="h-readonly"> db read-only</label>
+      <label><input type="checkbox" id="h-decline"> decline saves</label>
+    </div>
+    <div class="row">
+      <span>Reload as:</span>
+      <a href="?">full</a> · <a href="?no=sample">no sample</a> · <a href="?no=db">no db</a> · <a href="?no=downloads">no downloads</a> · <a href="?outside=1">outside claude.ai</a>
+    </div>
+    <div class="row">
+      <button type="button" id="h-reset-db">Reset mock memory</button>
+      <button type="button" id="h-dump-db">Show stored memory</button>
+      <button type="button" id="h-checks">Run self-checks</button>
+      <button type="button" id="h-calls">Show Claude calls</button>
+    </div>
+    <pre id="h-out" hidden></pre>
+  </div>
+</details>
+<script>
+(async function () {
+  "use strict";
+  var FIXTURES = ["ro-bank.csv", "savings.txt", "uk-bank.csv", "wise.csv", "card-statement.pdf", "scanned-statement.pdf", "credit-card-scan.png"];
+  var TYPES = { csv: "text/csv", txt: "text/plain", pdf: "application/pdf", png: "image/png" };
+
+  // 1. Inject the published page exactly as written: non-script nodes first, then its scripts in order.
+  var html = await (await fetch("../index.html", { cache: "no-store" })).text();
+  var tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  var scripts = [];
+  var panel = document.getElementById("harness");
+  Array.prototype.slice.call(tpl.content.childNodes).forEach(function (n) {
+    if (n.nodeName === "SCRIPT") { scripts.push(n); return; }
+    if (n.nodeName === "TITLE") { document.title = n.textContent + " (harness)"; return; }
+    document.body.insertBefore(n, panel);
+  });
+  for (var i = 0; i < scripts.length; i++) {
+    var old = scripts[i], s = document.createElement("script");
+    Array.prototype.slice.call(old.attributes).forEach(function (a) { s.setAttribute(a.name, a.value); });
+    if (old.src) {
+      await new Promise(function (res) { s.onload = res; s.onerror = function () { console.error("failed to load " + old.src); res(); }; document.body.appendChild(s); });
+    } else { s.textContent = old.textContent; document.body.appendChild(s); }
+  }
+
+  // 2. Panel.
+  function settings() { try { return JSON.parse(localStorage.getItem("mock-settings") || "{}"); } catch (e) { return {}; } }
+  function save(patch) { localStorage.setItem("mock-settings", JSON.stringify(Object.assign(settings(), patch))); }
+  var st = settings();
+  var $ = function (id) { return document.getElementById(id); };
+  $("h-fail").value = st.fail || "none";
+  $("h-scope").value = st.scope || "extraction";
+  $("h-once").checked = !!st.once;
+  $("h-delay").value = st.delay != null ? st.delay : 900;
+  $("h-readonly").checked = !!st.dbReadonly;
+  $("h-decline").checked = !!st.declineDownloads;
+  $("h-fail").onchange = function () { save({ fail: this.value }); };
+  $("h-scope").onchange = function () { save({ scope: this.value }); };
+  $("h-once").onchange = function () { save({ once: this.checked }); };
+  $("h-delay").onchange = function () { save({ delay: Number(this.value) || 0 }); };
+  $("h-readonly").onchange = function () { save({ dbReadonly: this.checked }); };
+  $("h-decline").onchange = function () { save({ declineDownloads: this.checked }); };
+  FIXTURES.forEach(function (f) { var o = document.createElement("option"); o.textContent = f; $("h-fixture").appendChild(o); });
+
+  async function fixtureFile(name) {
+    var buf = await (await fetch("fixtures/" + name, { cache: "no-store" })).arrayBuffer();
+    return new File([buf], name, { type: TYPES[name.split(".").pop()] || "", lastModified: 1767225600000 });
+  }
+  async function addFiles(names) {
+    var dt = new DataTransfer();
+    for (var i = 0; i < names.length; i++) dt.items.add(await fixtureFile(names[i]));
+    var input = document.getElementById("file-input");
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  $("h-add-all").onclick = function () { addFiles(FIXTURES); };
+  $("h-ctx-pick").onclick = function () { H.offerExport("picker"); };
+  $("h-ctx-drop").onclick = function () { H.offerExport("drop"); };
+  $("h-ctx-paste").onclick = function () { H.offerExport("paste"); };
+  $("h-backup").onclick = function () { H.offerExport("picker", "tracker-backup.json"); };
+  $("h-add-one").onclick = function () { addFiles([$("h-fixture").value]); };
+  function show(text) { $("h-out").hidden = false; $("h-out").textContent = text; }
+  $("h-reset-db").onclick = function () { window.__mockDb && window.__mockDb.reset(); show("Mock memory cleared. Reload the page."); };
+  $("h-dump-db").onclick = function () { show(window.__mockDb ? JSON.stringify(window.__mockDb.dump(), null, 1) : "no mock db"); };
+  $("h-calls").onclick = function () {
+    show((window.__mockCalls || []).map(function (c) {
+      return c.kind + " · " + (c.fixture || "") + " · " + c.bytes + " B · " + c.images + " img · " + c.model + "/" + c.modelTier + " · " + (c.result || "pending") +
+        (c.kind === "categorisation" ? "\n  " + c.prompt.split("\n").filter(function (l) { return /^\d+ \| /.test(l); }).join("\n  ") : "");
+    }).join("\n") || "no calls yet");
+  };
+
+  // Helpers for scripted runs from a browser console or automation (window.H).
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  window.H = {
+    sleep: sleep,
+    addFiles: addFiles,
+    /**
+     * Put a tracker export into the Wallets & categories panel and stop at its preview: `how` is "picker" (the file
+     * input), "drop" (a drop event on the panel) or "paste" (the paste box + Load); `fixture` defaults to the context file.
+     */
+    offerExport: async function (how, fixture) {
+      fixture = fixture || "tracker-context.json";
+      if (document.getElementById("setup").hidden) document.getElementById("open-setup").click();
+      var text = await (await fetch("fixtures/" + fixture, { cache: "no-store" })).text();
+      var dt = new DataTransfer();
+      if (how === "paste") {
+        document.getElementById("setup-paste").value = text;
+        document.getElementById("setup-paste-load").click();
+      } else {
+        dt.items.add(new File([text], fixture.replace("tracker-", "expenses-tracker-"), { type: "application/json" }));
+        if (how === "drop") document.getElementById("setup").dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+        else { var inp = document.getElementById("setup-file"); inp.files = dt.files; inp.dispatchEvent(new Event("change", { bubbles: true })); }
+      }
+      await sleep(300);
+      var p = document.getElementById("setup-preview");
+      return p.textContent || document.getElementById("setup-msg").textContent;
+    },
+    /** offerExport + "Use these" + close the panel. */
+    loadExport: async function (how, fixture) {
+      await H.offerExport(how, fixture);
+      document.getElementById("tracker-use").click(); document.getElementById("close-setup").click();
+    },
+    loadContext: function (how) { return H.loadExport(how || "picker", "tracker-context.json"); },
+    loadBackup: function () { return H.loadExport("picker", "tracker-backup.json"); },
+    /** Add fixtures and wait until no card is busy and no suggestion call runs. */
+    add: async function (names) {
+      await addFiles(names || FIXTURES);
+      for (var i = 0; i < 120; i++) {
+        await sleep(500);
+        var busy = Array.prototype.some.call(document.querySelectorAll(".card .chip"), function (c) { return /waiting|reading|extracting/.test(c.textContent); });
+        if (!busy && document.getElementById("suggest-stop").hidden) break;
+      }
+      await sleep(200);
+    },
+    card: function (name) { return Array.prototype.find.call(document.querySelectorAll(".card"), function (c) { return c.querySelector(".file-name").textContent === name; }); },
+    pick: function (name, val) { var s = H.card(name).querySelector("select[data-act=wallet]"); s.value = val; s.dispatchEvent(new Event("change", { bubbles: true })); },
+    row: function (m, d) { return Array.prototype.find.call(document.querySelectorAll("#review-body tr"), function (tr) { var x = tr.querySelector(".merchant"); return x && x.textContent === m && tr.querySelector(".c-date").textContent === d; }); },
+    set: function (m, d, act, v) { var s = H.row(m, d).querySelector("[data-act=" + act + "]"); s.value = v; s.dispatchEvent(new Event("change", { bubbles: true })); },
+    click: function (m, d, act) { H.row(m, d).querySelector("button[data-act=" + act + "]").click(); },
+    cards: function () {
+      return Array.prototype.map.call(document.querySelectorAll(".card"), function (c) {
+        var sel = c.querySelector(".wallet-q select");
+        return c.querySelector(".file-name").textContent + " | " + c.querySelector(".chip").textContent + " | " + c.querySelector(".card-progress").textContent +
+          (sel ? " | " + sel.selectedOptions[0].textContent : "") + " " + Array.prototype.map.call(c.querySelectorAll(".wallet-q .chip"), function (x) { return x.textContent; }).join(",") +
+          (c.querySelector(".card-error") ? " | ERROR " + c.querySelector(".card-error").textContent : "");
+      }).join("\n");
+    },
+    table: function () {
+      return Array.prototype.map.call(document.querySelectorAll("#review-body tbody tr:not(.group)"), function (tr) {
+        var c = tr.querySelectorAll("td"), cat = c[5].querySelector("select");
+        return [c[0].querySelector("input").checked ? "[x]" : "[ ]", c[1].textContent, c[2].querySelector(".merchant").textContent, c[3].textContent, c[4].querySelector("select").value,
+          cat ? cat.selectedOptions[0].textContent : c[5].textContent.slice(0, 40), c[7].querySelector(".chip").textContent].join(" | ");
+      }).join("\n");
+    },
+  };
+
+  // 3. Self-checks of the pure core (merchant keys and a few money / pairing / CSV rules).
+  $("h-checks").onclick = async function () {
+    var Core = window.ImporterCore, out = [], fails = 0;
+    function check(label, got, want) {
+      var ok = JSON.stringify(got) === JSON.stringify(want);
+      if (!ok) fails++;
+      out.push((ok ? "ok   " : "FAIL ") + label + (ok ? "" : "  got " + JSON.stringify(got) + " want " + JSON.stringify(want)));
+    }
+    var keys = await (await fetch("fixtures/merchant-keys.json", { cache: "no-store" })).json();
+    keys.forEach(function (k) { check("merchantKey(" + JSON.stringify(k[0]) + ")", Core.merchantKey(k[0]), k[1]); });
+    check("keyToDocId('łodz cafe')", Core.keyToDocId("łodz cafe"), "m-~142.odz-cafe");
+    check("decimalToMinor('1234.5','EUR')", Core.decimalToMinor("1234.5", "EUR"), 123450);
+    check("decimalToMinor('12.345','EUR')", Core.decimalToMinor("12.345", "EUR"), null);
+    check("decimalToMinor('1200','JPY')", Core.decimalToMinor("1200", "JPY"), 1200);
+    check("decimalToMinor('1.250','KWD')", Core.decimalToMinor("1.250", "KWD"), 1250);
+    check("readAmount('1,000.00')", Core.readAmount("1,000.00"), null);
+    check("escapeFormula('-Comision')", Core.escapeFormula("-Comision"), "'-Comision");
+    var c = function (id, dir, wallet, date) { return { id: id, order: id, wallet: wallet, currency: "RON", minor: 100000, direction: dir, date: date, forcedOther: null }; };
+    check("pair 1 day apart", Core.pairTransfers([c(1, "out", "a", "2026-10-03"), c(2, "in", "b", "2026-10-04")], new Set()), [{ outId: 1, inId: 2 }]);
+    check("no pair 4 days apart", Core.pairTransfers([c(1, "out", "a", "2026-10-03"), c(2, "in", "b", "2026-10-07")], new Set()), []);
+    check("no pair same wallet", Core.pairTransfers([c(1, "out", "a", "2026-10-03"), c(2, "in", "a", "2026-10-03")], new Set()), []);
+    check("blocked pair", Core.pairTransfers([c(1, "out", "a", "2026-10-03"), c(2, "in", "b", "2026-10-04")], new Set(["1|2"])), []);
+    var ctxText = await (await fetch("fixtures/tracker-context.json", { cache: "no-store" })).text();
+    var bakText = await (await fetch("fixtures/tracker-backup.json", { cache: "no-store" })).text();
+    var ctx = Core.readTrackerExport(ctxText), bak = Core.readTrackerExport(bakText);
+    check("context file: source, 6 wallets, 12 categories", [ctx.source, ctx.wallets.length, ctx.categories.length], ["context", 6, 12]);
+    check("context file: archived wallet left out", [ctx.archivedSkipped, ctx.wallets.some(function (w) { return w.name === "Old Visa"; })], [1, false]);
+    check("backup: same lists as the context file", [bak.source, bak.wallets, bak.categories, bak.archivedSkipped], ["backup", ctx.wallets, ctx.categories, 1]);
+    check("junk text is not a tracker export", /not a tracker export/.test(Core.readTrackerExport("hello").error || ""), true);
+    check("other JSON is not a tracker export", /not a tracker export/.test(Core.readTrackerExport('{"wallets":[],"categories":[]}').error || ""), true);
+    check("context of a newer version is refused", !!Core.readTrackerExport('{"app":"expenses-tracker","kind":"context","version":2,"wallets":[],"categories":[]}').error, true);
+    check("bad entries are left out and counted", (function (r) { return [r.wallets.length, r.categories.length, r.unreadable]; })(Core.readTrackerExport(JSON.stringify({ app: "expenses-tracker", kind: "context", version: 1,
+      wallets: [{ name: "A", currency: "EUR", archived: false }, { name: "B", currency: "EURO" }, { name: 5, currency: "EUR" }, { name: "a", currency: "eur" }],
+      categories: [{ name: "X", kind: "expense" }, { name: "Y", kind: "transfer" }] }))), [1, 1, 4]);
+    var chunks = Core.chunkText("h\n01.10.2026 a\n  wrapped\n02.10.2026 b\n03.10.2026 c", 30);
+    check("chunkText keeps wrapped lines together", chunks.every(function (ch) { return !/^\s+wrapped/.test(ch); }), true);
+    out.unshift(fails ? fails + " FAILED" : "all " + out.length + " checks passed");
+    show(out.join("\n"));
+  };
+})();
+</script>
+</body>
+</html>

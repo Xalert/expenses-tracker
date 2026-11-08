@@ -8,6 +8,8 @@ import { requireUser } from "@/lib/auth";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  // Under the display name: the user ID (what they sign in with), plus the email when there is one.
+  const secondary = user.email ? `${user.username} · ${user.email}` : user.username;
 
   return (
     <div className="min-h-dvh lg:pl-64">
@@ -26,8 +28,20 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
         <div className="mt-auto border-t border-border p-3">
           <div className="px-3 pb-2">
-            <p className="truncate text-sm font-medium text-foreground">{user.name}</p>
-            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+            <p className="truncate text-sm font-medium text-foreground" title={user.displayName}>
+              {user.displayName}
+            </p>
+            {user.displayName !== user.username && (
+              <p className="truncate text-xs text-muted-foreground" title={user.username}>
+                <span className="sr-only">User ID: </span>
+                {user.username}
+              </p>
+            )}
+            {user.email && (
+              <p className="truncate text-xs text-muted-foreground" title={user.email}>
+                {user.email}
+              </p>
+            )}
           </div>
           <SignOutButton />
         </div>
@@ -40,7 +54,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <span className="sr-only sm:not-sr-only">Expenses Tracker</span>
         </Link>
         <div className="flex min-w-0 items-center gap-1">
-          <span className="truncate text-sm text-muted-foreground">{user.name}</span>
+          <div className="min-w-0 pr-1 text-right leading-tight" title={secondary}>
+            <p className="truncate text-sm text-foreground">{user.displayName}</p>
+            {user.displayName !== user.username && (
+              <p className="truncate text-xs text-muted-foreground">{user.username}</p>
+            )}
+          </div>
           <TopBarDataLink />
           <SignOutButton compact />
         </div>

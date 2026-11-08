@@ -1,0 +1,486 @@
+{
+ "ro-bank.csv": {
+  "account": {
+   "name": "Ion Popescu",
+   "identifier": "RO49AAAA1B31007593840000",
+   "currency": "RON",
+   "bank": "Banca Exemplu SA",
+   "periodFrom": "2026-10-01",
+   "periodTo": "2026-10-31"
+  },
+  "transactions": [
+   {
+    "date": "2026-10-01",
+    "description": "Salariu octombrie ACME SOFTWARE SRL",
+    "merchant": "ACME Software",
+    "amount": "8500.00",
+    "direction": "in",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-02",
+    "description": "Plata card 4532 LIDL 0412 BUCURESTI",
+    "merchant": "LIDL",
+    "amount": "245.30",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-03",
+    "description": "Transfer intern catre RO09BCYP0000001234567890 Economii",
+    "merchant": "Transfer intern",
+    "amount": "1000.00",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": "RO09BCYP0000001234567890"
+   },
+   {
+    "date": "2026-10-05",
+    "description": "Plata card 4532 LIDL 0388 BUCURESTI",
+    "merchant": "LIDL",
+    "amount": "112.45",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-07",
+    "description": "Plata factura ENEL ENERGIE MUNTENIA Ref. 99812 factura 10/2026",
+    "merchant": "Enel Energie",
+    "amount": "310.00",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-09",
+    "description": "Plata card 4532 LIDL 0412 BUCURESTI",
+    "merchant": "LIDL",
+    "amount": "87.10",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-12",
+    "description": "Plata card 4532 BOLT.EU/O/2610 TALLINN",
+    "merchant": "Bolt",
+    "amount": "23.50",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-15",
+    "description": "-Comision administrare cont",
+    "merchant": "Comision administrare cont",
+    "amount": "5.00",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-20",
+    "description": "Plata card 4532 DIGI ROMANIA SA",
+    "merchant": "Digi Romania",
+    "amount": "60.00",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-28",
+    "description": "Plata card 4532 MEGA IMAGE 0412 BUCURESTI",
+    "merchant": "Mega Image",
+    "amount": "45.90",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "savings.txt": {
+  "account": {
+   "name": "Cont de economii",
+   "identifier": "RO09 BCYP 0000 0012 3456 7890",
+   "currency": "RON",
+   "bank": "Banca Exemplu SA",
+   "periodFrom": "2026-10-01",
+   "periodTo": "2026-10-31"
+  },
+  "transactions": [
+   {
+    "date": "2026-10-04",
+    "description": "Transfer intern de la RO49AAAA1B31007593840000 Economii luna octombrie",
+    "merchant": "Transfer intern",
+    "amount": "1000.00",
+    "direction": "in",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": "RO49AAAA1B31007593840000"
+   },
+   {
+    "date": "2026-10-31",
+    "description": "Dobanda bonificata",
+    "merchant": "Dobanda bonificata",
+    "amount": "4.17",
+    "direction": "in",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-31",
+    "description": "Impozit dobanda 10%",
+    "merchant": "Impozit dobanda",
+    "amount": "0.42",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "uk-bank.csv": {
+  "account": {
+   "name": "Current Account",
+   "identifier": "20-00-00 43218765",
+   "currency": "GBP",
+   "bank": "Northbank plc",
+   "periodFrom": null,
+   "periodTo": null
+  },
+  "transactions": [
+   {
+    "date": "2026-10-01",
+    "description": "TESCO STORES 3021 LONDON",
+    "merchant": "Tesco",
+    "amount": "42.18",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-04",
+    "description": "TFL TRAVEL CH TFL.GOV.UK/CP",
+    "merchant": "TfL Travel",
+    "amount": "8.60",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-08",
+    "description": "TESCO STORES 3021 LONDON",
+    "merchant": "Tesco",
+    "amount": "17.05",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-10",
+    "description": "NETFLIX.COM 866-579-7172",
+    "merchant": "Netflix",
+    "amount": "10.99",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-14",
+    "description": "FREELANCE PAYMENT, ACME DESIGN LTD",
+    "merchant": "ACME Design",
+    "amount": "350.00",
+    "direction": "in",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-21",
+    "description": "TESCO STORES 3021 LONDON",
+    "merchant": "Tesco",
+    "amount": "23.40",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-25",
+    "description": "AMAZON.CO.UK REFUND",
+    "merchant": "Amazon",
+    "amount": "15.99",
+    "direction": "in",
+    "currency": "GBP",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "wise.csv": {
+  "account": {
+   "name": "Wise EUR balance",
+   "identifier": "BE71 0961 2345 6769",
+   "currency": "EUR",
+   "bank": "Wise",
+   "periodFrom": null,
+   "periodTo": null
+  },
+  "transactions": [
+   {
+    "date": "2026-10-02",
+    "description": "Card transaction of 25.00 USD issued by Github",
+    "merchant": "GitHub",
+    "amount": "25.00",
+    "direction": "out",
+    "currency": "USD",
+    "accountAmount": "23.12",
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-06",
+    "description": "Card transaction of 12.50 GBP issued by Pret A Manger",
+    "merchant": "Pret A Manger",
+    "amount": "12.50",
+    "direction": "out",
+    "currency": "GBP",
+    "accountAmount": "14.61",
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-11",
+    "description": "Card transaction issued by Lidl Berlin",
+    "merchant": "Lidl",
+    "amount": "31.40",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-18",
+    "description": "Received money from ACME SOFTWARE SRL with reference INV-2026-10",
+    "merchant": "ACME Software",
+    "amount": "400.00",
+    "direction": "in",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-22",
+    "description": "Card transaction issued by Spotify",
+    "merchant": "Spotify",
+    "amount": "10.99",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-02-30",
+    "description": "Card transaction issued by Spotify",
+    "merchant": "Spotify",
+    "amount": "10.99",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-23",
+    "description": "Balance top-up",
+    "merchant": "Top-up",
+    "amount": "1,000.00",
+    "direction": "in",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "card-statement.pdf": {
+  "account": {
+   "name": "Card holder Ion Popescu",
+   "identifier": "4417",
+   "currency": "EUR",
+   "bank": "Example Card Services",
+   "periodFrom": "2026-10-01",
+   "periodTo": "2026-10-31"
+  },
+  "transactions": [
+   {
+    "date": "2026-10-06",
+    "description": "UBER *TRIP HELP.UBER.COM",
+    "merchant": "Uber",
+    "amount": "14.20",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-07",
+    "description": "BOLT.EU/O/2610",
+    "merchant": "Bolt",
+    "amount": "8.90",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-12",
+    "description": "NETFLIX.COM AMSTERDAM",
+    "merchant": "Netflix",
+    "amount": "13.99",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-15",
+    "description": "AMAZON EU SARL REFUND",
+    "merchant": "Amazon",
+    "amount": "29.99",
+    "direction": "in",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-20",
+    "description": "UBER *TRIP HELP.UBER.COM",
+    "merchant": "Uber",
+    "amount": "9.80",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-24",
+    "description": "LIDL DIENSTLEISTUNG Neckarsulm DE, card present",
+    "merchant": "LIDL",
+    "amount": "18.75",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "scanned-statement.pdf": {
+  "account": {
+   "name": "Card holder Ion Popescu",
+   "identifier": "**** 4417",
+   "currency": "EUR",
+   "bank": "Example Card Services",
+   "periodFrom": "2026-09-01",
+   "periodTo": "2026-09-30"
+  },
+  "transactions": [
+   {
+    "date": "2026-09-03",
+    "description": "UBER *TRIP HELP.UBER.COM",
+    "merchant": "Uber",
+    "amount": "11.40",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-09-18",
+    "description": "NETFLIX.COM AMSTERDAM",
+    "merchant": "Netflix",
+    "amount": "13.99",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-09-22",
+    "description": "ALBERT HEIJN 1203 AMSTERDAM",
+    "merchant": "Albert Heijn",
+    "amount": "27.35",
+    "direction": "out",
+    "currency": "EUR",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ },
+ "credit-card-scan.png": {
+  "account": {
+   "name": "Card de credit",
+   "identifier": "9921",
+   "currency": "RON",
+   "bank": "Banca Exemplu SA",
+   "periodFrom": "2026-10-01",
+   "periodTo": "2026-10-31"
+  },
+  "transactions": [
+   {
+    "date": "2026-10-05",
+    "description": "EMAG.RO MARKETPLACE",
+    "merchant": "eMAG",
+    "amount": "499.99",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-11",
+    "description": "KAUFLAND 0921 BUCURESTI",
+    "merchant": "Kaufland",
+    "amount": "156.20",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-19",
+    "description": "MEGA IMAGE 0412 BUCURESTI",
+    "merchant": "Mega Image",
+    "amount": "33.10",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   },
+   {
+    "date": "2026-10-26",
+    "description": "OMV PETROM 0213 PLOIESTI",
+    "merchant": "OMV Petrom",
+    "amount": "250.00",
+    "direction": "out",
+    "currency": "RON",
+    "accountAmount": null,
+    "counterparty": null
+   }
+  ]
+ }
+}

@@ -59,6 +59,7 @@ function parseBackup(body: string): ParsedFile {
   const problem = (path: string, message: string) => out.problems.push({ path, message });
 
   const entryCount = data.transactions.length + data.transfers.length;
+  out.rowCount = entryCount;
   if (entryCount > IMPORT_MAX_ROWS) {
     problem(
       "(file)",

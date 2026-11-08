@@ -1,0 +1,137 @@
+{
+  "app": "expenses-tracker",
+  "version": 1,
+  "exportedAt": "2026-11-01T10:00:00.000Z",
+  "wallets": [
+    {
+      "id": 1,
+      "name": "ING Current",
+      "currency": "RON",
+      "initialBalanceMinor": 123420,
+      "initialBalance": "1234.20",
+      "archived": false
+    },
+    {
+      "id": 2,
+      "name": "Savings",
+      "currency": "RON",
+      "initialBalanceMinor": 1240000,
+      "initialBalance": "12400.00",
+      "archived": false
+    },
+    {
+      "id": 3,
+      "name": "Northbank",
+      "currency": "GBP",
+      "initialBalanceMinor": 200000,
+      "initialBalance": "2000.00",
+      "archived": false
+    },
+    {
+      "id": 4,
+      "name": "Wise EUR",
+      "currency": "EUR",
+      "initialBalanceMinor": 100000,
+      "initialBalance": "1000.00",
+      "archived": false
+    },
+    {
+      "id": 5,
+      "name": "Card EUR",
+      "currency": "EUR",
+      "initialBalanceMinor": 50274,
+      "initialBalance": "502.74",
+      "archived": false
+    },
+    {
+      "id": 6,
+      "name": "Cash",
+      "currency": "RON",
+      "initialBalanceMinor": 0,
+      "initialBalance": "0.00",
+      "archived": false
+    },
+    {
+      "id": 7,
+      "name": "Old Visa",
+      "currency": "USD",
+      "initialBalanceMinor": 0,
+      "initialBalance": "0.00",
+      "archived": true
+    }
+  ],
+  "categories": [
+    {
+      "id": 1,
+      "name": "Food",
+      "kind": "expense"
+    },
+    {
+      "id": 2,
+      "name": "Groceries",
+      "kind": "expense"
+    },
+    {
+      "id": 3,
+      "name": "Bills",
+      "kind": "expense"
+    },
+    {
+      "id": 4,
+      "name": "Transport",
+      "kind": "expense"
+    },
+    {
+      "id": 5,
+      "name": "Housing",
+      "kind": "expense"
+    },
+    {
+      "id": 6,
+      "name": "Subscriptions",
+      "kind": "expense"
+    },
+    {
+      "id": 7,
+      "name": "Fees",
+      "kind": "expense"
+    },
+    {
+      "id": 8,
+      "name": "Shopping",
+      "kind": "expense"
+    },
+    {
+      "id": 9,
+      "name": "Salary",
+      "kind": "income"
+    },
+    {
+      "id": 10,
+      "name": "Refund",
+      "kind": "income"
+    },
+    {
+      "id": 11,
+      "name": "Extra Income",
+      "kind": "income"
+    },
+    {
+      "id": 12,
+      "name": "Interest",
+      "kind": "income"
+    }
+  ],
+  "transactions": [
+    {
+      "date": "2026-09-30",
+      "kind": "expense",
+      "walletId": 6,
+      "categoryId": 1,
+      "amountMinor": 2500,
+      "amount": "25.00",
+      "note": "synthetic - ignored by the importer"
+    }
+  ],
+  "transfers": []
+}

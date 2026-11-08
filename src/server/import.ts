@@ -3,14 +3,19 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, transfers, wallets, type CategoryKind } from "@/db/schema";
 import { parseCsv, stripBom } from "@/lib/csv";
-import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS } from "@/lib/constants";
+import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
+import { resolveTimeZone } from "@/lib/dates";
 import { listTransferRows } from "./export";
 import { backupFormat } from "./import-formats/backup";
 import {
+  addTally,
   categoryKey,
   emptyParsed,
+  fmtCount,
+  specBuilder,
   walletKey,
   type EntrySpec,
+  type ImportContext,
   type ImportFormat,
   type ImportFormatId,
   type ImportNotice,
@@ -26,7 +31,7 @@ import { transactionsCsvFormat } from "./import-formats/transactions-csv";
 // ---------------------------------------------------------------------------------------------------------
 // Public API
 
-export { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS };
+export { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS };
 export type { ImportFormatId, ImportNotice, ImportProblem };
 /** Problems returned to the UI; `problemCount` always has the total. */
 export const MAX_PROBLEMS_SHOWN = 50;
@@ -34,13 +39,36 @@ export const MAX_PROBLEMS_SHOWN = 50;
 export type ImportOptions = {
   /** Skip entries that already exist in the account (multiset comparison). Default true. */
   skipDuplicates?: boolean;
+  /**
+   * The importing browser's IANA time zone. Timestamps with a UTC offset (Spendee) are dated in it. Missing or
+   * invalid → UTC (with a notice saying so).
+   */
+  timeZone?: string;
+  /** Import transfer rows that have no partner as income / expense in a "Transfer" category. Default false. */
+  unpairedTransfersAsEntries?: boolean;
+};
+
+/** One uploaded file. `name` is only used to label the file in the preview, problems and notices. */
+export type ImportFileInput = { name: string; text: string };
+
+export type ImportFileSummary = {
+  name: string;
+  format: ImportFormatId | null;
+  formatLabel: string | null;
+  /** Data rows (CSV) or transactions + transfers (backup) read from the file; null when it was not read (a
+   * duplicate, or the selection was refused before parsing). */
+  rows: number | null;
+  /** Set when the file's content is identical to an earlier file of the selection; it is then used once. */
+  duplicateOf?: string;
 };
 
 export type ImportPreview = {
-  /** Detected from the content; null when the file is empty or could not be classified. */
+  /** The format shared by every file; null when the files differ, or the file is empty / unclassified. */
   format: ImportFormatId | null;
-  /** How the UI names the format ("Backup (JSON)", "Transactions (CSV)", "Spendee export"); null with `format`. */
+  /** How the UI names the format ("Backup (JSON)", "Transactions (CSV)", "Spendee export"); with several formats, joined with " + ". */
   formatLabel: string | null;
+  /** The selected files in order, with the format detected for each. */
+  files: ImportFileSummary[];
   /** True when there are no problems, i.e. `runImport` would write exactly these numbers. */
   ok: boolean;
   transactionsToAdd: number;
@@ -49,34 +77,42 @@ export type ImportPreview = {
   duplicateTransfers: number;
   walletsToCreate: { name: string; currency: string; archived: boolean }[];
   categoriesToCreate: { name: string; kind: CategoryKind }[];
-  /** The first `MAX_PROBLEMS_SHOWN` problems, in file order. */
+  /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
   /** Non-blocking information about the file (e.g. amounts that were rounded). Never affects `ok`. */
   notices: ImportNotice[];
+  /**
+   * Transfer rows without a partner (Spendee). With `unpairedTransfersAsEntries` off they are problems; the UI
+   * offers the option whenever this is > 0.
+   */
+  unpairedTransfers: number;
 };
 
 export type ImportResult = ImportPreview & { imported: boolean };
 
+/** What the services accept: one file's text (unnamed), or a selection of named files imported as one. */
+export type ImportInput = string | ImportFileInput[];
+
 /** Parse, validate and plan an import without writing anything. */
-export function previewImport(userId: number, fileText: string, opts: ImportOptions = {}): ImportPreview {
-  const parsed = parseImportFile(fileText);
-  if (parsed.problems.length) return summarize(parsed, null);
-  return getDb().transaction((tx) => summarize(parsed, planImport(tx, userId, parsed, opts)));
+export function previewImport(userId: number, input: ImportInput, opts: ImportOptions = {}): ImportPreview {
+  const parsed = parseImportFiles(input, opts);
+  if (parsed.file.problems.length) return summarize(parsed, null);
+  return getDb().transaction((tx) => summarize(parsed, planImport(tx, userId, parsed.file, opts)));
 }
 
 /**
  * Re-run the whole validation and planning (nothing from a previous preview is trusted) and, when there are no
  * problems, write everything in one DB transaction. With problems nothing is written and `imported` is false.
  */
-export function runImport(userId: number, fileText: string, opts: ImportOptions = {}): ImportResult {
-  const parsed = parseImportFile(fileText);
-  if (parsed.problems.length) return { ...summarize(parsed, null), imported: false };
+export function runImport(userId: number, input: ImportInput, opts: ImportOptions = {}): ImportResult {
+  const parsed = parseImportFiles(input, opts);
+  if (parsed.file.problems.length) return { ...summarize(parsed, null), imported: false };
   return getDb().transaction((tx) => {
-    const plan = planImport(tx, userId, parsed, opts);
+    const plan = planImport(tx, userId, parsed.file, opts);
     const summary = summarize(parsed, plan);
     if (!summary.ok) return { ...summary, imported: false };
-    writePlan(tx, userId, parsed, plan);
+    writePlan(tx, userId, parsed.file, plan);
     return { ...summary, imported: true };
   });
 }
@@ -89,25 +125,162 @@ export function runImport(userId: number, fileText: string, opts: ImportOptions 
 const FORMATS: readonly ImportFormat[] = [backupFormat, spendeeFormat, transactionsCsvFormat];
 
 const formatLabel = (id: ImportFormatId | null) => FORMATS.find((f) => f.id === id)?.label ?? null;
+const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 
-export function parseImportFile(fileText: string): ParsedFile {
-  if (typeof fileText !== "string") return emptyParsed(null, [{ message: "No file was received." }]);
-  if (Buffer.byteLength(fileText, "utf8") > IMPORT_MAX_BYTES) {
-    return emptyParsed(null, [
-      { message: `The file is larger than ${IMPORT_MAX_BYTES / 1024 / 1024} MB. Split it into smaller files.` },
-    ]);
-  }
+type ParsedSelection = { file: ParsedFile; files: ImportFileSummary[] };
+
+function importContext(opts: ImportOptions): ImportContext {
+  const { timeZone, fallback } = resolveTimeZone(opts.timeZone);
+  return { timeZone, timeZoneFallback: fallback, unpairedTransfersAsEntries: opts.unpairedTransfersAsEntries === true };
+}
+
+function makeSource(fileText: string): ImportSource | null {
   const body = stripBom(fileText).trimStart();
-  if (!body) return emptyParsed(null, [{ message: "The file is empty." }]);
+  if (!body) return null;
   let header: string[] | undefined;
-  const source: ImportSource = {
+  return {
     text: fileText,
     body,
     csvHeader: () =>
       (header ??= (parseCsv(fileText, { maxRecords: 0 }).records[0]?.cells ?? []).map((c) => c.trim().toLowerCase())),
   };
-  const format = FORMATS.find((f) => f.detect(source)) ?? transactionsCsvFormat;
-  return format.parse(source);
+}
+
+const detectFormat = (source: ImportSource) => FORMATS.find((f) => f.detect(source)) ?? transactionsCsvFormat;
+
+/** Parse one file on its own (no selection-wide steps). Kept for callers that only need the parsed form. */
+export function parseImportFile(fileText: string, opts: ImportOptions = {}): ParsedFile {
+  return parseImportFiles(fileText, opts).file;
+}
+
+/**
+ * Parse a selection into one `ParsedFile`: limits on the whole selection, identical files used once, a backup only
+ * on its own, each file parsed by its detected format, then merged (wallets by name + currency, categories by
+ * kind + name) and finished by each format's `finalize` (Spendee pairs transfer rows across files here).
+ */
+export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): ParsedSelection {
+  const fail = (message: string, files: ImportFileSummary[] = []): ParsedSelection => ({
+    file: emptyParsed(null, [{ message }]),
+    files,
+  });
+  if (typeof input === "string") input = [{ name: "", text: input }];
+  if (!Array.isArray(input) || input.length === 0) return fail("No file was received.");
+  if (input.some((f) => typeof f?.text !== "string")) return fail("No file was received.");
+  const single = input.length === 1;
+  if (input.length > IMPORT_MAX_FILES) {
+    return fail(`${input.length} files were selected; the limit is ${IMPORT_MAX_FILES} per import.`);
+  }
+  const bytes = input.reduce((n, f) => n + Buffer.byteLength(f.text, "utf8"), 0);
+  if (bytes > IMPORT_MAX_BYTES) {
+    return fail(
+      single
+        ? `The file is larger than ${MB} MB. Split it into smaller files.`
+        : `The selected files are larger than ${MB} MB in total. Import them in smaller groups.`,
+    );
+  }
+  const ctx = importContext(opts);
+
+  // Classify every file; identical content is used once.
+  const firstByText = new Map<string, string>();
+  const files: ImportFileSummary[] = [];
+  const parts: { name: string; format: ImportFormat | null; source: ImportSource | null }[] = [];
+  for (const f of input) {
+    const name = typeof f.name === "string" ? f.name : "";
+    const source = makeSource(f.text);
+    const format = source ? detectFormat(source) : null;
+    const summary: ImportFileSummary = { name, format: format?.id ?? null, formatLabel: format?.label ?? null, rows: null };
+    files.push(summary);
+    const earlier = firstByText.get(f.text);
+    if (earlier !== undefined) {
+      summary.duplicateOf = earlier;
+      continue;
+    }
+    firstByText.set(f.text, name);
+    parts.push({ name, format, source });
+  }
+  const used = files.filter((f) => f.duplicateOf === undefined);
+  if (parts.length > 1 && parts.some((p) => p.format?.id === "backup")) {
+    const backups = used.filter((f) => f.format === "backup").map((f) => `“${f.name}”`);
+    return fail(
+      `A backup has to be imported on its own: ${backups.join(", ")} ${backups.length === 1 ? "is a backup" : "are backups"}, ` +
+        "but other files were selected with it. Import the backup by itself.",
+      files,
+    );
+  }
+
+  // Parse each file, then merge.
+  const named = !single;
+  const combined = emptyParsed(null);
+  const merger = specBuilder(combined);
+  parts.forEach((part, fileIndex) => {
+    const summary = used[fileIndex];
+    const tag = <T extends object>(x: T): T => (named ? { ...x, file: part.name, fileIndex } : { ...x, fileIndex });
+    if (!part.source || !part.format) {
+      combined.problems.push(tag({ message: "The file is empty." }));
+      return;
+    }
+    const parsed = part.format.parse(part.source, ctx);
+    summary.rows = parsed.rowCount;
+    if (parts.length === 1) {
+      // One file: its parsed form is the selection (a backup keeps its by-position wallet matching).
+      Object.assign(combined, parsed, {
+        problems: parsed.problems.map(tag),
+        notices: parsed.notices.map(tag),
+        entries: parsed.entries.map((e) => ({ ...e, loc: tag(e.loc) })),
+        transfers: parsed.transfers.map((t) => ({ ...t, loc: tag(t.loc) })),
+        transferLegs: parsed.transferLegs.map((l) => ({ ...l, loc: tag(l.loc) })),
+      });
+      return;
+    }
+    const walletMap = parsed.wallets.map((w) => merger.walletFor(w.name, w.currency));
+    const categoryMap = parsed.categories.map((c) => merger.categoryFor(c.kind, c.name));
+    combined.entries.push(
+      ...parsed.entries.map((e) => ({ ...e, wallet: walletMap[e.wallet], category: categoryMap[e.category], loc: tag(e.loc) })),
+    );
+    combined.transfers.push(
+      ...parsed.transfers.map((t) => ({ ...t, from: walletMap[t.from], to: walletMap[t.to], loc: tag(t.loc) })),
+    );
+    combined.transferLegs.push(...parsed.transferLegs.map((l) => ({ ...l, wallet: walletMap[l.wallet], loc: tag(l.loc) })));
+    combined.problems.push(...parsed.problems.map(tag));
+    combined.notices.push(...parsed.notices.map(tag));
+    combined.rowCount += parsed.rowCount;
+    for (const [k, n] of parsed.tallies) addTally(combined, k, n);
+  });
+  const formatIds = [...new Set(used.map((f) => f.format))];
+  combined.format = formatIds.length === 1 ? formatIds[0] : null;
+
+  if (!single && combined.rowCount > IMPORT_MAX_ROWS) {
+    return fail(
+      `The selected files have ${fmtCount(combined.rowCount)} rows in total; the limit is ${fmtCount(IMPORT_MAX_ROWS)} per import. ` +
+        "Import them in smaller groups.",
+      files,
+    );
+  }
+
+  // Selection-wide steps of each format present (e.g. Spendee transfer pairing), then file order for problems.
+  for (const format of FORMATS) {
+    if (format.finalize && parts.some((p) => p.format === format)) format.finalize(combined, ctx);
+  }
+  combined.problems = sortByLocation(combined.problems);
+
+  const duplicates = files.filter((f) => f.duplicateOf !== undefined);
+  for (const d of duplicates) {
+    combined.notices.unshift({
+      code: "duplicate-file",
+      count: 1,
+      file: d.name,
+      message: `“${d.name}” has the same content as “${d.duplicateOf}”, so it is imported once.`,
+    });
+  }
+  return { file: combined, files };
+}
+
+/** File order, then line order; problems without a line (whole-file problems) first within their file. */
+function sortByLocation<T extends Loc>(items: T[]): T[] {
+  return items
+    .map((x, k) => ({ x, k }))
+    .sort((a, b) => (a.x.fileIndex ?? -1) - (b.x.fileIndex ?? -1) || (a.x.line ?? 0) - (b.x.line ?? 0) || a.k - b.k)
+    .map(({ x }) => x);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -281,7 +454,7 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   }
 
   // Report problems in file order (entries and transfers are interleaved in a CSV).
-  problems.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
+  const sortedProblems = sortByLocation(problems);
 
   return {
     walletTargets,
@@ -292,7 +465,7 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
     transfersToAdd,
     duplicateTransactions,
     duplicateTransfers,
-    problems,
+    problems: sortedProblems,
   };
 }
 
@@ -304,11 +477,13 @@ function transferKey(from: string, to: string, date: string, sent: number, recei
   return `${from}|${to}|${date}|${sent}|${received}|${note ?? ""}`;
 }
 
-function summarize(parsed: ParsedFile, plan: Plan | null): ImportPreview {
+function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null): ImportPreview {
   const problems = plan ? [...parsed.problems, ...plan.problems] : parsed.problems;
+  const labels = [...new Set(files.filter((f) => f.duplicateOf === undefined && f.formatLabel).map((f) => f.formatLabel!))];
   return {
     format: parsed.format,
-    formatLabel: formatLabel(parsed.format),
+    formatLabel: parsed.format ? formatLabel(parsed.format) : labels.length ? labels.join(" + ") : null,
+    files,
     ok: problems.length === 0,
     transactionsToAdd: plan?.entriesToAdd.length ?? 0,
     transfersToAdd: plan?.transfersToAdd.length ?? 0,
@@ -322,10 +497,19 @@ function summarize(parsed: ParsedFile, plan: Plan | null): ImportPreview {
       name: parsed.categories[i].name,
       kind: parsed.categories[i].kind,
     })),
-    problems: problems.slice(0, MAX_PROBLEMS_SHOWN),
+    problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
-    notices: parsed.notices,
+    notices: parsed.notices.map(publicLocation),
+    unpairedTransfers: parsed.unpairedTransferRows,
   };
+}
+
+/** Drop the internal `fileIndex` (and an unset `file`) from what is sent to the UI. */
+function publicLocation<T extends { file?: string }>(x: T): T {
+  const out = { ...x } as T & { fileIndex?: number };
+  delete out.fileIndex;
+  if (!out.file) delete out.file;
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------

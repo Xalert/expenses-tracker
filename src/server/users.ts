@@ -1,65 +1,124 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { users } from "@/db/schema";
+import { users, type User } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
+import { NAME_MAX, displayName, normalizeUserId, userIdProblem } from "@/lib/user-id";
 import { seedDefaultCategories } from "./categories";
 
-export type UserView = { id: number; name: string; email: string };
+export type UserView = {
+  id: number;
+  username: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string;
+};
+
+export type RegisterInput = {
+  username: string;
+  password: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+};
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_TAKEN = "This user ID is already taken.";
+const EMAIL_TAKEN = "An account with this email already exists.";
 
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+export function toUserView(row: Pick<User, "id" | "username" | "email" | "firstName" | "lastName">): UserView {
+  const { id, username, email, firstName, lastName } = row;
+  return { id, username, email, firstName, lastName, displayName: displayName(row) };
+}
+
+function optionalName(value: string | null | undefined, field: "firstName" | "lastName"): string | null {
+  const v = (value ?? "").trim();
+  if (!v) return null;
+  if (v.length > NAME_MAX) throw new ServiceError("VALIDATION", `Keep it to ${NAME_MAX} characters or fewer.`, field);
+  return v;
+}
+
+// Stored values are lowercase for every account this app wrote; comparing on lower() also covers rows written by
+// hand or carried over by the 0001 migration (which keeps emails exactly as they were).
+const byUsername = (username: string) => sql`lower(${users.username}) = ${username}`;
+const byEmail = (email: string) => sql`lower(${users.email}) = ${email}`;
+
 /**
  * Create a user and seed their default categories in one DB transaction.
- * Throws VALIDATION (field name/email/password) or CONFLICT (field email) when the email is taken.
+ * VALIDATION (field username / email / password / firstName / lastName) or CONFLICT (field username / email).
  */
-export async function registerUser(input: { name: string; email: string; password: string }): Promise<UserView> {
-  const name = (input.name ?? "").trim();
-  const email = normalizeEmail(input.email ?? "");
-  if (!name) throw new ServiceError("VALIDATION", "Enter your name.", "name");
-  if (name.length > 80) throw new ServiceError("VALIDATION", "Keep the name under 80 characters.", "name");
-  if (!EMAIL_RE.test(email)) throw new ServiceError("VALIDATION", "Enter a valid email address.", "email");
+export async function registerUser(input: RegisterInput): Promise<UserView> {
+  const username = normalizeUserId(input.username ?? "");
+  const usernameProblem = userIdProblem(username);
+  if (usernameProblem) throw new ServiceError("VALIDATION", usernameProblem, "username");
+
+  const email = normalizeEmail(input.email ?? "") || null;
+  if (email !== null && !EMAIL_RE.test(email)) {
+    throw new ServiceError("VALIDATION", "Enter a valid email address, or leave it empty.", "email");
+  }
+  const firstName = optionalName(input.firstName, "firstName");
+  const lastName = optionalName(input.lastName, "lastName");
   if ((input.password ?? "").length < MIN_PASSWORD_LENGTH) {
     throw new ServiceError("VALIDATION", `Use at least ${MIN_PASSWORD_LENGTH} characters.`, "password");
   }
 
-  const passwordHash = await hashPassword(input.password);
   const db = getDb();
-  if (db.select({ id: users.id }).from(users).where(eq(users.email, email)).get()) {
-    throw new ServiceError("CONFLICT", "An account with this email already exists.", "email");
-  }
+  const assertFree = () => {
+    if (db.select({ id: users.id }).from(users).where(byUsername(username)).get()) {
+      throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
+    }
+    if (email !== null && db.select({ id: users.id }).from(users).where(byEmail(email)).get()) {
+      throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+    }
+  };
+  assertFree(); // before the (slow) hash, so a taken name is reported at once
+  const passwordHash = await hashPassword(input.password);
 
   try {
     return db.transaction((tx) => {
+      assertFree(); // again: another registration may have finished while we were hashing
       const user = tx
         .insert(users)
-        .values({ name, email, passwordHash })
-        .returning({ id: users.id, name: users.name, email: users.email })
+        .values({ username, email, firstName, lastName, passwordHash })
+        .returning()
         .get();
       seedDefaultCategories(user.id, tx);
-      return user;
+      return toUserView(user);
     });
   } catch (err) {
-    // Lost a race with a concurrent registration for the same email.
+    // Lost a race with a concurrent registration: tell which unique index fired.
     if ((err as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") {
-      throw new ServiceError("CONFLICT", "An account with this email already exists.", "email");
+      const message = (err as Error).message;
+      if (message.includes("users.email")) throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+      throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
     }
     throw err;
   }
 }
 
-/** The user for a correct email/password pair, else null. Takes similar time either way. */
-export async function authenticateUser(email: string, password: string): Promise<UserView | null> {
-  const row = getDb().select().from(users).where(eq(users.email, normalizeEmail(email ?? ""))).get();
+/**
+ * The user for a correct identifier/password pair, else null. The identifier is an email when it contains `@`,
+ * otherwise a user ID; both case-insensitive. Takes similar time whether or not the account exists.
+ */
+export async function authenticateUser(identifier: string, password: string): Promise<UserView | null> {
+  const id = (identifier ?? "").trim().toLowerCase();
+  const row = id
+    ? getDb()
+        .select()
+        .from(users)
+        .where(id.includes("@") ? byEmail(id) : byUsername(id))
+        .get()
+    : undefined;
   if (!row) {
     await verifyPassword(password ?? "", await getDummyPasswordHash());
     return null;
   }
   if (!(await verifyPassword(password ?? "", row.passwordHash))) return null;
-  return { id: row.id, name: row.name, email: row.email };
+  return toUserView(row);
 }
