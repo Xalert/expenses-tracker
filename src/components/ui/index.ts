@@ -1,4 +1,5 @@
 export { Amount } from "./amount";
+export { BigAmount, amountPlaceholder, type BigAmountProps } from "./big-amount";
 export { Badge, type BadgeTone } from "./badge";
 export { Button, LinkButton, Spinner, buttonClasses, type ButtonProps, type ButtonVariant, type ButtonSize } from "./button";
 export { Card, CardBody, CardHeader } from "./card";

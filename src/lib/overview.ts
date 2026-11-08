@@ -39,13 +39,16 @@ export function resolveOverviewCurrency(
   return { currency: pickDefault(), explicit: false };
 }
 
-/** `/?month=…&currency=…`; the current month (`maxMonth`) leaves `month` out, a null currency leaves it out. */
-export function overviewHref(month: string, currency: string | null, maxMonth: string): string {
+/**
+ * `/?month=…&currency=…`; the current month (`maxMonth`) leaves `month` out, a null currency leaves it out.
+ * `basePath` serves other month + currency pages (`/categories`).
+ */
+export function overviewHref(month: string, currency: string | null, maxMonth: string, basePath = "/"): string {
   const params = new URLSearchParams();
   if (month !== maxMonth) params.set("month", month);
   if (currency) params.set("currency", currency);
   const qs = params.toString();
-  return qs ? `/?${qs}` : "/";
+  return qs ? `${basePath}?${qs}` : basePath;
 }
 
 export type InsightTone = "default" | "income" | "expense";

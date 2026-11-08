@@ -8,7 +8,7 @@ export default async function EditWalletDialog({ params }: { params: Promise<{ i
   const wallet = walletToEdit(user.id, (await params).id);
   return (
     <Dialog title="Edit wallet" description={wallet.name}>
-      <EditWallet wallet={wallet} />
+      <EditWallet wallet={wallet} variant="dialog" />
     </Dialog>
   );
 }

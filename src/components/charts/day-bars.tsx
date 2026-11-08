@@ -2,7 +2,17 @@ import Link from "next/link";
 import { cn } from "@/lib/cn";
 
 export type DayBarTone = "accent" | "income" | "muted" | "future";
-export type DayBar = { date: string; value: number; tone?: DayBarTone };
+export type DayBar = {
+  date: string;
+  /** The bar's full height (with `base`, the total of both segments). */
+  value: number;
+  tone?: DayBarTone;
+  /**
+   * A lower segment of a stacked bar, drawn from the bottom in its own tone; the rest of the bar (`value − base`)
+   * keeps `tone`. The wallet chart stacks money in (top, income) over money out (bottom, accent).
+   */
+  base?: { value: number; tone: DayBarTone };
+};
 
 export type DayBarsProps = {
   /** One entry per day, in order; `value` in minor units (or any non-negative number). */
@@ -75,6 +85,9 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
               : "muted"
             : (d.tone ?? "accent");
           const pct = capped ? 100 : scaleMax > 0 ? Math.min(100, (d.value / scaleMax) * 100) : 0;
+          // The lower segment's share of the drawn bar; dropped when a day is selected (one colour per bar then).
+          const basePct =
+            d.base && d.base.value > 0 && d.value > 0 && !selectedDate ? Math.min(100, (d.base.value / d.value) * 100) : 0;
           const bar = (
             <span
               className={cn(
@@ -84,6 +97,12 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
               )}
               style={{ height: d.value > 0 ? `max(${pct}%, 3px)` : "2px" }}
             >
+              {basePct > 0 && d.base && (
+                <span
+                  className={cn("absolute inset-x-0 bottom-0", toneClass[d.base.tone], basePct >= 100 && "rounded-[inherit]")}
+                  style={{ height: `${basePct}%` }}
+                />
+              )}
               {capped && (
                 // The "broken axis" mark: a gap near the top says the bar is taller than drawn.
                 <span className="absolute inset-x-0 top-[6px] h-[3px] bg-surface" />

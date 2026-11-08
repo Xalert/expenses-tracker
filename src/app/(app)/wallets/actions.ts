@@ -16,6 +16,21 @@ import { parseCreateWallet, parseUpdateWallet, parseWalletId } from "./form-inpu
 
 const NOT_FOUND_STATE: FormState = { message: "Wallet not found." };
 
+/**
+ * The wallet dialogs (`@modal/(.)wallets/new`, `@modal/(.)wallets/[id]/edit`) post a hidden `mode=dialog`: the create
+ * and update actions then return `{ ok: true, message }` instead of redirecting, and the form closes the dialog
+ * (`router.back()`, then `router.refresh()`). The full pages never send it and keep redirecting.
+ */
+function isDialogMode(formData: FormData): boolean {
+  return formData.get("mode") === "dialog";
+}
+
+/** After a save from a dialog: it can sit over any page, and wallets show on most of them. */
+function savedInDialog(message: string): FormState {
+  revalidatePath("/", "layout");
+  return { ok: true, message };
+}
+
 function revalidateWallet(walletId?: number) {
   revalidatePath("/");
   revalidatePath("/wallets");
@@ -34,6 +49,7 @@ export async function createWalletAction(_prev: FormState, formData: FormData): 
   } catch (err) {
     return serviceErrorState(err, values);
   }
+  if (isDialogMode(formData)) return savedInDialog(`Created ${parsed.data.name} (${parsed.data.currency})`);
   revalidateWallet(walletId);
   redirect(`/wallets/${walletId}`);
 }
@@ -54,6 +70,7 @@ export async function updateWalletAction(walletIdArg: number, _prev: FormState, 
   } catch (err) {
     return serviceErrorState(err, values);
   }
+  if (isDialogMode(formData)) return savedInDialog(`Saved ${parsed.data.name}`);
   revalidateWallet(wallet.id);
   redirect(`/wallets/${wallet.id}`);
 }

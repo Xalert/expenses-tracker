@@ -7,7 +7,7 @@ export default async function NewWalletDialog() {
   await requireUser();
   return (
     <Dialog title="New wallet" description={NEW_WALLET_DESCRIPTION}>
-      <NewWallet />
+      <NewWallet variant="dialog" />
     </Dialog>
   );
 }

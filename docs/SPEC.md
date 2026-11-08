@@ -549,8 +549,20 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     **and** more than `CAP_HEADROOM` = 1.2 × the next largest day; then `max` = that next day × 1.2; otherwise `max`
     = the largest day; earliest on a tie), `cumulative(values)`, `axisTicks(monthShort, length, today | null)`.
     `lib/overview.ts` — `resolveOverviewCurrency(requested, heldCurrencies, pickDefault)`, `overviewHref(month,
-    currency, maxMonth)`, `paceSummary(…)`, `toneOf(minor)`, `shortDateLabel(date, today)`, `monthName`,
+    currency, maxMonth, basePath = "/")` (step 7 added `basePath` for `/categories`), `paceSummary(…)`, `toneOf(minor)`, `shortDateLabel(date, today)`, `monthName`,
     `monthShortName`, `monthLength`.
+  - Added in step 5 (wallets): `DayBar` gains `base?: { value; tone }`, a lower segment of a stacked bar drawn
+    from the bottom in its own tone (`value` stays the bar's total; dropped while a day is selected).
+    `RunningLine` gains `min?` (the value at the bottom of the box, default 0) and a series' `start?` (the value on
+    the left edge, default 0); `linePoints(values, max, days, min = 0, start = 0)` clamps values to the box. The
+    Overview's calls are unchanged. `BigAmount` (`components/ui/big-amount.tsx`, from `entry-form.tsx`) `{ id; name;
+    label; currency; currencyText; defaultValue?; error?; hint?; autoFocus?; compact?; required? = true }` and
+    `amountPlaceholder(currency)` ("0.00" / "0"; safe for a half-typed code). `Popover` accepts `role="menu"`.
+    `ActionButton` (`components/wallets/action-button.tsx`) gains `size`, `buttonClassName`, `role="menuitem"` and
+    `onDone()` (called once per `ok` result). `DayList` gains `aside?(date)` (replaces the day's net on the right of
+    the header) and `showWallet?` (default true); `totals` is optional. `lib/day-labels.ts` adds
+    `balanceAfterLabel(closingMinor, currency)`. `lib/wallet-chart.ts` (pure): `balanceRange`, `isFlat`,
+    `sparklinePoints`, `walletBars`, `changeLabel`, `entryCountLabel` (see the wallet screens).
   - `AccountMenu` (client, `components/shell/account-menu.tsx`) `{ displayName; username; email }` — the
     initials button (`initials(displayName)` from `lib/user-id.ts`: first letters of the first and last word, or
     the first two letters of a single word; `.`, `_`, `-` also split words) and a `Popover` with the Auth section's
@@ -616,9 +628,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
     the page's folder — `NewEntry` (`transactions/new/new-entry.tsx`), `NewWallet` (`wallets/new/new-wallet.tsx`),
     `walletToEdit` + `EditWallet` (`wallets/[id]/edit/edit-wallet.tsx`) — so the forms are not forked. The dialog
-    calls `requireUser()` itself. The wallet dialogs still redirect on success (→ `/wallets/<id>`) and their Cancel
-    is a link; both close the dialog because `Dialog` hides itself when the path changes. The Add dialog closes
-    itself since step 6 (see /transactions/new) and ignores `?returnTo=`.
+    calls `requireUser()` itself. Since step 6 (Add) and step 5 (wallets) every dialog closes itself after a save
+    (`router.back()`, then `router.refresh()`) and its Cancel is `router.back()`; see /transactions/new and the
+    wallet dialog. The Add dialog ignores `?returnTo=`.
 - **App shell, as built (step 1):** the top bar is a full-width `bg-surface` strip with a bottom border (not
   sticky); inside, the same `max-w-[1240px]` container as the page (16px side padding on phones, 24px from `sm`,
   32px from `lg`). From `sm` up it is one row — brand, menu (takes the remaining width and scrolls sideways if it
@@ -776,6 +788,83 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   (this month · in total). Then the month's entries grouped by day, each day header showing **"Balance after
   <amount>"**, rows editable in place as on /transactions, and a link "Open in Transactions"
   (`/transactions?wallet=<id>&month=…`). Archived wallets show a notice instead of the add buttons.
+- **Wallet screens, as built (step 5):**
+  - **/wallets** (`page.tsx`, `components/wallets/wallet-cards.tsx`): `PageHeader` "Wallets" with the primary
+    "+ New wallet" pill. Groups follow `listUserCurrencies` (active wallets, by code): an `<h2>` with the code
+    (15px/800) and `currencyName` (muted), the group's total balance on the right (`text-expense` when negative),
+    then a `<ul>` grid `repeat(auto-fill, minmax(min(100%, 320px), 1fr))`. A card is one link to `/wallets/<id>`:
+    name, `entryCountLabel` ("27 entries" / "1 entry" / "No entries yet"), the balance (28px/800, `text-expense` when
+    negative), `changeLabel` of `getWalletMonth(…, currentMonth).inMinor − outMinor` ("+€2,890.90 this month" in
+    `text-income`, negative in `text-expense`, "No change this month" muted), and a 120×40 `aria-hidden` SVG
+    polyline (`sparklinePoints`: the opening balance, then each day's closing so far, spread over the whole width and
+    scaled to their own min / max; `text-income` / `text-expense` by the change, `text-foreground` when the month
+    moved but netted to zero, and a flat middle line in `text-border-strong` when no day moved the balance).
+    **Archived**: a muted `<h2>`, then one card of rows — the name (a link), "EUR · 18 entries · hidden from Overview
+    and pickers", the balance (muted) and an Unarchive secondary pill (`unarchiveWalletAction`, no confirm). No
+    wallets: the empty state as before; only archived ones: "All your wallets are archived…" above the Archived list.
+    `WalletCard` / `WalletRow` were removed.
+  - **/wallets/[id]** (`[id]/page.tsx`, `components/wallets/{wallet-month-chart,wallet-menu}.tsx`): a breadcrumb
+    `<nav aria-label="Breadcrumb"><ol>` "Wallets / <name>" (`aria-current="page"`). The header card (20px radius):
+    `<h1>` name (22px/800), the currency pill (`bg-surface-raised`, `title` = currency name), an "Archived" pill
+    when archived; the balance (36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started
+    with <initial balance>". On the right: Expense / Income / Transfer secondary pills with the kind dot
+    (`bg-expense-dot` / `bg-income` / `bg-transfer`) linking to `/transactions/new?wallet=<id>&kind=…&returnTo=<this
+    page>` (the dialog ignores `returnTo`; the no-JS full page returns here), and the "⋯" button
+    (`aria-haspopup="menu"`, "More actions for <name>") opening a `Popover role="menu"`: "Edit wallet" (link to
+    `/wallets/<id>/edit`, the dialog), Archive (confirm) or Unarchive, and "Delete wallet" (confirm, danger text)
+    when `transactionCount === 0`; each `role="menuitem"`, 44px tall. Opening focuses the first item; Up / Down
+    wrap, Home / End jump (`nextMenuIndex`); Escape and Tab close as any `Popover`; Archive / Unarchive close the
+    menu on success, Delete redirects to `/wallets`. The page renders `<AddButton href="/transactions/new?wallet=<id>"
+    />` unless archived. Archived: a muted notice ("… Unarchive it from the ⋯ menu to use it again.") replaces the
+    three pills, and the shell's default Add button stays.
+    **Month chart** (inside the header card, under a divider): "Balance through November 2026" and the
+    `MonthSwitcher` (`basePath=/wallets/<id>`; `?month=` invalid → current, later than the current month → clamped to
+    it). `WalletMonthChart`: legend Balance · Out · In (its `title` says the scales differ), a 160px (220px from
+    `sm`) box with **stacked** bars — one column per calendar day, money out at the bottom (accent), money in on top
+    (`--income`) via `DayBar.base`, transfers included; days after day N are `future` stubs (`walletBars`). Bar scale:
+    `pickScale` over each day's in + out, divided by 0.6 as on the Overview; one huge day is capped with the label
+    "In €4,200.00" / "Out €1,150.00" (its larger side). Line: `RunningLine` of `days[].closingMinor` (foreground),
+    starting on the left edge at `openingMinor`, scaled by `balanceRange` (min / max of the opening and closings ±
+    15% of the range; a flat month gets ±10% of its size, at least ±100 minor, so it is drawn mid-box); it stops at
+    day N. Axis labels as on the Overview (`axisTicks`). Text alternative: the line's `aria-label` ("Balance of ING
+    Current in November 2026: €5,403.86 at the start, €7,864.71 on 9 Nov; lowest …, highest …. €1,764.14 out and
+    €4,224.99 in over the month. Bars show …") and a `sr-only` table Day / Out / In / Balance after for days 1..N.
+    **Cards** (two columns on phones, four from `lg`): "In this month" (`income` tone when > 0), "Out this month",
+    "Started the month at" (sub "Up / Down €… since", "No change so far"; the change is the last closing − the
+    opening), "Entries" (`entryCount`, sub "this month · 27 in total"). For a past month: "In during October", "Out
+    during October", "Started October at" (sub "… over the month"), "in October · 27 in total".
+    **Entries**: "Entries in November 2026" with "Open in Transactions" (`/transactions?wallet=<id>&month=<month>`),
+    then `listTransactions(userId, { walletId, month, limit: 200 })` in `InlineEditProvider` (all wallets, archived
+    flagged; `returnTo` = this page with its month) + `DayList showWallet={false} aside=…`: each day's header shows
+    `balanceAfterLabel(closing)` from `getWalletMonth.days`; a future-dated day (after today) has no closing there
+    and shows nothing on the right. There is **no pagination** on this page: past 200 entries in a month a line says
+    "Showing the latest 200 of N entries…" with a link to Transactions. An empty month: "No entries in November
+    2026." in a card.
+  - **Wallet dialog** (`components/wallets/wallet-form.tsx`, `new/new-wallet.tsx`, `[id]/edit/edit-wallet.tsx`):
+    `NewWallet` / `EditWallet` take `variant: 'page' | 'dialog'`; the `@modal` copies pass `dialog`. The dialog
+    variant posts a hidden `mode=dialog`: `createWalletAction` / `updateWalletAction` then call
+    `revalidatePath("/", "layout")` and return `{ ok: true, message }` ("Created Probe (CHF)", "Saved Pocket")
+    instead of redirecting; the form calls `router.back()` and `router.refresh()` on the `popstate` that follows (as
+    the Add dialog). Cancel is `router.back()` in the dialog and a link (`/wallets` or the wallet) on the full page,
+    whose actions still redirect to `/wallets/<id>`. The fields remount after every result (keyed on the state) with
+    the echoed values; after an error focus moves to the first `aria-invalid` control. The footer sits outside the
+    `<form>` (submit with `form=`), so the edit variant's Archive section (its own forms) can sit above it.
+    **Fields**: Name (`Input`, 60 max). Currency (create): a muted heading labelling a `PillPicker name="currency"`
+    of the `PINNED_CURRENCIES` (codes; `title` = name), then "Another currency" — an `Input name="currency"` (3
+    characters, upper-cased as typed, `list` = a `<datalist>` of every currency, option text = its name) — and "This
+    can't be changed once the wallet exists." Both controls post `currency`; the action takes
+    `chosenCurrency(formData.getAll("currency"))` = the last non-empty value, trimmed and upper-cased, and the text
+    input comes after the pills, so a typed code wins (the no-JS rule). With JavaScript typing a code also unchecks
+    the pills (they remount with nothing selected) and choosing a pill clears the code, so one value is posted. The
+    echoed currency re-checks its pill when it is pinned, else refills the code; an invalid typed code carries the
+    error on the input (else on the pill group). Validation stays server-side (`isValidCurrency`). Starting
+    balance: `BigAmount name="initialBalance"` (not required; empty = 0) with the chosen code beside it ("—" until
+    there is one) and the hint "In CHF, up to 2 decimals. May be negative (e.g. a credit card). Leave empty for 0."
+    **Edit**: the currency as fixed text in a muted box ("EUR · Euro", "A wallet's currency can't be changed."), the
+    starting balance, then a muted section "Archive" with the explanation ("An archived wallet is hidden from the
+    Overview and the pickers; its entries stay, and you can unarchive it at any time.") and Archive (confirm) — or
+    "Archived" + Unarchive — plus "Delete wallet" when the wallet has no entries. Archiving from the dialog keeps it
+    open (the section turns into Unarchive); Delete redirects to `/wallets`, which closes it.
 - **/transactions/new** (dialog; also the target of every Add button) — a type switch Expense / Income /
   Transfer; then
   - Expense / Income: a large amount input with the currency of the chosen wallet beside it ("EUR · from Cash");
@@ -826,6 +915,42 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   are removed after a confirmation; used ones need the "moving its N transactions to <select>" choice first, as now.
   Each list ends with a dashed "+ New expense/income category" input + Add. Errors and focus handling as before
   (inline next to the control; focus to the section heading after a removal; a `role="status"` announcement).
+  - As built (step 7; `categories/page.tsx`, `components/categories/{category-section,category-row,spending-split}.tsx`,
+    `lib/category-split.ts`):
+    - **Month and currency**: `?month=` as on the Overview (invalid → the current month, a future month → the current
+      one); `?currency=` through `resolveOverviewCurrency` (a held currency, archived wallets included, else
+      `pickDefaultCurrency`); with only archived wallets (no default) their first currency by code; with no wallets at
+      all there are no amounts, no share bars and no split card. The `MonthSwitcher` (`basePath="/categories"`) keeps
+      `currency` only when it came from the URL; the `CurrencySwitch` links keep the month (`overviewHref(…,
+      "/categories")`) and the switch is left out under the Overview's rule. Both sit in `PageHeader`'s actions and
+      wrap under the title on phones.
+    - **Spending split card** (`SpendingSplitCard`, server): the total is the sum of the expense categories'
+      `monthAmountMinor` (every expense in that currency that month, archived wallets included — the same figure as
+      `getMonthInsights().expenseMinor`), then "spent in <Month>". `spendingSplit(categories)` keeps the expense
+      categories with an amount > 0, largest first (then name ignoring case, then id), ramp step `min(rank + 1, 5)`
+      (`RAMP_BG`), an exact `fraction` for widths and whole `percent`s by largest remainder (they add up to exactly
+      100; a non-zero share that rounds to 0 shows "<1%", `percentLabel`). The bar is a 14px `flex` row with 3px
+      gaps, one `rounded-[5px]` segment per category with `flex-grow` = its amount and a 4px minimum width,
+      `aria-hidden`; the legend (`<ul>`, wrapping) carries the same data as text. Empty: "Nothing spent in August 2026
+      in EUR."
+    - **Lists**: one `<section>` card per kind — `<h2 tabIndex=-1>` "Expense · 5 categories", a visible
+      `role="status"` line under it — each its own `ExpandableList` (one open row per list). Row summary: a 10px
+      swatch (expense: its ramp colour from the split via `rowShare`, so the colour follows the amount rank, not the
+      row order; an expense with nothing this month: a hollow `--border-strong` ring; income: `bg-income`), **name**
+      and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
+      only, `w-12` / `sm:w-20`, `h-1.5`, `aria-hidden`, with ", N% of the month's spending" as visually hidden text
+      after the amount) and the amount (income in `text-income`, unsigned; "—" muted, read as "nothing in EUR").
+    - **Open row** (`CategoryPanel`, region "Rename or remove Food"): "New name for “Food”" + the input (focused and
+      selected on open, accent border) + Rename (primary) + Cancel; under a divider the remove flow: unused →
+      "Remove Food" (ghost button in `--danger`, `confirm()`); used → "Remove, moving its N transactions to" + the
+      select of the list's other categories + "Remove Food" (no confirm, as before); the only category of its kind
+      with transactions → the explanation instead. A rename closes the row (focus back to its button) and announces
+      in the section's status line; a removal closes it without restoring focus, focuses the section heading and
+      announces. If an "unused" category gained transactions meanwhile, the refusal shows above the replacement
+      select that now replaces the button (the action revalidates), and the select takes focus.
+    - **Add row**: a visually hidden label "New expense category", a dashed input with the placeholder "+ New expense
+      category" and "Add" (secondary pill); errors and focus as before. The rows' old Rename / Remove buttons are
+      gone; `category-row.tsx` holds the row summary and the open-row forms.
 - **Route contract between features**: `/transactions/new?wallet=<id>&kind=expense|income|transfer`,
   `/transactions/<id>/edit`, `/transactions/transfers/<transferId>/edit`,
   `/transactions?wallet=<id>&month=YYYY-MM`, `/wallets/<id>?month=YYYY-MM`, `/wallets/new`, `/wallets/<id>/edit`,

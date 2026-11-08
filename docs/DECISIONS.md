@@ -265,6 +265,23 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The row's `summary`, `panel` and `after` elements carry explicit keys | Without them a soft navigation between list URLs logged React's "unique key" warning for `ExpandableRow` (seen in the browser, not on a direct load); the cause was not traced further than that | built (step 4) |
 | Each row has a `<noscript>` link to its edit page, besides "Open as page" inside the open row | Without JavaScript the row button does nothing, so the link inside the panel alone would never be reachable | built (step 4) |
 | The floating Add button is hidden (CSS `:has([data-expandable-open])`) and the N shortcut stands down while a row is open for in-place editing | At the bottom of the viewport the button covered the open form's Save button on phones and clipped the amount's currency label on desktop; the dialog case was already handled by the scrim | planner |
+| /categories reuses the Overview's currency rule (`resolveOverviewCurrency`, `?currency=` kept on month links only when it came from the URL) and clamps a future `?month=` to the current one; `overviewHref` gained a `basePath` | One rule for every month + currency page | built (step 7) |
+| The split card's total is the sum of the expense categories' month amounts, not `getMonthInsights().expenseMinor` | It is the shares' denominator, so bar, legend and total agree by construction; the two figures are equal (every expense has a category, both include archived wallets) | built (step 7) |
+| Legend percentages are whole numbers by largest remainder, so they add up to 100; a non-zero share under 0.5% shows "<1%" | Plain rounding gave legends of 99% or 101%; "0%" next to a category that did spend reads as a bug | built (step 7) |
+| An expense category with nothing this month gets a hollow swatch and an empty share bar | It has no segment in the split bar, so there is no ramp colour to repeat; a filled neutral dot would look like another ramp shade | built (step 7) |
+| Expense and Income are separate `ExpandableList`s (one open row in each) and announce in their section's visible status line, not the list's hidden one | Each section's heading and status line are where removals focus and announce, as before; the add row, outside any row, announces there too | built (step 7) |
+| Income amounts in the category lists are `text-income` and unsigned; expense amounts use the text colour; a month without any is "—" | The UI direction's amount colours; the heading already says the kind, so a sign adds nothing | built (step 7) |
+| The wallet chart stacks each day's money out (bottom, accent) and money in (top, income) in one bar rather than two bars side by side | Most days have only one side, so a stacked bar reads as "one bar coloured by what happened"; two bars per day would halve every bar to about 4px at 375px. `DayBars` gained an optional lower segment (`base`) instead of a second chart | built (step 5) |
+| The wallet's balance line is scaled to the month's own lowest and highest balance (±15% headroom), starting on the left edge at the opening balance; the bars keep the Overview's 60% share | A balance of €7,000 that moves by €300 would be a flat line on a zero-based scale; starting at the opening shows day 1's change | built (step 5) |
+| One huge day on the wallet chart is capped like on the Overview, labelled by its larger side ("In €4,200.00") | A salary or rent day otherwise flattens the rest of the month; the label keeps the amount readable | built (step 5) |
+| The /wallets cards' balance line covers the month so far across the card's full width and is coloured by the month's change (muted and flat when no day moved the balance) | A line squeezed into 9/30 of a 120px box would be unreadable early in the month; the colour matches the change text under it | built (step 5) |
+| "Started the month at" compares the opening with the last closing so far ("Up €2,460.85 since"; "over the month" for a past month) | The spec gave "Up/Down €… since" without a reference point; the month's last closing matches the chart and ignores future-dated entries, like the day headers | built (step 5) |
+| The wallet page lists at most 200 entries of the month with no pagination, and says so with a link to Transactions when there are more | Months with more than 200 entries in one wallet are rare; Transactions already has the full, paginated list | built (step 5) |
+| The new-wallet currency is posted by both the pills and the typed-code input (`name="currency"`); the last non-empty value wins (`chosenCurrency`), and with JavaScript the pills uncheck while a code is typed | One field name keeps the action and its error key unchanged; the rule makes the no-JS form behave like the scripted one | built (step 5) |
+| No currency is preselected on the new-wallet form | A preselected EUR would be easy to keep by mistake, and the currency cannot be changed afterwards | built (step 5) |
+| The Expense / Income / Transfer pills on the wallet page keep `returnTo=<this page>` in their link | The dialog ignores it; the full page opened without JavaScript (or in a new tab) then comes back to the wallet instead of /transactions | built (step 5) |
+| The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
+| `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
 ### Process
 
@@ -325,7 +342,6 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 - "Manage categories" in the transaction form navigates away and loses what was typed.
 - Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
-- The currency picker is not searchable.
 - Without JavaScript, an empty note search on /transactions leaves `q=` in the URL (harmless); with it the URL is
   clean. The filter chips themselves need JavaScript (popovers); without it only the search, the day-strip links,
   pagination and the per-row edit links work.
@@ -343,9 +359,12 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
 - Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
-- **The wallet dialogs still redirect after a save** (to the wallet's page) instead of closing over the page they
-  were opened from, and their Cancel is a link. Browser Back after such a save reopens the dialog (it is still in
-  the history). The Add dialog closes itself since step 6; the wallet dialogs are step 5's.
+- On the wallet chart a capped day's label pill is in the accent colour even when it is money in (the bar itself is
+  green); the label says "In" or "Out".
+- A wallet's starting balance uses the decimal keyboard on phones (as before step 5), which on iOS has no minus key;
+  a negative starting balance has to be pasted or entered on another keyboard.
+- Future-dated entries on a wallet page show no "Balance after" in their day header (`getWalletMonth.days` stops at
+  today).
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
   it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
   Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
@@ -408,6 +427,21 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
   rendering test, not in the browser: the demo data has no archived wallet. The Overview was checked on the demo
   database at 375px and 1280px in both schemes (no horizontal overflow); its chart was not checked with a month of
   many similar-sized days or with dozens of currencies in the switch.
+- **/categories (step 7)** was checked on the demo database at 375px and 1280px in both schemes (no horizontal
+  overflow, no console errors): rename and rename back, a duplicate name on rename and on add, adding "Probe" and
+  removing it (confirm accepted), the replacement select of a used expense and a used income category, Escape and
+  Cancel returning focus to the row, focus on the heading after a removal, an empty past month and an empty
+  currency. Not checked in the browser: the refusal when an "unused" category gains transactions while its row is
+  open, more than five spending categories (the ramp reuse is unit-tested), and the archived-only and no-wallet
+  states (no such demo data). The month switcher's arrows (32px) and the currency pills (36px), shared with the
+  Overview, are under the 44px touch target.
+- **The wallet screens (step 5)** were checked on the demo database in headless Chrome at 375px (dark) and 1280px
+  (light), with both schemes screenshotted at both widths for /wallets and the wallet page (no horizontal overflow):
+  archive / unarchive (the ⋯ menu and the Archived list), creating a CHF wallet by typed code in the dialog (it
+  closed and the card appeared) and deleting it from the ⋯ menu, renaming through the edit dialog (it closed over
+  the wallet page), the Expense pill and N preselecting the wallet, and an in-place edit updating "Balance after".
+  `confirm()` was auto-accepted by the harness; the datalist suggestions were not opened (a native control); the
+  no-JS forms were covered by rendering tests and the action tests, not in a browser with scripts off.
 - **No automated end-to-end tests.** Browser checks were done by hand during the build; the automated suite covers
   services, parsers and a few rendered components.
 - **A real import of the owner's Spendee files** was run only against an in-memory database: the older single file

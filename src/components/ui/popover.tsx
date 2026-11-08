@@ -20,7 +20,7 @@ export type PopoverProps = {
   /** Left-aligned (`start`) or right-aligned (`end`) under the trigger; nudged back inside a narrow viewport. */
   align?: "start" | "end";
   id?: string;
-  role?: "dialog" | "listbox";
+  role?: "dialog" | "listbox" | "menu";
   "aria-label"?: string;
   className?: string;
   children: ReactNode;

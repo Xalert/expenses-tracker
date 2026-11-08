@@ -1,24 +1,91 @@
 "use client";
 
-import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { deleteCategoryAction, renameCategoryAction } from "@/app/(app)/categories/actions";
 import { Button, FieldError, FormError, Input, Label, Select, SubmitButton } from "@/components/ui";
+import { useExpandableRow } from "@/components/ui/expandable-row";
+import type { RowShare } from "@/lib/category-split";
+import { cn } from "@/lib/cn";
 import { initialFormState, type FormState } from "@/lib/form";
-import type { CategoryWithUsage } from "@/server/categories";
-import { MAX_CATEGORY_NAME } from "./category-section";
+import { formatMoney } from "@/lib/money";
+import type { CategoryWithMonthUsage, CategoryWithUsage } from "@/server/categories";
 
-type Announce = (message: string | undefined, opts?: { focusHeading?: boolean }) => void;
-type Mode = "view" | "rename" | "move";
+export const MAX_CATEGORY_NAME = 40;
+
+export type Announce = (message: string | undefined, opts?: { focusHeading?: boolean }) => void;
+
 
 const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
 
+/** The danger text button of the open row ("Remove Food"): `--danger` text, no fill, 44px tall. */
+const removeButtonClass = "-ml-3 max-w-full min-w-0 text-danger! hover:bg-danger-soft!";
+
 /**
- * One category: name + transaction count, with Rename (inline form) and Remove. An unused category is removed
- * after a confirm(); one with transactions opens an inline panel to pick the replacement first.
- * Focus goes into each form when it opens and back to the button that opened it when it closes.
+ * The row's content inside its `ExpandableRow` button (phrasing content only): swatch, **name** · "N this month · M in
+ * all", the share bar (expense rows) and the month's amount in `currency` ("—" when 0). Without a currency (no wallets)
+ * the amount and the bar are left out.
  */
-export function CategoryRow({
+export function CategorySummary({
+  category,
+  currency,
+  share,
+}: {
+  category: CategoryWithMonthUsage;
+  currency: string | null;
+  share: RowShare;
+}) {
+  const income = category.kind === "income";
+  const amount = category.monthAmountMinor;
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "size-2.5 shrink-0 rounded-full",
+          income ? "bg-income" : share && share.fraction > 0 ? share.swatchClass : "border border-border-strong",
+        )}
+      />
+      <span className="min-w-0 flex-1 sm:truncate">
+        <span className="block truncate font-bold text-foreground sm:inline">{category.name}</span>
+        <span className="block truncate text-xs text-muted-foreground sm:inline sm:text-[13px]">
+          <span className="hidden sm:inline"> · </span>
+          {category.monthCount} this month · {category.transactionCount} in all
+        </span>
+      </span>
+      {currency && share && (
+        <span aria-hidden="true" className="block h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-surface-muted sm:w-20">
+          <span className={cn("block h-full rounded-full", share.swatchClass)} style={{ width: `${share.fraction * 100}%` }} />
+        </span>
+      )}
+      {currency && (
+        <span
+          className={cn(
+            "min-w-14 shrink-0 text-right font-bold tabular-nums",
+            income && amount > 0 ? "text-income" : amount > 0 ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {amount > 0 ? (
+            formatMoney(amount, currency)
+          ) : (
+            <>
+              <span aria-hidden="true">—</span>
+              <span className="sr-only">nothing in {currency}</span>
+            </>
+          )}
+          {share && amount > 0 && <span className="sr-only">, {share.percentLabel} of the month&apos;s spending</span>}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * The open row: the rename form, then (under a divider) the remove flow — an unused category is removed after a
+ * confirm(); one with transactions needs a replacement of the same kind first. Focus goes into the name on open;
+ * Escape and Cancel close the row and return focus to it (`ExpandableRow`); after a removal focus goes to the
+ * section heading.
+ */
+export function CategoryPanel({
   category,
   others,
   announce,
@@ -28,117 +95,44 @@ export function CategoryRow({
   others: CategoryWithUsage[];
   announce: Announce;
 }) {
-  const [mode, setMode] = useState<Mode>("view");
-  const [removeError, setRemoveError] = useState<string | undefined>();
-  const renameButton = useRef<HTMLButtonElement>(null);
-  const removeButton = useRef<HTMLButtonElement>(null);
-  const restoreFocusTo = useRef<"rename" | "remove" | null>(null);
-
-  useEffect(() => {
-    if (mode !== "view" || !restoreFocusTo.current) return;
-    (restoreFocusTo.current === "rename" ? renameButton : removeButton).current?.focus();
-    restoreFocusTo.current = null;
-  }, [mode]);
-
-  function close(from: "rename" | "remove") {
-    restoreFocusTo.current = from;
-    setMode("view");
-  }
-
-  const used = category.transactionCount > 0;
-  const nameId = `category-${category.id}-name`;
-  const removeErrorId = `category-${category.id}-remove-error`;
-
-  function open(next: Mode) {
-    setRemoveError(undefined);
-    setMode(next);
-  }
-
+  const row = useExpandableRow();
   return (
-    <li className="px-4 py-3 sm:px-5">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <p id={nameId} className="truncate text-sm font-medium text-foreground">
-            {category.name}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {used ? (
-              <Link
-                href={`/transactions?category=${category.id}`}
-                className="rounded hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                {plural(category.transactionCount)}
-              </Link>
-            ) : (
-              "No transactions"
-            )}
-          </p>
-        </div>
-        {mode === "view" && (
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              ref={renameButton}
-              variant="ghost"
-              size="sm"
-              aria-label={`Rename ${category.name}`}
-              onClick={() => open("rename")}
-            >
-              Rename
-            </Button>
-            {used ? (
-              <Button
-                ref={removeButton}
-                variant="ghost"
-                size="sm"
-                className="hover:text-danger!"
-                aria-label={`Remove ${category.name}`}
-                onClick={() => open("move")}
-              >
-                Remove
-              </Button>
-            ) : (
-              <RemoveUnusedButton
-                category={category}
-                buttonRef={removeButton}
-                errorId={removeError ? removeErrorId : undefined}
-                onError={setRemoveError}
-                announce={announce}
-              />
-            )}
-          </div>
-        )}
+    <div className="px-4 pt-1 pb-4 sm:px-[18px]">
+      <RenameForm
+        category={category}
+        onCancel={() => row.close()}
+        onRenamed={(message) => {
+          row.close();
+          announce(message);
+        }}
+      />
+      <div className="mt-4 border-t border-border pt-3">
+        <RemoveControls
+          category={category}
+          others={others}
+          onRemoved={(message) => {
+            // The row is about to disappear: no focus back to its button; the heading takes it.
+            row.close({ restoreFocus: false });
+            announce(message, { focusHeading: true });
+          }}
+        />
       </div>
-
-      {removeError && mode === "view" && (
-        <p id={removeErrorId} role="alert" className="mt-2 text-sm text-danger">
-          {removeError}
-        </p>
-      )}
-      {mode === "rename" && (
-        <RenameForm category={category} onDone={() => close("rename")} announce={announce} />
-      )}
-      {mode === "move" && (
-        <MoveAndRemovePanel category={category} others={others} onCancel={() => close("remove")} announce={announce} />
-      )}
-    </li>
+    </div>
   );
 }
 
 function RenameForm({
   category,
-  onDone,
-  announce,
+  onCancel,
+  onRenamed,
 }: {
   category: CategoryWithUsage;
-  onDone: () => void;
-  announce: Announce;
+  onCancel: () => void;
+  onRenamed: (message?: string) => void;
 }) {
   const [state, formAction] = useActionState(async (prev: FormState, formData: FormData) => {
     const next = await renameCategoryAction(category.id, prev, formData);
-    if (next.ok) {
-      announce(next.message);
-      onDone();
-    }
+    if (next.ok) onRenamed(next.message);
     return next;
   }, initialFormState);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -152,17 +146,7 @@ function RenameForm({
   }, [state]);
 
   return (
-    <form
-      action={formAction}
-      noValidate
-      className="mt-3 space-y-1.5"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          onDone();
-        }
-      }}
-    >
+    <form action={formAction} noValidate className="space-y-1.5">
       <Label htmlFor={id}>New name for “{category.name}”</Label>
       <div className="flex flex-wrap gap-2">
         <Input
@@ -174,11 +158,11 @@ function RenameForm({
           autoComplete="off"
           defaultValue={state.values?.name ?? category.name}
           error={error}
-          className="min-w-0 flex-1 basis-40"
+          className="min-w-0 flex-1 basis-40 not-aria-[invalid=true]:border-accent"
         />
         <div className="flex gap-2">
-          <SubmitButton pendingLabel="Saving…">Save</SubmitButton>
-          <Button variant="secondary" onClick={onDone}>
+          <SubmitButton pendingLabel="Renaming…">Rename</SubmitButton>
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
         </div>
@@ -189,23 +173,71 @@ function RenameForm({
   );
 }
 
-/** Remove an unused category after a confirm(). If it turns out to be in use, the row shows the error. */
-function RemoveUnusedButton({
+/**
+ * Remove: unused → "Remove <name>" with a confirm(); used → the replacement select first; the only category of its
+ * kind with transactions → an explanation. A removal of an "unused" category that gained transactions meanwhile is
+ * refused (CONFLICT); the page refreshes, this switches to the replacement select and the error stays above it.
+ */
+function RemoveControls({
   category,
-  buttonRef,
-  errorId,
-  onError,
-  announce,
+  others,
+  onRemoved,
 }: {
   category: CategoryWithUsage;
-  buttonRef: React.RefObject<HTMLButtonElement | null>;
+  others: CategoryWithUsage[];
+  onRemoved: (message?: string) => void;
+}) {
+  const [error, setError] = useState<string | undefined>();
+  const errorId = `category-${category.id}-remove-error`;
+  const count = category.transactionCount;
+
+  return (
+    <div className="space-y-2">
+      {error && (
+        <p id={errorId} role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {count === 0 ? (
+        <RemoveUnusedButton
+          category={category}
+          errorId={error ? errorId : undefined}
+          onError={setError}
+          onRemoved={onRemoved}
+        />
+      ) : others.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          “{category.name}” has {plural(count)} and is your only {category.kind} category, so there is nowhere to move{" "}
+          {count === 1 ? "it" : "them"}. Add another {category.kind} category below first, then remove this one.
+        </p>
+      ) : (
+        <MoveAndRemoveForm
+          category={category}
+          others={others}
+          focusOnMount={Boolean(error)}
+          onRemoved={onRemoved}
+          onStart={() => setError(undefined)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Remove an unused category after a confirm(). If it turns out to be in use, the error shows above. */
+function RemoveUnusedButton({
+  category,
+  errorId,
+  onError,
+  onRemoved,
+}: {
+  category: CategoryWithUsage;
   errorId?: string;
   onError: (message: string | undefined) => void;
-  announce: Announce;
+  onRemoved: (message?: string) => void;
 }) {
   const [, formAction] = useActionState(async (prev: FormState, formData: FormData) => {
     const next = await deleteCategoryAction(category.id, prev, formData);
-    if (next.ok) announce(next.message, { focusHeading: true });
+    if (next.ok) onRemoved(next.message);
     else onError(next.message ?? Object.values(next.fieldErrors ?? {})[0]);
     return next;
   }, initialFormState);
@@ -219,111 +251,79 @@ function RemoveUnusedButton({
       }}
     >
       <SubmitButton
-        ref={buttonRef}
         variant="ghost"
-        size="sm"
-        className="hover:text-danger!"
+        className={removeButtonClass}
         pendingLabel="Removing…"
-        aria-label={`Remove ${category.name}`}
         aria-describedby={errorId}
       >
-        Remove
+        <span className="truncate">Remove {category.name}</span>
       </SubmitButton>
     </form>
   );
 }
 
-function MoveAndRemovePanel({
+function MoveAndRemoveForm({
   category,
   others,
-  onCancel,
-  announce,
+  focusOnMount,
+  onRemoved,
+  onStart,
 }: {
   category: CategoryWithUsage;
   others: CategoryWithUsage[];
-  onCancel: () => void;
-  announce: Announce;
+  focusOnMount: boolean;
+  onRemoved: (message?: string) => void;
+  onStart: () => void;
 }) {
   const [state, formAction] = useActionState(async (prev: FormState, formData: FormData) => {
+    onStart();
     const next = await deleteCategoryAction(category.id, prev, formData);
-    if (next.ok) announce(next.message, { focusHeading: true });
+    if (next.ok) onRemoved(next.message);
     return next;
   }, initialFormState);
   const selectRef = useRef<HTMLSelectElement>(null);
-  const introRef = useRef<HTMLParagraphElement>(null);
   const id = `move-category-${category.id}`;
-  const introId = `${id}-intro`;
   const error = state.fieldErrors?.moveToCategoryId;
   const v = state.values ?? {};
-  const kindNoun = category.kind;
-  const count = category.transactionCount;
 
+  // Back to the select after a rejected removal (not on open: the name input has focus then), or on mount when this
+  // replaced the plain Remove button because the category turned out to be in use.
   useEffect(() => {
-    (selectRef.current ?? introRef.current)?.focus();
-  }, [state]);
-
-  const panelClasses = "mt-3 space-y-3 rounded-lg border border-border bg-surface-muted/60 p-3";
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onCancel();
-    }
-  };
-
-  if (others.length === 0) {
-    return (
-      <div role="group" aria-labelledby={introId} className={panelClasses} onKeyDown={onKeyDown}>
-        <p id={introId} ref={introRef} tabIndex={-1} className="text-sm text-foreground outline-none">
-          “{category.name}” has {plural(count)} and is your only {kindNoun} category, so there is nowhere to move
-          {count === 1 ? "it" : "them"}. Add another {kindNoun} category below first, then remove this one.
-        </p>
-        <Button variant="secondary" size="sm" onClick={onCancel}>
-          Close
-        </Button>
-      </div>
-    );
-  }
+    if (state !== initialFormState || focusOnMount) selectRef.current?.focus();
+  }, [state, focusOnMount]);
 
   return (
-    <form action={formAction} noValidate className={panelClasses} onKeyDown={onKeyDown} aria-labelledby={introId}>
-      <p id={introId} ref={introRef} tabIndex={-1} className="text-sm text-foreground outline-none">
-        Remove “{category.name}”? Its {plural(count)} will move to the {kindNoun} category you choose.
-      </p>
-      <div className="space-y-1.5">
-        <Label htmlFor={id}>
-          Move {plural(count)} to
-        </Label>
-        <Select
-          ref={selectRef}
-          id={id}
-          name="moveToCategoryId"
-          required
-          // Uncontrolled: React resets the form after the action and only defaultValue survives, applied on mount
-          // only — hence the key on the echoed value.
-          key={v.moveToCategoryId ?? "initial"}
-          defaultValue={v.moveToCategoryId ?? ""}
-          error={error}
-        >
-          <option value="" disabled>
-            Choose a category…
-          </option>
-          {others.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
+    <form action={formAction} noValidate className="space-y-1.5">
+      <Label htmlFor={id}>Remove, moving its {plural(category.transactionCount)} to</Label>
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1 basis-48">
+          <Select
+            ref={selectRef}
+            id={id}
+            name="moveToCategoryId"
+            required
+            // Uncontrolled: React resets the form after the action and only defaultValue survives, applied on mount
+            // only — hence the key on the echoed value.
+            key={v.moveToCategoryId ?? "initial"}
+            defaultValue={v.moveToCategoryId ?? ""}
+            error={error}
+          >
+            <option value="" disabled>
+              Choose a category…
             </option>
-          ))}
-        </Select>
-        <FieldError id={id}>{error}</FieldError>
-      </div>
-      <FormError message={state.message} />
-      <div className="flex flex-wrap gap-2">
-        <SubmitButton variant="danger" size="sm" pendingLabel="Removing…">
-          Move and remove
+            {others.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <SubmitButton variant="ghost" className={removeButtonClass} pendingLabel="Removing…">
+          <span className="truncate">Remove {category.name}</span>
         </SubmitButton>
-        <Button variant="secondary" size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
       </div>
+      <FieldError id={id}>{error}</FieldError>
+      <FormError message={state.message} />
     </form>
   );
 }

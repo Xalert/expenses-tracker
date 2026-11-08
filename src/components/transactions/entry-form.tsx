@@ -18,11 +18,11 @@ import {
   buttonClasses,
   pillClasses,
 } from "@/components/ui";
+import { BigAmount } from "@/components/ui/big-amount";
 import { CalendarIcon } from "@/components/ui/picker-icons";
 import { cn } from "@/lib/cn";
 import { addDays, formatDate } from "@/lib/dates";
 import { initialFormState, type FormState } from "@/lib/form";
-import { currencyDecimals } from "@/lib/money";
 
 export type EntryKind = "expense" | "income" | "transfer";
 
@@ -64,80 +64,8 @@ function stateId(state: object): number {
   return id;
 }
 
-function placeholderFor(currency: string | undefined) {
-  const d = currency ? currencyDecimals(currency) : 2;
-  return d === 0 ? "0" : `0.${"0".repeat(d)}`;
-}
-
 function walletLabel(w: WalletOption) {
   return `${w.name} (${w.currency})${w.archived ? " — archived" : ""}`;
-}
-
-/** A large amount input (`tabular-nums`, decimal keyboard) with a label above and the currency beside it. */
-function BigAmount({
-  id,
-  name,
-  label,
-  currency,
-  currencyText,
-  defaultValue,
-  error,
-  autoFocus,
-  compact,
-}: {
-  id: string;
-  /** The posted field name (`amount`, `receivedAmount`); the id may carry a prefix. */
-  name: string;
-  label: string;
-  currency: string | undefined;
-  /** Shown beside the number, e.g. "EUR · from Cash". */
-  currencyText: ReactNode;
-  defaultValue?: string;
-  error?: string;
-  /** Marks the input for `Dialog` to focus when it opens (`data-autofocus`). */
-  autoFocus?: boolean;
-  /** The in-place edit form: a 56px box with a 32px number. */
-  compact?: boolean;
-}) {
-  return (
-    <div className="min-w-0 space-y-1.5">
-      <label htmlFor={id} className={sectionLabel}>
-        {label}
-      </label>
-      <div
-        className={cn(
-          "flex items-center gap-3 rounded-2xl border bg-field px-4",
-          "focus-within:border-accent focus-within:outline-2 focus-within:outline-ring/40",
-          error ? "border-danger focus-within:outline-danger/30" : "border-border",
-        )}
-      >
-        <input
-          id={id}
-          name={name}
-          inputMode="decimal"
-          autoComplete="off"
-          required
-          placeholder={placeholderFor(currency)}
-          defaultValue={defaultValue}
-          data-autofocus={autoFocus ? "" : undefined}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={cn(`${id}-currency`, error && `${id}-error`)}
-          className={cn(
-            compact ? "h-14 text-[32px]" : "h-[72px] text-[44px] sm:text-[48px]",
-            "w-full min-w-0 flex-1 bg-transparent leading-none font-extrabold tracking-[-0.03em]",
-            "text-foreground tabular-nums outline-none placeholder:text-muted-foreground/45",
-          )}
-        />
-        <span
-          id={`${id}-currency`}
-          className="max-w-[45%] shrink-0 truncate text-sm font-semibold text-muted-foreground"
-        >
-          {currencyText}
-        </span>
-      </div>
-      <FieldError id={id}>{error}</FieldError>
-    </div>
-  );
 }
 
 /**

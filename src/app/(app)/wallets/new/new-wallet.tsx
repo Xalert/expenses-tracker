@@ -4,18 +4,19 @@ import { createWalletAction } from "../actions";
 
 const pinnedSet = new Set<string>(PINNED_CURRENCIES);
 
-/** The "New wallet" form, shared by the full page and the `@modal/(.)wallets/new` dialog. */
-export function NewWallet() {
+/**
+ * The "New wallet" form, shared by the full page and the `@modal/(.)wallets/new` dialog (`variant="dialog"`: a save
+ * closes the dialog instead of redirecting to the new wallet).
+ */
+export function NewWallet({ variant = "page" }: { variant?: "page" | "dialog" }) {
   // Built on the server so the option list never differs between server and browser Intl data.
-  const currencies = {
-    pinned: CURRENCIES.filter((c) => pinnedSet.has(c.code)),
-    rest: CURRENCIES.filter((c) => !pinnedSet.has(c.code)),
-  };
   return (
     <WalletForm
       mode="create"
+      variant={variant}
       action={createWalletAction}
-      currencies={currencies}
+      pinned={CURRENCIES.filter((c) => pinnedSet.has(c.code))}
+      all={CURRENCIES}
       cancelHref="/wallets"
       submitLabel="Create wallet"
       pendingLabel="Creating…"

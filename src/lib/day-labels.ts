@@ -43,3 +43,8 @@ export function groupByDate<T extends { date: string }>(items: T[]): { date: str
 export function dayMonthLabel(date: string): string {
   return `${Number(date.slice(8, 10))} ${monthName(date.slice(0, 7))}`;
 }
+
+/** A wallet page's day header: "Balance after €1,234.56" (the wallet's balance at the end of that day). */
+export function balanceAfterLabel(closingMinor: number, currency: string): string {
+  return `Balance after ${formatMoney(closingMinor, currency)}`;
+}

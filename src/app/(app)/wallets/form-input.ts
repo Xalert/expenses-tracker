@@ -44,13 +44,26 @@ function parseInitialBalance(raw: string | undefined, currency: string): number 
   return parseAmount(raw, currency, { allowNegative: true });
 }
 
+/**
+ * The currency a create form posted. The form has two controls named `currency`: the pills of the common currencies
+ * (a radio, posted only when one is checked) and, after them, the "type a code" text input (always posted, often
+ * empty). The typed code wins when it is filled: the last non-empty value, trimmed and upper-cased; "" when none.
+ * With JavaScript the form unchecks the pills while a code is typed, so only one value is posted; this rule is what
+ * makes the no-JS form behave the same. Validation stays in the schema (`isValidCurrency`).
+ */
+export function chosenCurrency(posted: FormDataEntryValue[]): string {
+  const filled = posted.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+  return (filled.at(-1) ?? "").trim().toUpperCase();
+}
+
 export function parseCreateWallet(
   formData: FormData,
   values: Record<string, string>,
 ): Parsed<{ name: string; currency: string; initialBalanceMinor: number }> {
-  const parsed = createSchema.safeParse(Object.fromEntries(formData));
   // Check the balance whenever the currency is usable, so every field error shows at once.
-  const rawCurrency = String(formData.get("currency") ?? "").trim().toUpperCase();
+  const rawCurrency = chosenCurrency(formData.getAll("currency"));
+  values = { ...values, currency: rawCurrency };
+  const parsed = createSchema.safeParse({ ...Object.fromEntries(formData), currency: rawCurrency });
   const currencyOk = isValidCurrency(rawCurrency);
   const rawBalance = formData.get("initialBalance");
   const initialBalanceMinor = currencyOk

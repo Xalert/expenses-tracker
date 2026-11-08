@@ -2,75 +2,99 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createCategoryAction } from "@/app/(app)/categories/actions";
-import { Card, FieldError, Input, Label, SubmitButton } from "@/components/ui";
+import { FieldError, Input, SubmitButton } from "@/components/ui";
+import { ExpandableList, ExpandableRow } from "@/components/ui/expandable-row";
+import { rowShare, type SplitSegment } from "@/lib/category-split";
 import { initialFormState, type FormState } from "@/lib/form";
-import type { CategoryWithUsage } from "@/server/categories";
-import { CategoryRow } from "./category-row";
-
-export const MAX_CATEGORY_NAME = 40;
+import type { CategoryWithMonthUsage } from "@/server/categories";
+import { CategoryPanel, CategorySummary, MAX_CATEGORY_NAME, type Announce } from "./category-row";
 
 const TITLE = { expense: "Expense", income: "Income" } as const;
 
 /**
- * One kind's card on /categories: heading, a live status line (announces adds / renames / removals), the list
- * of categories with rename + remove, and an "add category" form whose kind is decided by the section.
+ * One kind's list on /categories: heading ("Expense · 5 categories"), a live status line (announces adds, renames
+ * and removals), the categories as rows that open in place to rename / remove, and the dashed "add" row.
+ * `segments` are the spending split's (expense only); `currency` is the one the month amounts are in.
  */
 export function CategorySection({
   kind,
   categories,
+  currency,
+  segments,
 }: {
   kind: "expense" | "income";
-  categories: CategoryWithUsage[];
+  categories: CategoryWithMonthUsage[];
+  currency: string | null;
+  segments: SplitSegment[];
 }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [status, setStatus] = useState("");
   const headingId = `${kind}-categories-heading`;
+  const byId = new Map(segments.map((s) => [s.id, s]));
 
   /** Show + announce a success message; after a removal the row is gone, so focus moves to the heading. */
-  function announce(message: string | undefined, opts: { focusHeading?: boolean } = {}) {
+  const announce: Announce = (message, opts = {}) => {
     setStatus(message ?? "");
     if (opts.focusHeading) headingRef.current?.focus();
-  }
+  };
 
   const count = categories.length;
   return (
-    <Card aria-labelledby={headingId} role="region">
-      <div className="border-b border-border px-4 py-3 sm:px-5">
+    <section aria-labelledby={headingId} className="min-w-0 rounded-[20px] border border-border bg-surface">
+      <div className="px-4 pt-4 pb-3 sm:px-[18px]">
         <h2
           id={headingId}
           ref={headingRef}
           tabIndex={-1}
-          className="rounded text-base font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="rounded text-base font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
-          {TITLE[kind]}
+          {TITLE[kind]}{" "}
+          <span className="font-semibold text-muted-foreground">
+            · {count} {count === 1 ? "category" : "categories"}
+          </span>
         </h2>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {count} {count === 1 ? "category" : "categories"}
-        </p>
         <p role="status" className="mt-1 text-sm text-income empty:hidden">
           {status}
         </p>
       </div>
 
       {count === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground sm:px-5">
+        <p className="border-t border-surface-muted px-4 py-6 text-center text-sm text-muted-foreground sm:px-[18px]">
           No {kind} categories yet. Add one below to start recording {kind === "expense" ? "expenses" : "income"}.
         </p>
       ) : (
-        <ul className="divide-y divide-border">
-          {categories.map((c) => (
-            <CategoryRow
-              key={c.id}
-              category={c}
-              others={categories.filter((o) => o.id !== c.id)}
-              announce={announce}
-            />
-          ))}
-        </ul>
+        <ExpandableList>
+          <ul className="divide-y divide-surface-muted border-t border-surface-muted">
+            {categories.map((c) => (
+              <ExpandableRow
+                key={c.id}
+                id={String(c.id)}
+                buttonClassName="min-h-11 px-4 py-3 text-sm sm:px-[18px]"
+                summary={
+                  <CategorySummary
+                    key="summary"
+                    category={c}
+                    currency={currency}
+                    share={kind === "expense" ? rowShare(byId.get(c.id)) : null}
+                  />
+                }
+                panelLabel={`Rename or remove ${c.name}`}
+                panel={
+                  <CategoryPanel
+                    key="panel"
+                    category={c}
+                    others={categories.filter((o) => o.id !== c.id)}
+                    announce={announce}
+                  />
+                }
+              />
+            ))}
+          </ul>
+        </ExpandableList>
       )}
 
       <AddCategoryForm kind={kind} onAdded={announce} />
-    </Card>
+    </section>
   );
 }
 
@@ -90,8 +114,10 @@ function AddCategoryForm({ kind, onAdded }: { kind: "expense" | "income"; onAdde
   }, [state]);
 
   return (
-    <form action={formAction} noValidate className="space-y-1.5 border-t border-border px-4 py-4 sm:px-5">
-      <Label htmlFor={id}>Add {kind} category</Label>
+    <form action={formAction} noValidate className="space-y-1.5 border-t border-surface-muted px-4 py-3.5 sm:px-[18px]">
+      <label htmlFor={id} className="sr-only">
+        New {kind} category
+      </label>
       <div className="flex gap-2">
         <Input
           ref={inputRef}
@@ -100,12 +126,12 @@ function AddCategoryForm({ kind, onAdded }: { kind: "expense" | "income"; onAdde
           required
           maxLength={MAX_CATEGORY_NAME}
           autoComplete="off"
-          placeholder={kind === "expense" ? "e.g. Eating out" : "e.g. Freelance"}
+          placeholder={`+ New ${kind} category`}
           defaultValue={state.values?.name}
           error={error}
-          className="min-w-0 flex-1"
+          className="min-w-0 flex-1 border-dashed"
         />
-        <SubmitButton pendingLabel="Adding…" className="shrink-0">
+        <SubmitButton variant="secondary" pendingLabel="Adding…" className="shrink-0">
           Add
         </SubmitButton>
       </div>

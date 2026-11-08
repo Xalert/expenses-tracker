@@ -57,18 +57,19 @@ function editHref(t: TransactionView): string {
   return t.transferId !== null ? `/transactions/transfers/${t.transferId}/edit` : `/transactions/${t.id}/edit`;
 }
 
-/** The row's content inside its button: dot, label, "note · wallet", signed amount (+ the other leg's, muted). */
-function RowSummary({ t }: { t: TransactionView }) {
+/**
+ * The row's content inside its button: dot, label, "note · wallet", signed amount (+ the other leg's, muted). A
+ * wallet's own page leaves the wallet name out (`showWallet={false}`).
+ */
+function RowSummary({ t, showWallet }: { t: TransactionView; showWallet: boolean }) {
+  const meta = [t.note, showWallet ? t.walletName : null].filter(Boolean).join(" · ");
   const cross = t.counterparty && t.counterparty.currency !== t.currency ? t.counterparty : null;
   return (
     <>
       <span className={cn("size-2 shrink-0 rounded-full", dotClass[t.kind])} aria-hidden="true" />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold text-foreground">{transactionLabel(t)}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {t.note && <>{t.note} · </>}
-          {t.walletName}
-        </span>
+        {meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>}
       </span>
       <span className="shrink-0 text-right tabular-nums">
         <span className={cn("block font-bold", amountClass[t.kind])}>
@@ -89,40 +90,52 @@ function RowSummary({ t }: { t: TransactionView }) {
  * The /transactions list: the page's entries grouped by day (newest first), each day a card with its header ("Today ·
  * Sunday 8") and the day's net per currency over every match of the filters (`totals`, from `listDayTotals`). Each
  * row opens in place into the inline editor; one open row at a time across the whole list.
+ *
+ * The wallet page reuses it with `aside` (its "Balance after €…" line replaces the net) and `showWallet={false}`.
  */
 export function DayList({
   items,
-  totals,
+  totals = [],
   today,
   returnTo,
+  aside,
+  showWallet = true,
 }: {
   items: TransactionView[];
-  totals: DayTotal[];
+  totals?: DayTotal[];
   today: string;
   /** The list URL (the "Open as page" link's `returnTo`). */
   returnTo: string;
+  /** Replaces the day's net on the right of each day header (null = nothing there). */
+  aside?: (date: string) => React.ReactNode;
+  /** False on a wallet's own page: the rows' meta line leaves the wallet name out. */
+  showWallet?: boolean;
 }) {
   const netByDate = new Map<string, DayTotal[]>();
   for (const t of totals) netByDate.set(t.date, [...(netByDate.get(t.date) ?? []), t]);
+  const defaultAside = (date: string) => {
+    const net = netByDate.get(date) ?? [];
+    return net.length > 0 ? (
+      <>
+        <span className="sr-only">Net for the day: </span>
+        {dayNetLabel(net)}
+      </>
+    ) : null;
+  };
 
   return (
     <ExpandableList>
       <div className="flex flex-col gap-3">
         {groupByDate(items).map((group) => {
           const headingId = `day-${group.date}`;
-          const net = netByDate.get(group.date) ?? [];
+          const right = (aside ?? defaultAside)(group.date);
           return (
             <section key={group.date} aria-labelledby={headingId} className="rounded-[18px] border border-border bg-surface">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 pt-3.5 pb-2.5 sm:px-[18px]">
                 <h2 id={headingId} className="text-[13px] font-bold text-foreground">
                   <time dateTime={group.date}>{dayHeaderLabel(group.date, today)}</time>
                 </h2>
-                {net.length > 0 && (
-                  <p className="text-[13px] font-semibold text-muted-foreground tabular-nums">
-                    <span className="sr-only">Net for the day: </span>
-                    {dayNetLabel(net)}
-                  </p>
-                )}
+                {right && <p className="text-[13px] font-semibold text-muted-foreground tabular-nums">{right}</p>}
               </div>
               <ul className="divide-y divide-surface-muted border-t border-surface-muted">
                 {group.items.map((t) => {
@@ -134,7 +147,7 @@ export function DayList({
                       id={String(t.id)}
                       className="last:rounded-b-[18px]"
                       buttonClassName="min-h-11 px-4 py-3 text-sm sm:px-[18px] [li:last-child>&]:rounded-b-[18px]"
-                      summary={<RowSummary key="summary" t={t} />}
+                      summary={<RowSummary key="summary" t={t} showWallet={showWallet} />}
                       panelLabel={`Edit ${label}, ${amount}`}
                       panel={<InlineEditPanel key="panel" entry={inlineEntryOf(t)} rowKey={String(t.id)} />}
                       after={
