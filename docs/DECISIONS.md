@@ -168,6 +168,13 @@ All entries below date from the initial build, 2026-11-05.
 | Archive and delete are on each wallet's own page, not in the wallet list | Keeps destructive actions one step away from a casual tap | built |
 | The currency picker is a native `<select>` with common currencies first | Works everywhere with no dependency; typing a code jumps to it | built |
 | Deleting uses the browser's native confirmation dialog | No modal library | built |
+| Date and month pickers are hand-built (`DatePicker`, `MonthGrid`, `Popover` in `components/ui`, pure helpers in `lib/calendar.ts`) instead of a picker library | The native `<input type="date">` looks different in every browser and clashes with the theme; the project has no UI dependencies, and the pickers need little: one popover, two grids, the theme tokens | planner |
+| `DatePicker` is a button plus a hidden `YYYY-MM-DD` input, not a typed text field | Forms post exactly what the native input posted, so no action, schema or service changed, and there is no date-parsing of typed text. The cost is that a date cannot be typed, so the grid is fully keyboard-operable instead (arrows, Home/End, PageUp/PageDown, Shift+PageUp/PageDown, Enter/Space, Escape) | planner |
+| The trigger button carries `role="combobox"` (with `aria-haspopup="dialog"`) | A plain `button` role does not support `aria-invalid` / `aria-required` (eslint's jsx-a11y flags it); a select-only combobox does, and its text is read as its value, so `<Field>` errors attach the same way as for `<Input>` | built |
+| Calendar weeks start on Monday; dates show en-GB ("5 Nov 2026", "Thursday 5 November 2026") | The app formats every date en-GB already; no locale setting exists to follow | planner |
+| An empty optional `DatePicker` (`allowEmpty`, the transaction filters) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
+| The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
+| Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
 
 ### Process
 
@@ -235,6 +242,10 @@ All entries below date from the initial build, 2026-11-05.
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
 - The mobile tab bar is tight at 375px: "Transactions" uses 69 of its 75 pixels.
+- Popovers never open upwards: near the bottom of the screen (or behind the mobile tab bar) the calendar's lower
+  rows need a scroll to reach.
+- The date picker's month view has no button back to the day view; picking a month or pressing Escape returns.
+- A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
 - `sharp` is still present in the Docker image although the image optimiser is off.
 
 ### Statement importer gaps
@@ -260,7 +271,10 @@ All entries below date from the initial build, 2026-11-05.
   simulated on Docker Desktop.
 - **`COOKIE_SECURE=true` over plain HTTP** was checked with curl, not a browser.
 - **The amd64 image** was built and run under emulation only.
-- **No screen-reader pass.** Focus handling and labels were checked through the DOM.
+- **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
+  month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
+  headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not
+  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox.
 - **Native dialogs were not exercised**: the confirmation dialog was stubbed, and test files were injected by
   script rather than chosen in a real file picker; downloads were fetched by script.
 - **No real spreadsheet application** was used to open or re-save an exported CSV.

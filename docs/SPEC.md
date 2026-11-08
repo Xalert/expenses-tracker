@@ -171,6 +171,7 @@ src/
   lib/auth.ts  lib/money.ts  lib/currencies.ts  lib/dates.ts  lib/errors.ts
   lib/form.ts  lib/password.ts  lib/constants.ts  lib/cn.ts  lib/config.ts (env: ALLOW_REGISTRATION, COOKIE_SECURE)
   lib/user-id.ts                                    # user ID rules + displayName (client-safe)
+  lib/calendar.ts                                   # pure calendar helpers for the date / month pickers
   lib/csv.ts  lib/backup-format.ts  lib/context-format.ts  # pure import/export formats
   app/api/health/route.ts                           # GET /api/health
   app/api/export/{backup,transactions,context}/route.ts  # downloads (session required)
@@ -325,8 +326,16 @@ returns `0` for zero — callers that need > 0 must check), `formatMoney(minor, 
 names, common ones (EUR, USD, GBP, RON, CHF, JPY, CAD, AUD, SEK, NOK, DKK, PLN, HUF, CZK) pinned first;
 `PINNED_CURRENCIES`, `currencyName(code)`, `isValidCurrency(code)` (uppercase 3-letter code only).
 `src/lib/dates.ts`: `todayISO()`, `currentMonth()` (server local time), `isValidDate`, `isValidMonth`,
-`monthRange(month) → { from, to }` (inclusive), `shiftMonth(month, delta)`, `addDays(date, n)`, `formatDate(date)`
+`monthRange(month) → { from, to }` (inclusive), `shiftMonth(month, delta)`, `addDays(date, n)`, `addMonths(date, n)`
+(day clamped to the target month: `"2026-01-31"` + 1 → `"2026-02-28"`), `formatDate(date)`
 (`"5 Nov 2026"`), `formatMonth(month)` (`"November 2026"`).
+`src/lib/calendar.ts` (no React; Monday-first): `WEEKDAY_LABELS` (`Mo`…`Su`), `WEEKDAY_NAMES`, `MONTH_LABELS`
+(`Jan`…`Dec`), `monthOf(date)`, `weekdayIndex(date)` (0 = Monday), `calendarWeeks(month) → string[][]` (always 6 × 7
+dates from the Monday on or before the 1st, so neighbouring months fill the gaps), `moveDate(date, key, shift) →
+string | null` (day grid: arrows ±1 day / ±1 week, Home / End to Monday / Sunday, PageUp / PageDown ±1 month, with
+Shift ±1 year; `null` for other keys or outside 1900–2999), `moveMonth(month, key)` (month grid, 3 columns: ±1, ±3,
+Home / End to Jan / Dec, PageUp / PageDown ±1 year), `dateInMonth(date, month)`, `clampTo(value, min?, max?)`,
+`dateLabel(date)` (`"Thursday 5 November 2026"`, for `aria-label`s).
 
 ## Shared UI (`src/components`)
 
@@ -340,6 +349,28 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   `aria-describedby="<id>-error"`.
 - `Field` `{ id; label; hint?; error?; className? }` — label + control + hint + inline error (`<id>-error`); `FieldError`,
   `Label`.
+- `DatePicker` (client) `{ id; name; defaultValue?: 'YYYY-MM-DD' | ''; required?; error?; allowEmpty?; max?;
+  align?: 'start'|'end'; placeholder? }` — used for every date field instead of `<input type="date">`. Renders a
+  trigger `<button type="button" id={id} role="combobox" aria-haspopup="dialog">` styled like `Input`, showing
+  `formatDate(value)` or "Pick a date", with the same `aria-invalid` / `aria-describedby="<id>-error"` convention,
+  plus **`<input type="hidden" name={name} value="YYYY-MM-DD">`**: forms post exactly what a native date input
+  would, so actions, zod schemas and services are unchanged. With `allowEmpty` an empty picker renders **no** hidden
+  input (a GET form then leaves the parameter out of the URL) and a set one shows a "Clear date" × button.
+  Uncontrolled: it reads `defaultValue` once, so a form that must reset it remounts (`key`). The popover
+  (`role="dialog"`, "Choose a date"): ‹ › month buttons, a "November 2026" button that switches to a `MonthGrid`
+  (picking a month returns to the days; Escape there steps back instead of closing), a Monday-first 6-week grid
+  (`role="grid"`, day buttons `role="gridcell"` with `aria-selected`, `aria-current="date"` for today and the full
+  date as `aria-label`; neighbouring months dimmed, today ringed, the selection filled with the accent), and a footer
+  with "Today" and, with `allowEmpty`, "Clear". Picking closes it and returns focus to the trigger. Keyboard in the
+  grid: see `moveDate`; one day is in the Tab order (roving tabindex); moving past the shown month changes month.
+- `MonthGrid` (client) `{ value: 'YYYY-MM' | null; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
+  year stepper (‹ 2026 ›) over a 3 × 4 grid of `aria-pressed` month buttons; months outside the bounds are
+  disabled; the current month has a ring when not selected. Keyboard: see `moveMonth`; roving tabindex.
+- `Popover` (client) `{ open; onClose; anchor; trigger; align?: 'start'|'end'; id?; role?; 'aria-label'?; className? }` —
+  no portal: an absolutely positioned panel under `anchor` (the trigger's `relative` wrapper). Renders nothing when
+  closed; closes on Escape (unless the panel already handled it with `preventDefault`), on pointer-down outside
+  `anchor` and when focus moves outside it; returns focus to `trigger` unless the user clicked or tabbed elsewhere.
+  It shifts itself sideways to stay 8px inside the viewport, so it never causes horizontal scroll at 375px.
 - `FormError` `{ message? }` — form-level `role="alert"` banner. `Card`, `CardHeader { title; description?; actions? }`,
   `CardBody`. `Badge` `{ tone?: 'neutral'|'accent'|'income'|'expense'|'transfer'|'danger' }`.
   `EmptyState` `{ title; description?; action?; icon? }`. `PageHeader` `{ title; description?; actions? }` (page `<h1>`).
@@ -371,16 +402,22 @@ colours: `bg-background`, `bg-surface`, `bg-surface-muted`, `border-border`, `bo
 - **/** Dashboard — greeting with the display name ("Hello, …" / "Welcome, …"); wallet cards with balances; per-currency totals with this month's income / expenses
   (month switcher); spending by category for the month (simple horizontal bars, per currency); recent
   transactions. Friendly empty state that sends a new user to create their first wallet.
+  The month switcher (`components/dashboard/month-switcher.tsx`, client) is "‹ November 2026 ›": the arrows are
+  plain links (they work without JS) and the month is in the URL — the current month is the bare `/`, any other
+  `/?month=YYYY-MM`; nothing past the current month. The label is a button that opens a `MonthGrid` popover
+  (right-aligned, future months disabled) to jump to any month (`router.push(…, { scroll: false })`). Away from the
+  current month a small "This month" link next to the switcher goes back to `/`.
 - **/wallets** — list (active, then archived) with balance; create wallet (name, currency picker, initial
   balance); edit (name, initial balance); archive / unarchive; delete when empty.
 - **/wallets/[id]** — header with balance + actions (add expense / income / transfer preselecting this wallet,
   edit, archive, delete when empty), then that wallet's 25 most recent transactions, each row linking to its
   edit page, and a "View all" link to `/transactions?wallet=<id>`.
 - **/transactions** — all transactions with filters kept in the URL (wallet, kind, category, date range,
-  note search) and pagination; per-row edit / delete.
+  note search) and pagination; per-row edit / delete. The From / To filters are `DatePicker`s with `allowEmpty`
+  (`To` right-aligned), so an empty one adds nothing to the URL; a set one posts `from=YYYY-MM-DD` / `to=…` as before.
 - **/transactions/new**, **/transactions/[id]/edit**, **/transactions/transfers/[id]/edit** — one form with an
   Expense / Income / Transfer switch. Expense/Income: wallet, category (filtered by kind), amount (shows the
-  wallet's currency), date (defaults to today), note. Transfer: from wallet, to wallet, amount sent, and —
+  wallet's currency), date (a `DatePicker`, defaults to today), note. Transfer: from wallet, to wallet, amount sent, and —
   only when the two currencies differ — amount received; date, note. `?wallet=<id>` and `?kind=` preselect.
   Deletes ask for confirmation. The edit pages carry the Delete button for that transaction / transfer.
 - **/categories** — two sections, Expense and Income. Each lists its categories by name with their transaction

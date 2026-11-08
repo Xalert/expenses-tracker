@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import {
   Card,
   CardBody,
+  DatePicker,
   Field,
   FieldError,
   FormError,
@@ -364,14 +365,7 @@ export function EntryForm({
           {!transferBlocked && (
             <>
               <Field id="date" label="Date" error={err.date} className="sm:max-w-[calc(50%-0.5rem)]">
-                <Input
-                  id="date"
-                  name="date"
-                  type="date"
-                  required
-                  defaultValue={v.date ?? initial.date}
-                  error={err.date}
-                />
+                <DatePicker id="date" name="date" required defaultValue={v.date ?? initial.date} error={err.date} />
               </Field>
               <Field id="note" label="Note" hint="Optional." error={err.note}>
                 <Textarea

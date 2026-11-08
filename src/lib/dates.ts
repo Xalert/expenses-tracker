@@ -61,6 +61,17 @@ export function addDays(date: string, days: number): string {
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
 }
 
+/**
+ * Move a `YYYY-MM-DD` date by `delta` months, keeping the day of the month where it exists and clamping it to
+ * the target month's last day otherwise ("2026-01-31" + 1 → "2026-02-28").
+ */
+export function addMonths(date: string, delta: number): string {
+  if (!isValidDate(date)) throw new Error(`Invalid date: ${date}`);
+  const month = shiftMonth(date.slice(0, 7), delta);
+  const last = Number(monthRange(month).to.slice(8));
+  return `${month}-${pad(Math.min(Number(date.slice(8)), last))}`;
+}
+
 /** Display a `YYYY-MM-DD` date, e.g. "5 Nov 2026". */
 export function formatDate(date: string): string {
   if (!isValidDate(date)) return date;

@@ -1,6 +1,6 @@
 import Form from "next/form";
 import Link from "next/link";
-import { Button, Card, Field, Input, Select } from "@/components/ui";
+import { Button, Card, DatePicker, Field, Input, Select } from "@/components/ui";
 import { hasFilters, type ListParams } from "./list-params";
 
 type Option = { id: number; name: string };
@@ -86,10 +86,10 @@ export function TransactionFilters({
             </Select>
           </Field>
           <Field id="filter-from" label="From">
-            <Input id="filter-from" name="from" type="date" defaultValue={params.from ?? ""} />
+            <DatePicker id="filter-from" name="from" allowEmpty defaultValue={params.from ?? ""} />
           </Field>
           <Field id="filter-to" label="To">
-            <Input id="filter-to" name="to" type="date" defaultValue={params.to ?? ""} />
+            <DatePicker id="filter-to" name="to" allowEmpty align="end" defaultValue={params.to ?? ""} />
           </Field>
           <Field id="filter-q" label="Note contains" className="col-span-2 lg:col-span-1">
             <Input id="filter-q" name="q" type="search" maxLength={200} defaultValue={params.q ?? ""} />
