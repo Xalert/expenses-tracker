@@ -11,9 +11,9 @@ export default async function LoginPage() {
   await redirectIfSignedIn();
   return (
     <Card>
-      <CardBody className="space-y-6 py-6 sm:px-6">
+      <CardBody className="space-y-6 px-5! py-7! sm:px-7!">
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Sign in</h1>
+          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Sign in</h1>
           <p className="mt-1 text-sm text-muted-foreground">Welcome back. Enter your details to continue.</p>
         </div>
         <LoginForm />

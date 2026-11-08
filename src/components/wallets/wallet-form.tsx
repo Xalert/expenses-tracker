@@ -104,7 +104,7 @@ export function WalletForm(props: WalletFormProps) {
       ) : (
         <div className="space-y-1.5">
           <p className="text-sm font-medium text-foreground">Currency</p>
-          <p className="flex h-10 items-center rounded-lg border border-border bg-surface-muted px-3 text-sm text-muted-foreground">
+          <p className="flex h-11 items-center rounded-xl border border-border bg-surface-muted px-3.5 text-sm text-muted-foreground">
             {props.currencyLabel}
           </p>
           <p className="text-xs text-muted-foreground">The currency of a wallet can&apos;t be changed.</p>

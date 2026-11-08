@@ -15,7 +15,7 @@ import {
 import { getDashboard } from "@/server/dashboard";
 import { createTransaction, getTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer, getTransfer } from "@/server/transfers";
-import { createWallet } from "@/server/wallets";
+import { archiveWallet, createWallet } from "@/server/wallets";
 import { isUniqueViolation } from "@/server/_validate";
 import { makeUser, useFreshDb } from "./helpers";
 
@@ -75,6 +75,48 @@ describe("listCategoriesWithUsage", () => {
     ]);
     expect(usage(alice.id)).toMatchObject({ "expense:Food": 2, "income:Salary": 1, "expense:Bills": 0, "expense:coffee": 0 });
     expect(Object.values(usage(bob.id)).every((n) => n === 0)).toBe(true);
+  });
+});
+
+describe("listCategoriesWithUsage with a month and currency", () => {
+  const byName = (rows: ReturnType<typeof listCategoriesWithUsage>) =>
+    Object.fromEntries(rows.map((c) => [`${c.kind}:${c.name}`, [c.transactionCount, c.monthCount, c.monthAmountMinor]]));
+
+  it("adds the month's count over all currencies and its amount in the chosen currency only", () => {
+    const eur = createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
+    const old = createWallet(alice.id, { name: "Old", currency: "EUR", initialBalanceMinor: 0 });
+    const usd = createWallet(alice.id, { name: "Dollars", currency: "USD", initialBalanceMinor: 0 });
+    createTransaction(alice.id, expense(eur.id, alice.cat("Food"), 100, "2026-03-01"));
+    createTransaction(alice.id, expense(old.id, alice.cat("Food"), 40, "2026-03-31"));
+    createTransaction(alice.id, expense(usd.id, alice.cat("Food"), 7000, "2026-03-15"));
+    createTransaction(alice.id, expense(eur.id, alice.cat("Food"), 9, "2026-02-28"));
+    createTransaction(alice.id, expense(eur.id, alice.cat("Food"), 8, "2026-04-01"));
+    createTransaction(alice.id, income(usd.id, alice.cat("Salary"), 5000, "2026-03-10"));
+    createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: old.id, amountMinor: 50, date: "2026-03-05" });
+    archiveWallet(alice.id, old.id);
+    createTransaction(bob.id, expense(createWallet(bob.id, { name: "B", currency: "EUR", initialBalanceMinor: 0 }).id, bob.cat("Food"), 1, "2026-03-02"));
+
+    expect(byName(listCategoriesWithUsage(alice.id, { month: "2026-03", currency: "EUR" }))).toMatchObject({
+      "expense:Food": [5, 3, 140],
+      "income:Salary": [1, 1, 0],
+      "expense:Bills": [0, 0, 0],
+    });
+    expect(byName(listCategoriesWithUsage(alice.id, { month: "2026-03", currency: "USD" }))).toMatchObject({
+      "expense:Food": [5, 3, 7000],
+      "income:Salary": [1, 1, 5000],
+    });
+    // A month without a currency counts but has no amounts; no options at all keeps the old figures with zeros.
+    expect(byName(listCategoriesWithUsage(alice.id, { month: "2026-03" }))).toMatchObject({ "expense:Food": [5, 3, 0] });
+    expect(byName(listCategoriesWithUsage(alice.id, { currency: "EUR" }))).toMatchObject({ "expense:Food": [5, 0, 0] });
+    expect(byName(listCategoriesWithUsage(alice.id))).toMatchObject({ "expense:Food": [5, 0, 0] });
+    expect(listCategoriesWithUsage(alice.id, { month: "2026-03" }).map((c) => c.id)).toEqual(
+      listCategories(alice.id).map((c) => c.id),
+    );
+  });
+
+  it("rejects an invalid month or currency", () => {
+    expectServiceError(() => listCategoriesWithUsage(alice.id, { month: "2026-13" }), "VALIDATION", "month");
+    expectServiceError(() => listCategoriesWithUsage(alice.id, { month: "2026-03", currency: "eur" }), "VALIDATION", "currency");
   });
 });
 

@@ -1,12 +1,20 @@
 import "server-only";
 import { and, asc, count, eq, ne, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, type CategoryKind } from "@/db/schema";
+import { categories, transactions, wallets, type CategoryKind } from "@/db/schema";
+import { isValidCurrency } from "@/lib/currencies";
+import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { isUniqueViolation, normalizeName } from "./_validate";
 
 export type CategoryView = { id: number; name: string; kind: CategoryKind };
 export type CategoryWithUsage = CategoryView & { transactionCount: number };
+export type CategoryWithMonthUsage = CategoryWithUsage & {
+  /** Transactions in `opts.month`, every currency (0 without a month). */
+  monthCount: number;
+  /** Their total in `opts.currency` only (0 without a month or currency). */
+  monthAmountMinor: number;
+};
 
 export const MAX_CATEGORY_NAME_LENGTH = 40;
 
@@ -33,17 +41,37 @@ export function listCategories(userId: number, kind?: CategoryKind): CategoryVie
     .all();
 }
 
-/** All the user's categories with how many transactions use each; same order as `listCategories`. */
-export function listCategoriesWithUsage(userId: number): CategoryWithUsage[] {
+/**
+ * All the user's categories with how many transactions use each; same order as `listCategories`. With
+ * `opts.month` also the month's count (all currencies) and, with `opts.currency`, the month's amount in it.
+ */
+export function listCategoriesWithUsage(
+  userId: number,
+  opts: { month?: string; currency?: string } = {},
+): CategoryWithMonthUsage[] {
+  if (opts.month !== undefined && !isValidMonth(opts.month)) {
+    throw new ServiceError("VALIDATION", "Invalid month.", "month");
+  }
+  if (opts.currency !== undefined && (typeof opts.currency !== "string" || !isValidCurrency(opts.currency))) {
+    throw new ServiceError("VALIDATION", "Choose a valid currency.", "currency");
+  }
+  const range = opts.month !== undefined ? monthRange(opts.month) : null;
+  const inMonth = range
+    ? sql`${transactions.date} >= ${range.from} and ${transactions.date} <= ${range.to}`
+    : sql`0`;
+  const inCurrency = opts.currency !== undefined ? sql`${wallets.currency} = ${opts.currency}` : sql`0`;
   return getDb()
     .select({
       id: categories.id,
       name: categories.name,
       kind: categories.kind,
       transactionCount: sql<number>`count(${transactions.id})`,
+      monthCount: sql<number>`coalesce(sum(case when ${inMonth} then 1 else 0 end), 0)`,
+      monthAmountMinor: sql<number>`coalesce(sum(case when ${inMonth} and ${inCurrency} then ${transactions.amountMinor} else 0 end), 0)`,
     })
     .from(categories)
     .leftJoin(transactions, and(eq(transactions.categoryId, categories.id), eq(transactions.userId, userId)))
+    .leftJoin(wallets, eq(wallets.id, transactions.walletId))
     .where(eq(categories.userId, userId))
     .groupBy(categories.id)
     .orderBy(...categoryOrder)

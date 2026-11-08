@@ -27,3 +27,19 @@ export function displayName(user: { username: string; firstName: string | null; 
   const full = [user.firstName, user.lastName].filter(Boolean).join(" ");
   return full || user.username;
 }
+
+/**
+ * Two letters for the account button: the first letters of the first and last word of the display name
+ * ("Ana Maria Pop" → "AP"), or the first two letters of a single word ("alex.ungur" → "AU" because `.`, `_` and `-`
+ * separate words too; "demo" → "DE"). Uppercased; never empty.
+ */
+export function initials(name: string): string {
+  const words = name
+    .trim()
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((w) => Array.from(w));
+  if (words.length === 0) return "?";
+  const letters = words.length === 1 ? words[0].slice(0, 2) : [words[0][0], words[words.length - 1][0]];
+  return letters.join("").toLocaleUpperCase();
+}

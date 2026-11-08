@@ -119,7 +119,7 @@ function PopoverPanel({
       role={role}
       aria-label={ariaLabel}
       className={cn(
-        "absolute top-full z-30 mt-2 rounded-xl border border-border bg-surface p-3 text-foreground",
+        "absolute top-full z-30 mt-2 rounded-2xl border border-border bg-surface p-3 text-foreground",
         "shadow-lg shadow-black/10 dark:shadow-black/50",
         align === "end" ? "right-0" : "left-0",
         className,

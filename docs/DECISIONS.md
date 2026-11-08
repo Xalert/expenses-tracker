@@ -179,8 +179,8 @@ Added 2026-11-08.
 
 | Decision | Why | Decided by |
 |---|---|---|
-| Sidebar on desktop, bottom tab bar on mobile | Thumb-reachable on phones | planner |
-| The mobile bottom bar stops at five entries; "Import & export" lives in the top bar | Five entries are already tight at 375px | built |
+| ~~Sidebar on desktop, bottom tab bar on mobile~~ (superseded by the redesign's top menu, built in step 1) | Thumb-reachable on phones | planner |
+| ~~The mobile bottom bar stops at five entries; "Import & export" lives in the top bar~~ (superseded, as above) | Five entries are already tight at 375px | built |
 | Archive and delete are on each wallet's own page, not in the wallet list | Keeps destructive actions one step away from a casual tap | built |
 | The currency picker is a native `<select>` with common currencies first | Works everywhere with no dependency; typing a code jumps to it | built |
 | Deleting uses the browser's native confirmation dialog | No modal library | built |
@@ -191,6 +191,45 @@ Added 2026-11-08.
 | An empty optional `DatePicker` (`allowEmpty`, the transaction filters) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
+
+### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
+
+Chosen on the Design canvas https://claude.ai/artifact/HYiCKKzqCayiQHUjZQc3gP after three rounds of options. The
+first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry bar) are superseded once it is built.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| A real layout change, not a re-theme | The owner rejected a first pass that only re-coloured the existing layout ("just a new theme") | owner |
+| The "Midnight" layout: top menu, per-day bars + running total on Overview / Transactions / wallet pages, insight cards, day-grouped lists, floating Add | Picked from fifteen directions (statement tables, three-pane workspace, calendar grid, bento tiles, wallet columns and mixes of them); the owner liked this one's dashboard, transaction list and top menu | owner |
+| Light theme "Sand & Terracotta", dark theme "Graphite & Coral", switched by `prefers-color-scheme` | Picked from five palettes on the same layout | owner |
+| Accent `#BC522C` and income-soft `#EDF4EE` instead of the canvas's `#C2562F` / `#E7F0E8` | The canvas values gave 4.50:1 and 4.47:1; the adjusted ones pass 4.5:1 and look the same | planner |
+| Plus Jakarta Sans through `next/font/google` | The font of the chosen design; `next/font` downloads it at build time and serves it from the app, so a self-hosted instance never calls Google at runtime (the Docker build already needs network for npm) | planner |
+| No sidebar and no bottom tab bar; on phones the menu is a horizontally scrolling row of pills under the top bar | Matches the chosen design; removes the 375px squeeze of the five-entry bar and gives Import & export a normal menu place | planner |
+| Add entry, New wallet and Edit wallet open as dialogs via parallel + intercepting routes; their URLs still render full pages | Matches in-place editing; keeping the URLs keeps reloads, new tabs, `?wallet=&kind=` links and no-JS use working | planner |
+| Transactions are edited in place (a row opens into a form); the edit pages stay for direct links and no-JS | The owner picked the design whose rows open in place over side panels | owner |
+| /transactions shows the current month by default ("All time" in the month chip) | The day strip and day groups need a month; a long all-time list was rarely what was wanted | planner |
+| Charts show one currency at a time with a currency switch; the default is the month's busiest currency | There is no conversion; mixing currencies on one axis would be meaningless | planner |
+| Expense amounts in lists use the text colour, not red; a coloured dot marks the kind | A list of expenses all in red reads as alarm; income stays green | planner |
+| Charts are hand-built (CSS bars + inline SVG lines), no chart library | Three small chart shapes; the project has no UI dependencies | planner |
+| "No-spend days" and "pace vs last month" are new figures on Overview | Part of the chosen design; computed from existing data, no schema change | owner |
+| Wallet pages show the balance after each day; the wallet list shows each wallet's month change and a balance line | Part of the chosen design; computed from existing data | owner |
+| Unarchive is offered in the wallet list's Archived section | It is not destructive, so the "destructive actions one step away" rule does not apply | planner |
+| The top bar is not sticky | On phones it is two rows (about 110px); pinning it would cost that much of every screen. The Add button is the one control that stays in reach | built (step 1) |
+| The menu highlights the page behind a dialog, not the URL (`useSelectedLayoutSegment()` of the `children` slot) | With `/transactions/new` open over Wallets, highlighting Transactions would point at a page that is not on screen | built (step 1) |
+| A page changes the Add target by rendering its own `<AddButton href>`; the shell's default hides itself through a CSS `:has()` rule, and the N shortcut follows whichever button is shown | Keeps the layout a Server Component with no per-page context or client state, works without JavaScript, and the shortcut can never disagree with the visible button | built (step 1) |
+| The `@modal` slot has a null `page.tsx` at every non-dialog `(app)` route (a test enforces it), and `Dialog` also hides itself once the URL path leaves the one it opened at | A parallel slot keeps stale content on soft navigation; in `next dev` reopening the same dialog after leaving it was then ignored. The documented catch-all `@modal/[...catchAll]` makes Next 16's strict route matching reject `/login` and `/register`. The path check is a second guard that also covers a route someone forgets | built (step 1) |
+| Each dialog route's body lives in one component next to its full page (`new-entry.tsx`, `new-wallet.tsx`, `edit-wallet.tsx`), used by the page and by its `@modal` copy | The full page and the dialog must never drift apart | built (step 1) |
+| The variable Plus Jakarta Sans file (200–800 in one file) with the `latin-ext` subset | Fewer files than one per weight; `latin-ext` covers Romanian and other European diacritics in names and notes | built (step 1) |
+| Account-button initials: first letters of the first and last word of the display name, or the first two letters of a one-word name; `.`, `_` and `-` split words too | Most accounts show their user ID (`alex.ungur` → "AU", `demo` → "DE") | built (step 1) |
+| `Card`, `Button`, `Input`/`Select`/`DatePicker` and `PageHeader` took the new shapes in step 1 (pills, 20px cards, 44px fields, 28px titles) | Every later step builds on them; restyling them once avoids each screen doing it | built (step 1) |
+| The auth pages' decorative bar row is 30 static `aria-hidden` divs in `--surface-muted`, every seventh in `--accent-soft` | An echo of the per-day charts that never competes with the form | built (step 1) |
+| `pickDefaultCurrency` counts archived wallets when finding the month's busiest currency, so for a past month it can return a currency that `listUserCurrencies` (active only) leaves out; the currency switch must show the selected value even when it is not in that list | Every other per-currency figure includes archived wallets, and `?currency=` already accepts any currency the user holds a wallet in; a past month spent from a since-archived wallet should open on that spending, not on zeros | built |
+| Day N is 0 for a future month: pace and no-spend days are zeros, `getWalletMonth.days` is empty | The spec defined N only for current and past months; a future month has no elapsed days | built |
+| A month's income, expenses, net, top category and wallet in / out cover the whole month, including entries dated after today; only the pace, no-spend days and the per-day lists stop at day N | "This month" read literally. A future-dated entry in the current month therefore shows in the totals but not in the balance-after days, so `opening + in − out` can differ from the last day's closing balance until that date arrives | built |
+| The `month` filter is ignored as soon as either `from` or `to` is given (it is still validated) | "Explicit from/to override month": mixing a month bound with one explicit bound would give a range the user never chose. Clicking a day bar sets both | built |
+| The largest day is the earliest on a tie and is chosen over the whole month, not only days 1..N; its label falls back to the category, then to an empty string | Ties and future-dated entries were unspecified; the chart draws every day of the month | built |
+| A currency argument must be a valid uppercase ISO code (`isValidCurrency`), else VALIDATION; a valid code the user holds no wallet in gives zeros rather than an error | The page already falls back when `?currency=` names no wallet of the user; the service only rejects what cannot be a currency | built |
+| `listCategoriesWithUsage` returns a new `CategoryWithMonthUsage` type and leaves `CategoryWithUsage` as it was | Code that builds `CategoryWithUsage` values (fixtures, components) keeps compiling; existing callers get the extra fields as zeros | built |
 
 ### Process
 
@@ -261,9 +300,18 @@ Added 2026-11-08.
   the preview (the confirmation re-validates and reports what it actually did).
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
-- The mobile tab bar is tight at 375px: "Transactions" uses 69 of its 75 pixels.
-- Popovers never open upwards: near the bottom of the screen (or behind the mobile tab bar) the calendar's lower
-  rows need a scroll to reach.
+- Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
+- **Until redesign step 6, the Add / wallet dialogs still redirect after a save** (Add → `/transactions`, a
+  wallet → its page) instead of closing over the page they were opened from, and their Cancel is a link to that
+  page. Browser Back after such a save reopens the dialog (it is still in the history). The Add form also still
+  draws its own card inside the dialog.
+- The bottom sheet's drag handle is decorative: there is no swipe-to-close (✕, Escape or the scrim close it).
+- **Unexplained `next dev` reload loop seen while verifying step 1:** in the real checkout the dev server several
+  times got into a state where every load of some page logged "Compiled in 1ms" and the browser reloaded endlessly
+  (Fast Refresh). Restarting it cleared it for a while. The same tree copied to another folder, and `HEAD` copied
+  the same way, never did it over the same page sequence, and `next start` never did. Suspected: other processes
+  touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
+  confirmed. If it shows up again, restart `npm run dev`.
 - The date picker's month view has no button back to the day view; picking a month or pressing Escape returns.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
 - `sharp` is still present in the Docker image although the image optimiser is off.

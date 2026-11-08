@@ -157,11 +157,12 @@ the user ID or the email. There is no profile screen yet, so these cannot be cha
 
 ```
 src/app/(auth)/            login + register pages and their Server Actions
-src/app/(app)/             signed-in pages: dashboard, wallets, transactions, categories, data (import/export)
+src/app/(app)/             signed-in pages: overview, wallets, transactions, categories, data (import/export);
+                           @modal holds the dialog versions of Add, New wallet and Edit wallet
 src/app/api/               health check + export downloads
 src/server/                service layer: domain rules, every query scoped by userId
 src/db/  drizzle/          Drizzle schema + connection (auto-migrate); SQL migrations
-src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell
+src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell (top menu, account menu, Add button)
 scripts/                   db:seed and db:reset
 tools/statement-importer/  the claude.ai Statement Importer page
 tests/  docs/              vitest suites; spec, decisions, self-hosting, statement importer

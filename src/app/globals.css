@@ -1,70 +1,102 @@
 @import "tailwindcss";
 
 /*
- * Theme tokens. Use the semantic utilities, never raw palette colours, so light/dark just work:
- *   surfaces   bg-background  bg-surface  bg-surface-muted   border-border
+ * Theme tokens: Sand (light) and Graphite (dark), see docs/SPEC.md "UI direction". Use the semantic utilities,
+ * never raw palette colours, so light/dark just work:
+ *   surfaces   bg-background  bg-surface  bg-surface-muted  bg-surface-raised  bg-surface-open  bg-field
+ *              border-border  border-border-strong
  *   text       text-foreground  text-muted-foreground
- *   accent     bg-accent text-accent-foreground  bg-accent-soft text-accent  ring-ring
- *   money      text-income  text-expense  text-transfer  (+ bg-income-soft / bg-expense-soft / bg-transfer-soft)
+ *   accent     bg-accent text-accent-foreground hover:bg-accent-hover  bg-accent-soft text-accent-soft-foreground
+ *              text-accent  outline-ring
+ *   money      text-income  text-expense  text-transfer  (+ bg-income-soft / bg-expense-soft / bg-transfer-soft,
+ *              bg-expense-dot)
  *   danger     text-danger  bg-danger  bg-danger-soft
+ *   charts     bg-chart-future  bg-chart-ramp-1 … bg-chart-ramp-5 (decorative only, never behind text)
+ *   dialogs    bg-scrim
  * Dark mode follows prefers-color-scheme.
  */
 :root {
-  --background: oklch(0.985 0.002 247.8); /* slate-50 */
-  --surface: #ffffff;
-  --surface-muted: oklch(0.968 0.007 247.9); /* slate-100 */
-  --border: oklch(0.929 0.013 255.5); /* slate-200 */
-  --border-strong: oklch(0.869 0.022 252.9); /* slate-300 */
-  --foreground: oklch(0.208 0.042 265.8); /* slate-900 */
-  --muted-foreground: oklch(0.446 0.043 257.3); /* slate-600 */
+  --background: #f4efe7;
+  --surface: #fffcf7;
+  --surface-muted: #efe7db;
+  --surface-raised: #efe4d6;
+  --surface-open: #fbf4ea;
+  --field: #ffffff;
+  --border: #e5dacb;
+  --border-strong: #cdbfae;
+  --foreground: #2b241f;
+  --muted-foreground: #6e6257;
 
-  --accent: oklch(0.511 0.262 276.966); /* indigo-600 */
-  --accent-hover: oklch(0.457 0.24 277.023); /* indigo-700 */
+  --accent: #bc522c;
+  --accent-hover: #a8461f;
   --accent-foreground: #ffffff;
-  --accent-soft: oklch(0.962 0.018 272.314); /* indigo-50 */
+  --accent-soft: #f6e1d6;
+  --accent-soft-foreground: #8e3a1b;
 
-  --income: oklch(0.508 0.118 165.612); /* emerald-700 */
-  --income-soft: oklch(0.979 0.021 166.113); /* emerald-50 */
-  --expense: oklch(0.514 0.222 16.935); /* rose-700 */
-  --expense-soft: oklch(0.969 0.015 12.422); /* rose-50 */
-  --transfer: oklch(0.5 0.134 242.749); /* sky-700 */
-  --transfer-soft: oklch(0.977 0.013 236.62); /* sky-50 */
+  --income: #2f7a55;
+  --income-soft: #edf4ee;
+  --expense: #b5452a;
+  --expense-soft: #f7e3da;
+  --expense-dot: #d9824f;
+  --transfer: #6e6257;
+  --transfer-soft: #efe7db;
 
-  --danger: oklch(0.577 0.245 27.325); /* red-600 */
-  --danger-hover: oklch(0.505 0.213 27.518); /* red-700 */
-  --danger-soft: oklch(0.971 0.013 17.38); /* red-50 */
+  --danger: #b5452a;
+  --danger-hover: #9a3a22; /* not in the token table: only the solid danger button's hover */
+  --danger-soft: #f7e3da;
 
-  --ring: oklch(0.585 0.233 277.117); /* indigo-500 */
+  --chart-future: #efe7db;
+  --chart-ramp-1: #bc522c;
+  --chart-ramp-2: #d9824f;
+  --chart-ramp-3: #e8b48c;
+  --chart-ramp-4: #cdbfae;
+  --chart-ramp-5: #8c7e70;
+
+  --scrim: rgba(43, 36, 31, 0.45);
+  --ring: var(--accent);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: oklch(0.129 0.042 264.695); /* slate-950 */
-    --surface: oklch(0.208 0.042 265.755); /* slate-900 */
-    --surface-muted: oklch(0.249 0.042 265.8);
-    --border: oklch(0.279 0.041 260.031); /* slate-800 */
-    --border-strong: oklch(0.372 0.044 257.287); /* slate-700 */
-    --foreground: oklch(0.968 0.007 247.896); /* slate-100 */
-    --muted-foreground: oklch(0.704 0.04 256.788); /* slate-400 */
+    --background: #141518;
+    --surface: #1d1e22;
+    --surface-muted: #25272c;
+    --surface-raised: #2a2c31;
+    --surface-open: #24262b;
+    --field: #141518;
+    --border: #2e3036;
+    --border-strong: #4e515a;
+    --foreground: #ededef;
+    --muted-foreground: #a3a5ac;
 
-    --accent: oklch(0.673 0.182 276.935); /* indigo-400 */
-    --accent-hover: oklch(0.785 0.115 274.713); /* indigo-300 */
-    --accent-foreground: oklch(0.129 0.042 264.695);
-    --accent-soft: oklch(0.257 0.09 281.288); /* indigo-950 */
+    --accent: #ff7a59;
+    --accent-hover: #ff9b80;
+    --accent-foreground: #141518;
+    --accent-soft: #3a2620;
+    --accent-soft-foreground: #ffb8a3;
 
-    --income: oklch(0.765 0.177 163.223); /* emerald-400 */
-    --income-soft: oklch(0.262 0.051 172.552); /* emerald-950 */
-    --expense: oklch(0.712 0.194 13.428); /* rose-400 */
-    --expense-soft: oklch(0.271 0.105 12.094); /* rose-950 */
-    --transfer: oklch(0.746 0.16 232.661); /* sky-400 */
-    --transfer-soft: oklch(0.293 0.066 243.157); /* sky-950 */
+    --income: #6cd49a;
+    --income-soft: #1b2a22;
+    --expense: #ff9b80;
+    --expense-soft: #3a2620;
+    --expense-dot: #ff9b80;
+    --transfer: #a3a5ac;
+    --transfer-soft: #25272c;
 
-    --danger: oklch(0.704 0.191 22.216); /* red-400 */
-    --danger-hover: oklch(0.808 0.114 19.571); /* red-300 */
-    --danger-soft: oklch(0.258 0.092 26.042); /* red-950 */
+    --danger: #ff9b80;
+    --danger-hover: #ffb8a3;
+    --danger-soft: #3a2620;
 
-    --ring: oklch(0.673 0.182 276.935);
+    --chart-future: #25272c;
+    --chart-ramp-1: #ff7a59;
+    --chart-ramp-2: #d9694e;
+    --chart-ramp-3: #a85643;
+    --chart-ramp-4: #7a4639;
+    --chart-ramp-5: #4e515a;
+
+    --scrim: rgba(0, 0, 0, 0.6);
+    --ring: var(--accent);
     color-scheme: dark;
   }
 }
@@ -73,6 +105,9 @@
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-muted: var(--surface-muted);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-open: var(--surface-open);
+  --color-field: var(--field);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
@@ -81,18 +116,30 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
   --color-income: var(--income);
   --color-income-soft: var(--income-soft);
   --color-expense: var(--expense);
   --color-expense-soft: var(--expense-soft);
+  --color-expense-dot: var(--expense-dot);
   --color-transfer: var(--transfer);
   --color-transfer-soft: var(--transfer-soft);
   --color-danger: var(--danger);
   --color-danger-hover: var(--danger-hover);
   --color-danger-soft: var(--danger-soft);
+  --color-chart-future: var(--chart-future);
+  --color-chart-ramp-1: var(--chart-ramp-1);
+  --color-chart-ramp-2: var(--chart-ramp-2);
+  --color-chart-ramp-3: var(--chart-ramp-3);
+  --color-chart-ramp-4: var(--chart-ramp-4);
+  --color-chart-ramp-5: var(--chart-ramp-5);
+  --color-scrim: var(--scrim);
   --color-ring: var(--ring);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* --font-jakarta is set on <html> by next/font (src/app/layout.tsx); the rest is the fallback stack. */
+  --font-sans:
+    var(--font-jakarta), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -113,4 +160,13 @@
     outline: 2px solid var(--color-ring);
     outline-offset: 2px;
   }
+}
+
+/*
+ * The shell renders the floating Add button with data-add-button="default". A page that needs a different target
+ * (the wallet page preselects its wallet) renders its own <AddButton href=…>, marked "page", and the default one
+ * steps aside. Unlayered so it beats the button's display utility; works without JavaScript.
+ */
+body:has([data-add-button="page"]) [data-add-button="default"] {
+  display: none;
 }

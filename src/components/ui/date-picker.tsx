@@ -62,7 +62,7 @@ export function DatePicker({
         ref={trigger}
         type="button"
         id={id}
-        className={cn(controlClasses, "flex h-10 items-center gap-2 text-left")}
+        className={cn(controlClasses, "flex h-11 items-center gap-2 text-left")}
         // A select-only combobox: the label names it, its text is the value, and (unlike a plain button) the role
         // supports aria-invalid / aria-required, so <Field> errors still attach the way they do for <Input>.
         role="combobox"

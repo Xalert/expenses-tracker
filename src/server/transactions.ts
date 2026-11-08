@@ -3,10 +3,10 @@ import { and, desc, eq, gte, inArray, lte, ne, sql, type SQL } from "drizzle-orm
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
-import { isValidDate } from "@/lib/dates";
+import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { assertDate, assertId, assertPositiveAmount, normalizeNote } from "./_validate";
-import { getOwnedWalletRow } from "./wallets";
+import { getOwnedWalletRow, signedAmountSql } from "./wallets";
 
 export type TransactionView = {
   id: number;
@@ -31,6 +31,8 @@ export type TransactionFilters = {
   walletId?: number;
   kind?: "expense" | "income" | "transfer";
   categoryId?: number;
+  /** `YYYY-MM`: the month's first to last day. Ignored (but still validated) when `from` or `to` is given. */
+  month?: string;
   /** Inclusive `YYYY-MM-DD`. */
   from?: string;
   /** Inclusive `YYYY-MM-DD`. */
@@ -148,6 +150,13 @@ export function filterConditions(userId: number, f: TransactionFilters): SQL {
   if (f.categoryId !== undefined) {
     conds.push(eq(transactions.categoryId, assertId(f.categoryId, "categoryId", "category")));
   }
+  if (f.month !== undefined) {
+    if (!isValidMonth(f.month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
+    if (f.from === undefined && f.to === undefined) {
+      const range = monthRange(f.month);
+      conds.push(gte(transactions.date, range.from), lte(transactions.date, range.to));
+    }
+  }
   if (f.from !== undefined) {
     if (!isValidDate(f.from)) throw new ServiceError("VALIDATION", "Invalid start date.", "from");
     conds.push(gte(transactions.date, f.from));
@@ -178,6 +187,31 @@ export function listTransactions(
   const total =
     getDb().select({ n: sql<number>`count(*)` }).from(transactions).where(where).get()?.n ?? 0;
   return { items: rows.map(toView), total };
+}
+
+export type DayTotal = { date: string; currency: string; netMinor: number };
+
+/**
+ * Net amount per (date, currency) over ALL matches of `filters` on `dates` (limit/offset ignored), for the day
+ * headers of a paginated list. Transfer legs count as money out of / into their own wallet. Only pairs that have
+ * entries are returned, by date desc then currency. Malformed dates in `dates` are ignored.
+ */
+export function listDayTotals(userId: number, filters: TransactionFilters, dates: string[]): DayTotal[] {
+  const where = filterConditions(userId, filters);
+  const wanted = [...new Set(dates.filter((d) => isValidDate(d)))];
+  if (wanted.length === 0) return [];
+  return getDb()
+    .select({
+      date: transactions.date,
+      currency: wallets.currency,
+      netMinor: sql<number>`sum(${signedAmountSql})`,
+    })
+    .from(transactions)
+    .innerJoin(wallets, eq(wallets.id, transactions.walletId))
+    .where(and(where, inArray(transactions.date, wanted)))
+    .groupBy(transactions.date, wallets.currency)
+    .orderBy(desc(transactions.date), wallets.currency)
+    .all();
 }
 
 /** One owned transaction (including transfer legs), or null. */

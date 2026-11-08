@@ -6,20 +6,20 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
 
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium whitespace-nowrap transition-colors " +
+  "inline-flex items-center justify-center gap-2 rounded-full font-semibold whitespace-nowrap transition-colors " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring " +
   "disabled:pointer-events-none disabled:opacity-60";
 
 const variants: Record<ButtonVariant, string> = {
-  primary: "bg-accent text-accent-foreground hover:bg-accent-hover shadow-sm",
-  secondary: "border border-border-strong bg-surface text-foreground hover:bg-surface-muted",
+  primary: "bg-accent text-accent-foreground hover:bg-accent-hover",
+  secondary: "border border-border bg-transparent text-foreground hover:bg-surface-muted",
   ghost: "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
-  danger: "bg-danger text-white hover:bg-danger-hover shadow-sm dark:text-background",
+  danger: "bg-danger text-white hover:bg-danger-hover dark:text-background",
 };
 
 const sizes: Record<ButtonSize, string> = {
-  sm: "h-8 px-3 text-sm",
-  md: "h-10 px-4 text-sm",
+  sm: "h-9 px-3.5 text-sm",
+  md: "h-11 px-5 text-sm",
 };
 
 export function buttonClasses(opts: { variant?: ButtonVariant; size?: ButtonSize; className?: string } = {}) {

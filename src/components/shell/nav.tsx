@@ -1,112 +1,78 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useSelectedLayoutSegment } from "next/navigation";
+import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/cn";
-import { DataIcon, HomeIcon, ListIcon, PlusIcon, TagIcon, WalletIcon } from "./icons";
 
+/**
+ * The main menu, in order. A new top-level destination is one more entry here; there is no other nav to update.
+ * `segment` is the first route segment under `(app)` (`null` for the Overview at `/`).
+ */
 export const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: HomeIcon },
-  { href: "/transactions", label: "Transactions", icon: ListIcon },
-  { href: "/wallets", label: "Wallets", icon: WalletIcon },
-  { href: "/categories", label: "Categories", icon: TagIcon },
-] as const;
+  { href: "/", label: "Overview", segment: null },
+  { href: "/transactions", label: "Transactions", segment: "transactions" },
+  { href: "/wallets", label: "Wallets", segment: "wallets" },
+  { href: "/categories", label: "Categories", segment: "categories" },
+  { href: "/data", label: "Import & export", segment: "data" },
+] as const satisfies readonly { href: string; label: string; segment: string | null }[];
 
-/** Sidebar-only entries, below the main ones. On mobile the bottom bar is full: these live in the top bar. */
-export const SECONDARY_NAV_ITEMS = [{ href: "/data", label: "Import & export", icon: DataIcon }] as const;
-
-function isActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
-  if (href === "/transactions") return pathname === href || (pathname.startsWith(href + "/") && pathname !== "/transactions/new");
-  return pathname === href || pathname.startsWith(href + "/");
+/** The menu entry for the page in the `children` slot, or null for a page outside the menu. */
+export function activeNavHref(segment: string | null): string | null {
+  return NAV_ITEMS.find((item) => item.segment === segment)?.href ?? null;
 }
 
-/** Vertical nav for the desktop sidebar. */
-export function SidebarNav() {
-  const pathname = usePathname();
-  const link = ({ href, label, icon: Icon }: (typeof NAV_ITEMS | typeof SECONDARY_NAV_ITEMS)[number]) => {
-    const active = isActive(pathname, href);
-    return (
-      <Link
-        key={href}
-        href={href}
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-          active ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
-        )}
+/**
+ * The top bar's menu: pills, the active one filled. Below `sm` it is its own row that scrolls sideways (no
+ * wrapping, no "more" menu).
+ *
+ * The active entry follows the page in the layout's `children` slot, not the URL: while a dialog route is
+ * intercepted (`/transactions/new` over `/wallets`), the URL names the dialog but the page behind is still Wallets.
+ */
+export function MainMenu({ className }: { className?: string }) {
+  const segment = useSelectedLayoutSegment();
+  const active = activeNavHref(segment);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // On a phone the active pill can start off-screen ("Import & export"): scroll the row, not the page, to it.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!list || !current || list.scrollWidth <= list.clientWidth) return;
+    const left = current.offsetLeft - list.offsetLeft;
+    const right = left + current.offsetWidth;
+    if (left < list.scrollLeft || right > list.scrollLeft + list.clientWidth) {
+      list.scrollLeft = Math.max(0, right - list.clientWidth + 16);
+    }
+  }, [active]);
+
+  return (
+    <nav aria-label="Main" className={cn("min-w-0", className)}>
+      <ul
+        ref={listRef}
+        className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        <Icon className="size-5" />
-        {label}
-      </Link>
-    );
-  };
-  return (
-    <nav aria-label="Main" className="space-y-1">
-      {NAV_ITEMS.map(link)}
-      <div className="my-3 border-t border-border" role="presentation" />
-      {SECONDARY_NAV_ITEMS.map(link)}
-    </nav>
-  );
-}
-
-/** Fixed bottom tab bar for mobile; the last tab is the "Add transaction" entry point. */
-export function BottomTabs() {
-  const pathname = usePathname();
-  return (
-    <nav
-      aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
-    >
-      <div className="mx-auto flex max-w-md items-stretch">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-          const active = isActive(pathname, href);
+        {NAV_ITEMS.map((item) => {
+          const isActive = item.href === active;
           return (
-            <Link
-              key={href}
-              href={href}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium",
-                active ? "text-accent" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-5" />
-              {label}
-            </Link>
+            <li key={item.href} className="shrink-0">
+              <Link
+                href={item.href}
+                aria-current={isActive ? "page" : undefined}
+                className={cn(
+                  "inline-flex h-9 items-center rounded-full px-3.5 text-sm font-semibold whitespace-nowrap transition-colors",
+                  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                  isActive
+                    ? "bg-surface-raised text-foreground"
+                    : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
+                )}
+              >
+                {item.label}
+              </Link>
+            </li>
           );
         })}
-        <Link
-          href="/transactions/new"
-          aria-current={pathname === "/transactions/new" ? "page" : undefined}
-          className="flex flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium text-accent"
-        >
-          <span className="flex size-7 items-center justify-center rounded-full bg-accent text-accent-foreground">
-            <PlusIcon className="size-4" />
-          </span>
-          Add
-        </Link>
-      </div>
+      </ul>
     </nav>
-  );
-}
-
-/** Mobile top-bar shortcut to /data (the bottom tab bar has no room for a sixth tab at 375px). */
-export function TopBarDataLink() {
-  const pathname = usePathname();
-  const active = isActive(pathname, "/data");
-  return (
-    <Link
-      href="/data"
-      aria-label="Import & export"
-      title="Import & export"
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-        active ? "bg-accent-soft text-accent" : "text-muted-foreground hover:bg-surface-muted hover:text-foreground",
-      )}
-    >
-      <DataIcon className="size-4" />
-    </Link>
   );
 }

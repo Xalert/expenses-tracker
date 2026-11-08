@@ -13,7 +13,7 @@ export function Select({ className, error, id, children, "aria-describedby": des
     <div className="relative">
       <select
         id={id}
-        className={cn(controlClasses, "h-10 appearance-none pr-9", className)}
+        className={cn(controlClasses, "h-11 appearance-none pr-9", className)}
         aria-invalid={error ? true : undefined}
         aria-describedby={cn(describedBy, error && id && `${id}-error`) || undefined}
         {...props}

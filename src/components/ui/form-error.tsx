@@ -6,7 +6,7 @@ export function FormError({ message, className }: { message?: string; className?
   return (
     <div
       role="alert"
-      className={cn("rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger", className)}
+      className={cn("rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger", className)}
     >
       {message}
     </div>

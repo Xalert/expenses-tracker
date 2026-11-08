@@ -12,8 +12,8 @@ export default async function RegisterPage() {
   if (!isRegistrationAllowed()) {
     return (
       <Card>
-        <CardBody className="space-y-4 py-6 sm:px-6">
-          <h1 className="text-xl font-semibold text-foreground">Registration is disabled</h1>
+        <CardBody className="space-y-4 px-5! py-7! sm:px-7!">
+          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Registration is disabled</h1>
           <p className="text-sm text-muted-foreground">
             This server isn’t accepting new accounts. Ask its administrator for access.
           </p>
@@ -28,9 +28,9 @@ export default async function RegisterPage() {
   }
   return (
     <Card>
-      <CardBody className="space-y-6 py-6 sm:px-6">
+      <CardBody className="space-y-6 px-5! py-7! sm:px-7!">
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Create your account</h1>
+          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Create your account</h1>
           <p className="mt-1 text-sm text-muted-foreground">Track spending across all your wallets and currencies.</p>
         </div>
         <RegisterForm />

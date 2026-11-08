@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/cn";
 
 export const controlClasses =
-  "block w-full rounded-lg border border-border-strong bg-surface px-3 text-sm text-foreground shadow-xs " +
+  "block w-full rounded-xl border border-border bg-field px-3.5 text-sm text-foreground " +
   "placeholder:text-muted-foreground/70 " +
   "focus:border-accent focus:outline-2 focus:outline-offset-0 focus:outline-ring/40 " +
   "disabled:cursor-not-allowed disabled:opacity-60 " +
@@ -17,7 +17,7 @@ export function Input({ className, error, id, "aria-describedby": describedBy, .
   return (
     <input
       id={id}
-      className={cn(controlClasses, "h-10", className)}
+      className={cn(controlClasses, "h-11", className)}
       aria-invalid={error ? true : undefined}
       aria-describedby={cn(describedBy, error && id && `${id}-error`) || undefined}
       {...props}

@@ -204,7 +204,7 @@ user ID:
 - Nothing else changes: emails, passwords, wallets, categories, transactions, transfers and sessions are kept
   exactly as they were, and signed-in browsers stay signed in.
 
-The sidebar shows each account's user ID under its name. To list them all on a server:
+The account menu (the initials at the top right) shows each account's user ID under its name. To list them all on a server:
 
 ```bash
 docker compose exec expenses-tracker node -e "console.table(new (require('better-sqlite3'))('/data/app.db',{readonly:true}).prepare('select username, email from users').all())"

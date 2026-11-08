@@ -125,8 +125,15 @@ must be built on Linux for its target platform because better-sqlite3 is a nativ
   work without scripts, which hides the problem until a client-only component (the import panel) is used.
 - **Theme tokens** (`bg-surface`, `text-muted-foreground`, `text-income`, `text-expense`, `text-transfer`, …)
   are defined in `src/app/globals.css` for light and dark; use them instead of raw colours.
-- **The mobile bottom bar is full** at 375px (five entries). New top-level destinations go in the desktop
-  sidebar and the mobile top bar, as `/data` does.
+- **Navigation is one top menu** (no sidebar, no bottom bar). A new top-level destination is one more entry in
+  `NAV_ITEMS` (`src/components/shell/nav.tsx`); below `sm` the menu is a sideways-scrolling row of pills, so it
+  never runs out of room. The floating Add button (`AddButton`) and the **N** shortcut open `/transactions/new`; a
+  page that needs another target renders its own `<AddButton href=…>` and the shell's default steps aside.
+- **Dialog routes** (`/transactions/new`, `/wallets/new`, `/wallets/[id]/edit`) exist twice: the full page and
+  an intercepted copy in `src/app/(app)/@modal/(.)…` rendering the same body component (`new-entry.tsx`,
+  `new-wallet.tsx`, `edit-wallet.tsx` next to each page) inside `Dialog`. Change the body, not one of the copies.
+  Every other `(app)` page needs a null `page.tsx` at the same path under `@modal/` (a parallel slot keeps stale
+  content on soft navigation; a catch-all breaks the `(auth)` pages); `tests/shell.test.tsx` enforces it.
 - **`returnTo` query parameters** must go through `safeReturnTo` (`src/lib/return-to.ts`), the open-redirect guard.
 - **Revalidation:** category and import changes affect every signed-in page, so those actions call
   `revalidatePath("/", "layout")`.

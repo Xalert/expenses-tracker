@@ -117,9 +117,9 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
     `normalizeUserId`, `userIdProblem`, `displayName`). Lookups compare `lower(username)` / `lower(email)`, so an
     email the migration carried over in mixed case is still found and still blocks a duplicate. A user ID problem
     is reported in this order: empty, contains `@`, too short, too long, bad first character, other characters.
-    Desktop sidebar: display name, then the user ID (when it differs from the display name), then the email (when
-    there is one), one per line; mobile top bar: display name with the user ID under it when they differ (the
-    block's tooltip is `<user ID> · <email>`). Long values truncate with an ellipsis and a tooltip.
+    The account menu (top bar, after the redesign; the old sidebar until then): display name, then the user ID
+    (when it differs from the display name), then the email (when there is one), one per line, then Sign out. Long
+    values truncate with an ellipsis and a tooltip.
   - There is no profile screen yet: the user ID, email and names cannot be changed after registration.
 - **Migration of existing accounts** (`drizzle/0001_*`): `email` becomes nullable; `name` is split at the first
   space into `first_name` / `last_name`; `username` is derived from the email's local part, lowercased, with any
@@ -194,7 +194,10 @@ src/
     (app)/data/                                     # /data import & export page + actions.ts (preview / run import)
   components/ui/                                    # primitives, barrel-exported from "@/components/ui"
   components/transaction-list.tsx                   # shared read-only list of TransactionView rows
-  components/shell/  components/brand.tsx           # app shell pieces (nav, icons, sign-out button)
+  components/shell/  components/brand.tsx           # app shell pieces (top menu, account menu, Add button, icons)
+  components/charts/                                # DayBars, RunningLine (redesign)
+  app/(app)/@modal/                                 # intercepted dialog routes: (.)transactions/new, (.)wallets/new, (.)wallets/[id]/edit
+  server/insights.ts                                # per-currency timelines and insight figures (redesign)
   db/schema.ts  db/index.ts                         # schema, connection, auto-migrate
   lib/auth.ts  lib/money.ts  lib/currencies.ts  lib/dates.ts  lib/errors.ts
   lib/form.ts  lib/password.ts  lib/constants.ts  lib/cn.ts  lib/config.ts (env: ALLOW_REGISTRATION, COOKIE_SECURE)
@@ -343,7 +346,60 @@ getDashboard(userId, opts?: { month?: string /* YYYY-MM, default current; invali
   expenseByCategory: { currency; categoryId; categoryName; amountMinor }[];  // for the month on active wallets, largest first
   recent: TransactionView[];                                                 // latest 8, all wallets (archived included)
 }
+
+// insights.ts (redesign) — every figure is for ONE currency; nothing is converted. "Expense" / "income" mean
+// transactions of those kinds (transfers excluded) on all wallets of that currency, archived included, unless a
+// walletId narrows it. Day N = today's day for the current month (server local time), the month's last day for a
+// past month, 0 for a future month (empty arrays / zeros, no error). An invalid `month` → VALIDATION (field `month`);
+// a `currency` that is not a valid uppercase ISO code → VALIDATION (field `currency`); a valid currency the user
+// holds no wallet in just gives zeros.
+pickDefaultCurrency(userId, month): string | null
+//   the currency with the most expense + income entries in the month (archived wallets included, so it can be a
+//   currency held only in archived wallets — the currency switch must show the current value even then); tie or
+//   none → the currency of the active wallet with the most transactions overall (then by code); no active wallets
+//   → null. A `?currency=` the user has no wallet in is ignored (falls back to this).
+listUserCurrencies(userId): string[]                                         // currencies of active wallets, by code
+getMonthTimeline(userId, { month; currency; walletId?; categoryId? }): {    // walletId/categoryId not a positive
+                                                                            // integer → VALIDATION; another user's → zeros
+  days: { date; expenseMinor; incomeMinor }[];   // every calendar day of the month, zeros included
+  previousCumulativeMinor: number[];             // running expense total per day of the previous month (index 0 = day 1),
+                                                 // one entry per day of that month
+  largestDay: { date; amountMinor; label } | null // the month's biggest expense day (earliest on a tie; the whole month,
+                                                 // not only days 1..N) and its largest entry's note, else its category
+}
+getMonthInsights(userId, { month; currency }): {
+  incomeMinor; expenseMinor; netMinor;          // the whole month (future-dated entries included)
+  topCategory: { categoryId; categoryName; amountMinor; sharePercent } | null;   // largest expense category (then by
+                                                // name); sharePercent rounded to a whole percent; null without expenses
+  pace: { day: number; thisMonthMinor; previousMonthMinor };   // day = N; cumulative expenses through day N vs through
+                                                              // min(N, previous month's length) of the previous month
+  noSpendDays: { days; outOf; previousDays; previousOutOf };   // days 1..N with no expense in this currency (outOf = N);
+                                                              // previous* = the same over the whole previous month
+}
+getWalletMonth(userId, walletId, month): {                    // null when the wallet is not the user's (archived works)
+  openingMinor;                     // balance at the start of the month: initial + every entry dated before it
+  inMinor; outMinor;                // the whole month, transfers included (each leg in its own wallet's amount)
+  entryCount; totalEntryCount;      // entries this month / ever
+  days: { date; inMinor; outMinor; closingMinor }[]   // days 1..N; closingMinor = balance after that day
+} | null
+// transactions.ts additions
+listDayTotals(userId, filters: TransactionFilters, dates: string[]): { date; currency; netMinor }[]
+//   net per (date, currency) over ALL matches of the filters on those dates (limit/offset ignored); transfer legs count
+//   as money out / in of their own wallet; only pairs with entries, by date desc then currency; malformed dates ignored
+// TransactionFilters gains `month?: 'YYYY-MM'`: the month's first to last day, unless `from` or `to` is given (then
+// the month is ignored, but still validated: invalid → VALIDATION, field `month`). It applies to the CSV export too.
+// categories.ts change
+type CategoryWithMonthUsage = CategoryWithUsage & { monthCount: number; monthAmountMinor: number }
+listCategoriesWithUsage(userId, opts?: { month?: string; currency?: string }): CategoryWithMonthUsage[]
+//   monthCount over all currencies; monthAmountMinor in opts.currency only (0 without it); both 0 without opts.month.
+//   Invalid month / currency → VALIDATION (field month / currency)
 ```
+
+New Server Actions for in-place editing return form state instead of redirecting:
+`updateTransactionInlineAction(id, prev, formData)`, `updateTransferInlineAction(transferId, prev, formData)` (same
+zod schemas and services as the edit pages; on success `{ ok: true }` + `revalidatePath("/", "layout")`), and the
+Add dialog's create actions gain a `mode: "dialog"` hidden field that makes them return `{ ok: true }` instead of
+redirecting.
 
 `src/lib/money.ts`: `currencyDecimals(code)`, `parseAmount(input: string, currency, opts?: { allowNegative?: boolean }): number | null`
 (accepts `12`, `12.5`, `12,50`, `1 234.56`, `1,234.56`, `1.234,56`; a lone `,` is always the decimal separator; rejects
@@ -406,65 +462,195 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
 - `TransactionList` (`@/components/transaction-list`) `{ items: TransactionView[]; renderActions?: (t) => ReactNode;
   showWallet?: boolean = true; emptyMessage?; className? }` — server-safe `<ul>`; also exports `transactionLabel(t)`
   ("Food", "Transfer → Savings", "Transfer ← Cash"). Wrap it in a `Card` yourself.
-- The shell (`(app)/layout.tsx`) already renders the page container (`max-w-5xl`, padding, bottom padding for the
-  mobile tab bar) — pages just render `PageHeader` + content.
+- The shell (`(app)/layout.tsx`) already renders the top bar, the page container (`max-w-[1240px]`, padding, room
+  at the bottom for the floating Add button) and the `@modal` slot — pages just render `PageHeader` + content.
+- Added by the redesign (see "UI direction" and "Screens"):
+  - `Dialog` (client) `{ title; description?; onClose?; className?; children }` — the modal frame used by the
+    intercepted routes; a bottom sheet below `sm`. As built: `onClose` defaults to `router.back()`; `className`
+    replaces the desktop width (`sm:max-w-xl` by default; the Add dialog uses `sm:max-w-2xl`); the title is an
+    `<h2>` the dialog is labelled by, `description` a line under it (`aria-describedby`). Focus goes to the panel
+    on open and back to the previously focused element on close; Tab / Shift+Tab cycle inside; Escape is handled on
+    `window`, after document-level handlers, so an open popover inside (the date picker) closes first and the
+    dialog stays. The page's scroll is locked on `<html>` (with scrollbar-width compensation). No portal (`fixed`,
+    `z-50`). **It renders nothing once `usePathname()` differs from the path it opened at**: a parallel slot keeps
+    its last content on a soft navigation to a URL it does not match, so a form that redirects on success, or a
+    link inside the dialog, would otherwise leave it open over the next page.
+  - `Segmented` (client) `{ name; options: { value; label }[]; value?; defaultValue?; onChange?(value);
+    'aria-label'?; 'aria-labelledby'?; fullWidth?; className? }` — radio group drawn as a pill track (type
+    switches, currency switch). Controlled with `value` + `onChange`, else uncontrolled with `defaultValue`;
+    `fullWidth` shares the width equally between the options.
+  - `PillPicker` `{ name; options: { value; label }[]; defaultValue?; error?; id?; 'aria-label'?;
+    'aria-labelledby'?; required?; className? }` — radio group drawn as wrapping pills (category and wallet in the
+    Add form, currency in the wallet form). Uncontrolled (remount with `key` to reset). A `<label for>` cannot name
+    a group: label it with `aria-labelledby` pointing at a visible heading. With `id` and `error` it renders the
+    error as `<id>-error` (same convention as `Field`) and sets `aria-invalid` / `aria-describedby` on the group.
+  - Both are real `<input type="radio">`s (visually hidden, `sr-only`) inside `<label>`s, in a `role="radiogroup"`:
+    the form posts `name=value`, arrow keys move the choice, and the focused option shows the focus ring
+    (`peer-focus-visible`). `ChoiceOption` = `{ value: string; label: ReactNode }`.
+  - `DayBars` `{ days: { date; value; tone? }[]; cap?; selectedDate?; hrefFor?(date) }` — the per-day bar row; with
+    `hrefFor` each bar is a link.
+  - `RunningLine` — the SVG overlay: current, previous (dashed) or balance series scaled to the same box.
+  - `InsightCard` `{ title; value; sub?; tone? }`.
+  - `ExpandableRow` (client) — a row button + an in-place panel with one-open-at-a-time behaviour per list.
+  - `CurrencySwitch` `{ currencies; value; hrefFor(code) }`.
+  - `AccountMenu` (client, `components/shell/account-menu.tsx`) `{ displayName; username; email }` — the
+    initials button (`initials(displayName)` from `lib/user-id.ts`: first letters of the first and last word, or
+    the first two letters of a single word; `.`, `_`, `-` also split words) and a `Popover` with the Auth section's
+    lines and Sign out.
+  - `AddButton` (`components/shell/add-button.tsx`) `{ href? = "/transactions/new"; shellDefault? }` — the
+    floating Add button. The layout renders `<AddButton shellDefault />`; a page that wants another target renders
+    `<AddButton href="/transactions/new?wallet=<id>" />` anywhere in its markup and the shell's one hides itself
+    (`body:has([data-add-button="page"]) [data-add-button="default"] { display: none }` in `globals.css`; no JS).
+    `NewEntryShortcut` (client, renders nothing) pushes the `href` of whichever Add button is shown when
+    `isNewEntryShortcut(event)` (`lib/shortcuts.ts`) is true: key `n`/`N`, no Ctrl/Alt/Meta, not auto-repeat or IME
+    composition, not already handled, target not an input, textarea, select or contenteditable and not inside an
+    open `aria-modal` dialog — and no modal dialog is open at all.
+  - Main menu (`components/shell/nav.tsx`): `NAV_ITEMS` is the single list of destinations; `MainMenu` marks the
+    entry for the page in the layout's `children` slot (`useSelectedLayoutSegment()`), not the URL, so while a
+    dialog route is intercepted the page behind stays highlighted.
 
 Theme tokens (`src/app/globals.css`, light + dark via `prefers-color-scheme`) — use these utilities, not raw palette
-colours: `bg-background`, `bg-surface`, `bg-surface-muted`, `border-border`, `border-border-strong`, `text-foreground`,
-`text-muted-foreground`, `bg-accent`/`text-accent`/`bg-accent-soft`/`text-accent-foreground`/`hover:bg-accent-hover`,
-`text-income`/`bg-income-soft`, `text-expense`/`bg-expense-soft`, `text-transfer`/`bg-transfer-soft`,
-`text-danger`/`bg-danger`/`bg-danger-soft`, `outline-ring`. Accent is indigo.
+colours: `bg-background`, `bg-surface`, `bg-surface-muted`, `bg-surface-raised`, `bg-surface-open`, `bg-field`,
+`border-border`, `border-border-strong`, `text-foreground`, `text-muted-foreground`,
+`bg-accent`/`text-accent`/`bg-accent-soft`/`text-accent-soft-foreground`/`text-accent-foreground`/`hover:bg-accent-hover`,
+`text-income`/`bg-income-soft`, `text-expense`/`bg-expense-soft`/`bg-expense-dot`, `text-transfer`/`bg-transfer-soft`,
+`text-danger`/`bg-danger`/`bg-danger-soft`, `bg-chart-future`, `bg-chart-ramp-1`…`5`, `bg-scrim`, `outline-ring`. The
+values (Sand light, Graphite dark) are in "UI direction".
 
 ## Screens
 
-- **/login, /register** — centered card, inline field errors, link between the two. Login: "User ID or email" +
-  password. Register: user ID and password (required), then email, first name and surname, each visibly marked
-  optional, with a hint under the user ID stating the allowed characters. As built: first name and surname share a
-  row from `sm` up; values are echoed back after an error (never the password); `autocomplete` is `username` /
-  `current-password` on login and `username` / `new-password` / `email` / `given-name` / `family-name` on
-  register; the user ID and identifier inputs turn off autocapitalise / autocorrect / spellcheck.
-- **App shell** — sidebar on desktop, bottom tab bar on mobile: Dashboard, Transactions, Wallets, Categories (plus
-  "Add" in the tab bar); display name (with the user ID / email line, see Auth) +
-  sign out. "Import & export" (`/data`) is a secondary sidebar entry below a divider and, on mobile, an icon link
-  in the top bar next to sign out (the bottom bar stays at five items). A prominent "Add transaction" entry point is reachable from every page.
-- **/** Dashboard — greeting with the display name ("Hello, …" / "Welcome, …"); wallet cards with balances; per-currency totals with this month's income / expenses
-  (month switcher); spending by category for the month (simple horizontal bars, per currency); recent
-  transactions. Friendly empty state that sends a new user to create their first wallet.
-  The month switcher (`components/dashboard/month-switcher.tsx`, client) is "‹ November 2026 ›": the arrows are
-  plain links (they work without JS) and the month is in the URL — the current month is the bare `/`, any other
-  `/?month=YYYY-MM`; nothing past the current month. The label is a button that opens a `MonthGrid` popover
-  (right-aligned, future months disabled) to jump to any month (`router.push(…, { scroll: false })`). Away from the
-  current month a small "This month" link next to the switcher goes back to `/`.
-- **/wallets** — list (active, then archived) with balance; create wallet (name, currency picker, initial
-  balance); edit (name, initial balance); archive / unarchive; delete when empty.
-- **/wallets/[id]** — header with balance + actions (add expense / income / transfer preselecting this wallet,
-  edit, archive, delete when empty), then that wallet's 25 most recent transactions, each row linking to its
-  edit page, and a "View all" link to `/transactions?wallet=<id>`.
-- **/transactions** — all transactions with filters kept in the URL (wallet, kind, category, date range,
-  note search) and pagination; per-row edit / delete. The From / To filters are `DatePicker`s with `allowEmpty`
-  (`To` right-aligned), so an empty one adds nothing to the URL; a set one posts `from=YYYY-MM-DD` / `to=…` as before.
-- **/transactions/new**, **/transactions/[id]/edit**, **/transactions/transfers/[id]/edit** — one form with an
-  Expense / Income / Transfer switch. Expense/Income: wallet, category (filtered by kind), amount (shows the
-  wallet's currency), date (a `DatePicker`, defaults to today), note. Transfer: from wallet, to wallet, amount sent, and —
-  only when the two currencies differ — amount received; date, note. `?wallet=<id>` and `?kind=` preselect.
-  Deletes ask for confirmation. The edit pages carry the Delete button for that transaction / transfer.
-- **/categories** — two sections, Expense and Income. Each lists its categories by name with their transaction
-  count, and has an "add category" form (name only; the section decides the kind). Each category can be renamed
-  and removed. Removing an unused category asks for confirmation; removing one with transactions shows how many
-  will move and requires picking the replacement category first. Errors (duplicate name, empty name, missing
-  replacement) appear next to the control that caused them. Reachable from the main navigation on desktop and
-  mobile, and from a "Manage categories" link beside the category picker in the transaction form.
-  As built: rename is an inline form in the row; Remove on an unused category asks `confirm()`, on a used one it
-  opens an inline panel (replacement `<select>` of the other same-kind categories, "Move and remove"). Focus moves
-  into each inline form and back to its button on Cancel/Escape/save; after a removal it goes to the section heading,
-  and a `role="status"` line announces the result. Actions (`src/app/(app)/categories/actions.ts`:
-  `createCategoryAction` (bind kind), `renameCategoryAction` / `deleteCategoryAction` (bind id)) stay on the page and
-  `revalidatePath("/", "layout")`, since category names appear on every signed-in page.
-- **Route contract between features** (so pages can link to each other without importing each other's code):
-  `/transactions/new?wallet=<id>&kind=expense|income|transfer`, `/transactions/<id>/edit`,
-  `/transactions/transfers/<transferId>/edit`, `/transactions?wallet=<id>`, `/wallets/<id>`, `/wallets/new`.
-  The three transaction form pages accept `?returnTo=<path>`: after save / delete / cancel they go back there
-  (only same-site relative paths starting with a single `/` are honoured; default `/transactions`).
+The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
+listed there. Every amount is shown in its own currency; nothing is converted. Where a screen shows one currency
+at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
+
+- **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
+  decorative row of bars along the bottom of the page, `aria-hidden`), inline field errors, link between the two.
+  Login: "User ID or email" + password. Register: user ID and password (required), then email, first name and
+  surname in a section headed "Optional: email and name" (a `<details>` that starts open), with a hint under the
+  user ID stating the allowed characters. As built before the redesign and still required: values are echoed back
+  after an error (never the password); `autocomplete` is `username` / `current-password` on login and `username` /
+  `new-password` / `email` / `given-name` / `family-name` on register; the user ID and identifier inputs turn off
+  autocapitalise / autocorrect / spellcheck.
+- **App shell** (`(app)/layout.tsx`) — **no sidebar and no bottom tab bar.** A top bar on every signed-in page:
+  brand mark + "Expenses" (links to `/`), then the main menu **Overview · Transactions · Wallets · Categories ·
+  Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
+  (initials from `user.displayName` in a circle) opening a popover with the display name, the user-ID / email line
+  (see Auth) and Sign out. On narrow screens the bar is two rows: brand + account button, then the menu as a
+  horizontally scrolling row of pills (no wrapping, no hidden "more" menu). Page content sits in a centred
+  container (`max-w-[1240px]`, 32px side padding on desktop, 12–16px on phones).
+  **Add button:** a floating pill "+ Add" fixed at the bottom-right of every signed-in page (on phones a 60px round
+  button), linking to `/transactions/new` (which opens as a dialog, below). Pressing **N** anywhere outside a text
+  field does the same. Pages that preselect a wallet (wallet detail) point it at `?wallet=<id>`.
+- **Dialogs** — `/transactions/new`, `/wallets/new` and `/wallets/[id]/edit` open as a modal dialog over the page
+  they were opened from (Next.js parallel route `@modal` + intercepting routes in `(app)`; read
+  `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/intercepting-routes.md` and
+  `parallel-routes.md` first). Visiting one of those URLs directly (reload, new tab, no JS) renders the same form
+  as a normal page. The dialog: `role="dialog"`, `aria-modal`, labelled by its heading, focus moved into it and
+  trapped, Escape and the ✕ close it (`router.back()`), the page behind is dimmed (`--scrim`). On phones it is a
+  bottom sheet (rounded top, drag handle, full width). After a successful save the dialog closes and the page
+  behind refreshes (`router.refresh()`); nothing redirects inside the dialog.
+  - As built (step 1): `src/app/(app)/@modal/` has `default.tsx` (null), the intercepted `(.)transactions/new`,
+    `(.)wallets/new`, `(.)wallets/[id]/edit`, and **a `page.tsx` returning null at every other `(app)` route**
+    (`page.tsx` for `/`, `transactions/`, `transactions/[id]/edit/`, `transactions/transfers/[id]/edit/`,
+    `wallets/`, `wallets/[id]/`, `categories/`, `data/`). Without them a soft navigation out of a dialog leaves
+    the slot on the dialog's segment, and in `next dev` opening the same dialog again was then ignored. The docs'
+    catch-all `@modal/[...catchAll]` is not usable: Next 16's strict route matching then rejects the `(auth)`
+    pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
+    the page's folder — `NewEntry` (`transactions/new/new-entry.tsx`), `NewWallet` (`wallets/new/new-wallet.tsx`),
+    `walletToEdit` + `EditWallet` (`wallets/[id]/edit/edit-wallet.tsx`) — so the forms are not forked. The dialog
+    calls `requireUser()` itself. **Until step 6** the forms still redirect on success (Add → `/transactions`,
+    wallets → `/wallets/<id>`) and their Cancel is a link; both close the dialog because `Dialog` hides itself when
+    the path changes. The Add dialog ignores `?returnTo=` (always `/transactions`); the Add form still draws its own
+    card inside the dialog.
+- **App shell, as built (step 1):** the top bar is a full-width `bg-surface` strip with a bottom border (not
+  sticky); inside, the same `max-w-[1240px]` container as the page (16px side padding on phones, 24px from `sm`,
+  32px from `lg`). From `sm` up it is one row — brand, menu (takes the remaining width and scrolls sideways if it
+  must), account button; between `sm` and `md` the "Expenses" word is visually hidden to make room. Below `sm`:
+  brand + account, then the menu row. On load the menu scrolls itself (not the page) so the active pill is visible.
+  The page container has `pb-32` so the last content clears the Add button. The Add button is 60px round below
+  `sm` (`aria-label="Add transaction"`, the visible word "Add" from `sm` up), fixed 16px from the right and bottom
+  (respecting the safe-area inset), 32px from `sm`.
+- **Primitives restyled with the tokens (step 1):** `Card` radius 20px, no shadow; `Button` fully rounded,
+  semibold, `md` 44px tall, `sm` 36px, secondary = transparent with a `--border` outline; `Input` / `Select` /
+  `DatePicker` trigger 44px, radius 12px, `--field` background, `--border` border; `PageHeader` title 28px/800.
+  Body text is 14px (`text-sm` on `<body>`). `--danger-hover` (only the solid danger button's hover) is kept
+  outside the token table: `#9A3A22` / `#FFB8A3`.
+- **/** Overview — empty state as before (create your first wallet / all wallets archived). Otherwise, top to bottom:
+  1. **Month chart card** — heading "November 2026 · EUR" with the month switcher (existing `MonthSwitcher`, the
+     month in `?month=`) and the currency switch; the big number is the month's expenses in that currency
+     ("€1,401.39 spent so far" for the current month, "spent" for a past one). The chart: one bar per calendar day
+     (that day's expenses, accent colour; days after today in `--chart-future`), a solid line for the running total
+     of expenses through the month, and a dashed line for the previous month's running total. One very large day
+     (more than ~3× the median of the month's non-zero days) is capped at the top of the chart and labelled
+     ("Rent €1,150" — its largest entry's note or category). Legend: Each day · Running total · <previous month>.
+     The chart is `role="img"` with an `aria-label` summary; a visually hidden table lists the days.
+  2. **Four insight cards** for the same month and currency: **Net this month** (income − expenses, signed,
+     coloured), **Top category** (name, share and amount), **Pace vs <previous month>** (expenses through day N
+     this month minus through day N last month, "less/more spent than by 8 Oct"), **No-spend days** ("1 of 8",
+     plus the previous month's figure).
+  3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
+     with a link to Transactions), side by side from `lg` up.
+- **/transactions** — filter chips at the top (month, wallet, type, category; each opens a popover; a search field
+  for the note text), then the **day strip**, then the list. **The default view is the current month**
+  (`?month=YYYY-MM`, with "All time" in the month chip; explicit `from`/`to` still work and override `month`).
+  - **Day strip** (only when one month is shown): a bar per day of that month for expenses in one currency — the
+    filtered wallet's currency, else the currency switch's value. Clicking a bar narrows the list to that day
+    (`from=to=<date>`); the selected day's bar is in the accent colour. `role="group"` of buttons with labels like
+    "3 November: €64.20 spent".
+  - **List**: entries grouped by day, newest first. Each day has a header ("Today · Sunday 8", "Tuesday 3") and
+    the day's net per currency on the right (over all matches of the filters, not only the page). Rows: a dot
+    coloured by kind, category (or "Transfer → Savings"), note · wallet, signed amount (income in `--income`,
+    expenses in the text colour, transfers muted; a cross-currency transfer also shows the other leg's amount).
+  - **In-place editing**: a row is a button (`aria-expanded`); activating it opens an edit form under the row
+    (amount, category, wallet, date, note; for a transfer: from, to, sent, received when the currencies differ,
+    date, note) with Delete (confirms), Cancel and Save. One row open at a time; Escape or Cancel closes it and
+    returns focus to the row. Save stays on the page (the action returns form state; `revalidatePath`), errors
+    show inline in the open form. The edit pages (`/transactions/<id>/edit`, `/transactions/transfers/<id>/edit`)
+    remain for direct links and no-JS use.
+  - Pagination and "Export CSV" (current filters) stay; the export link moves into the chip row.
+- **/wallets** — header with "+ New wallet" (opens the dialog). Active wallets grouped by currency: a group heading
+  (code, currency name, group total) over a grid of cards — name, entry count, balance, this month's change
+  (coloured), and a small line of the balance through the month (flat and muted when nothing changed). Cards link
+  to `/wallets/<id>`. Below, an "Archived" list (name, currency, entry count, balance, an Unarchive button).
+- **/wallets/new**, **/wallets/[id]/edit** (dialog) — name; currency (new only): buttons for the pinned common
+  currencies plus a "type a code" field with suggestions over the full list, and a line saying it cannot be changed
+  later; starting balance (the currency's symbol/code beside a large input, may be negative; hint as now). Edit
+  shows the currency as fixed text and an Archive / Unarchive section; Delete appears there only when the wallet
+  has no entries.
+- **/wallets/[id]** — breadcrumb "Wallets / <name>". A header card: name + currency pill, balance (large), "started
+  with <initial balance>", buttons Expense / Income / Transfer (open the Add dialog with `?wallet=<id>&kind=…`) and
+  a "⋯" menu (Edit → dialog, Archive/Unarchive, Delete when empty). The card also holds the **month chart** for
+  this wallet (`?month=`, default current): the balance as a line, and per day a bar of money out (accent) or in
+  (`--income`), transfers included. Then four cards: In this month, Out this month, Started the month at, Entries
+  (this month · in total). Then the month's entries grouped by day, each day header showing **"Balance after
+  <amount>"**, rows editable in place as on /transactions, and a link "Open in Transactions"
+  (`/transactions?wallet=<id>&month=…`). Archived wallets show a notice instead of the add buttons.
+- **/transactions/new** (dialog; also the target of every Add button) — a type switch Expense / Income /
+  Transfer; then
+  - Expense / Income: a large amount input with the currency of the chosen wallet beside it ("EUR · from Cash");
+    category as a row of pill buttons (radio group, the kind's categories, plus "Manage" linking to /categories);
+    wallet as pill buttons (active wallets).
+  - Transfer: From → To (selects), "Sent" and — only when the currencies differ — "Received", with the line
+    "Different currencies, so enter what actually arrived. No rate is applied for you."
+  - Date as pills "Today" / "Yesterday" / a calendar button opening the `DatePicker` popover; a note field.
+  - Footer: "Keep open for another" checkbox (on success the form clears amount and note and stays open), Cancel,
+    and the submit button ("Add expense", "Add transfer"; Enter submits). `?wallet=` / `?kind=` preselect.
+  Server Actions, field names and services are unchanged; the form still posts `walletId`, `categoryId`, `amount`,
+  `date`, `note` (and the transfer fields), so the pills are radio inputs with those names.
+- **/categories** — month + currency switch at the top (default current month, `pickDefaultCurrency`). A "Spending
+  split" card: the month's expense total and one segmented bar with a legend (one shade of the accent ramp per
+  category, largest first). Then Expense and Income lists side by side: each row shows a swatch, the name, "N this
+  month · M in all", a small share bar (expense only) and the month's amount in the chosen currency. A row expands
+  in place (same pattern as transactions) to **Rename** (name input + button) and **Remove** — unused categories
+  are removed after a confirmation; used ones need the "moving its N transactions to <select>" choice first, as now.
+  Each list ends with a dashed "+ New expense/income category" input + Add. Errors and focus handling as before
+  (inline next to the control; focus to the section heading after a removal; a `role="status"` announcement).
+- **Route contract between features**: `/transactions/new?wallet=<id>&kind=expense|income|transfer`,
+  `/transactions/<id>/edit`, `/transactions/transfers/<transferId>/edit`,
+  `/transactions?wallet=<id>&month=YYYY-MM`, `/wallets/<id>?month=YYYY-MM`, `/wallets/new`, `/wallets/<id>/edit`,
+  `/?month=YYYY-MM&currency=XXX`, `/categories?month=…&currency=…`. The transaction form pages accept
+  `?returnTo=<path>` for their full-page form (only same-site relative paths starting with a single `/`; default
+  `/transactions`); the dialog ignores it and closes instead.
 
 ## Import / export
 
@@ -677,8 +863,12 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
 
 - **/data** ("Import & export") — an Export card (backup JSON, transactions CSV, wallets & categories JSON with a
   Copy button, one sentence each on what it is for) and an Import card (file picker, the duplicate checkbox, preview summary, confirm). After a successful
-  import: a summary of what was added and links to the dashboard and transactions. Reachable from the desktop
-  sidebar and on mobile without adding a sixth bottom tab (the bar is full at 375px) — e.g. from the top bar.
+  import: a summary of what was added and links to the dashboard and transactions. Reachable from the top menu
+  ("Import & export", the fifth item). Redesign layout: "Export" and "Import" side by side from `lg` up; each export
+  row has a format badge (JSON / CSV), title, one sentence and a pill download button; the import side is a dashed
+  drop area ("Drop files here or choose files", accepts several), the chosen files as pills, then the preview card
+  ("Ready to import · <format>", counts for transactions / transfers / duplicates skipped, new wallets and new
+  categories, "Everything is saved in one step, or nothing is.", Cancel + "Import N entries").
 - Module layout: pure, dependency-free code for the formats in `src/lib/csv.ts` (parse / serialise) and
   `src/lib/backup-format.ts` / `src/lib/context-format.ts` (schema + types); `src/server/export.ts` and
   `src/server/import.ts` for the services (`buildBackup`, `buildContext`, `buildTransactionsCsv`, `previewImport`,
@@ -834,7 +1024,86 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
 
 ## UI direction
 
-Calm, legible personal-finance UI. Neutral slate surfaces, one accent colour; emerald for income, rose for
-expenses, sky for transfers. Amounts right-aligned with `tabular-nums`, always formatted with their currency.
-Light and dark via `prefers-color-scheme`. Fully usable at 375px wide. Accessible forms: real `<label>`s,
-visible focus rings, errors tied to fields, buttons show a pending state while an action runs.
+Reference mock-ups: the Design canvas https://claude.ai/artifact/HYiCKKzqCayiQHUjZQc3gP, page "Chosen: Sand +
+Graphite" (every screen in both themes; each artboard's script holds the exact colours). The canvas is private to
+the owner; this section is the contract, the canvas is the picture. Where they disagree, this section wins.
+
+**Character.** Calm, warm and roomy: a top menu instead of a sidebar, large confident numbers, few borders, rounded
+cards on a tinted page background, one accent colour. Charts are part of the page, not decoration: per-day bars
+plus a running total appear on Overview, Transactions (as a strip) and wallet pages. Lists are grouped by day and
+edited in place. Light and dark follow `prefers-color-scheme`. Fully usable at 375px wide.
+
+**Type.** Plus Jakarta Sans (weights 400–800) via `next/font/google` in `src/app/layout.tsx`, exposed as
+`--font-sans`; it is downloaded at build time and served by the app, so the browser never contacts Google. Amounts
+use `tabular-nums`. As built: the variable font (one file per subset covers 200–800), subsets `latin` +
+`latin-ext`, `display: swap`, CSS variable `--font-jakarta` on `<html>`, which `--font-sans` in `@theme` puts first
+in its fallback stack; the `.woff2` files land in `.next/static/media` and the CSS has no Google URL. Scale: page title 28px/800; big numbers 40–44px/800 (−0.03em); card numbers 26–28px/800; card
+titles 13px/600 muted; body 14px; small 12–13px.
+
+**Theme tokens** (`src/app/globals.css`; the existing token names stay, so components keep using `bg-surface`,
+`text-muted-foreground` etc.; new tokens are added with matching `@theme inline` entries):
+
+| Token | Sand (light) | Graphite (dark) | Use |
+|---|---|---|---|
+| `--background` | `#F4EFE7` | `#141518` | page |
+| `--surface` | `#FFFCF7` | `#1D1E22` | cards, top bar, dialogs |
+| `--surface-muted` | `#EFE7DB` | `#25272C` | row dividers, chips, segmented-control track |
+| `--surface-raised` *(new)* | `#EFE4D6` | `#2A2C31` | active menu pill, currency pills |
+| `--surface-open` *(new)* | `#FBF4EA` | `#24262B` | a row expanded for editing |
+| `--field` *(new)* | `#FFFFFF` | `#141518` | input backgrounds |
+| `--border` | `#E5DACB` | `#2E3036` | card and input borders |
+| `--border-strong` | `#CDBFAE` | `#4E515A` | dashed "add" rows, previous-month line, bars of days without focus |
+| `--foreground` | `#2B241F` | `#EDEDEF` | text, expense amounts, running-total line |
+| `--muted-foreground` | `#6E6257` | `#A3A5AC` | secondary text |
+| `--accent` | `#BC522C` | `#FF7A59` | primary buttons, Add, chart bars, focus ring, selected pill border |
+| `--accent-hover` | `#A8461F` | `#FF9B80` | hover; also link text on Sand (`--link`) |
+| `--accent-foreground` | `#FFFFFF` | `#141518` | text on accent |
+| `--accent-soft` | `#F6E1D6` | `#3A2620` | selected pill fill |
+| `--accent-soft-foreground` *(new)* | `#8E3A1B` | `#FFB8A3` | selected pill text |
+| `--income` / `--income-soft` | `#2F7A55` / `#EDF4EE` | `#6CD49A` / `#1B2A22` | income amounts, money-in bars, success banners |
+| `--expense` / `--expense-soft` | `#B5452A` / `#F7E3DA` | `#FF9B80` / `#3A2620` | negative balances, the expense dot is `--expense-dot` |
+| `--expense-dot` *(new)* | `#D9824F` | `#FF9B80` | the small dot before an expense row |
+| `--transfer` / `--transfer-soft` | `#6E6257` / `#EFE7DB` | `#A3A5AC` / `#25272C` | transfer amounts |
+| `--danger` / `--danger-soft` | `#B5452A` / `#F7E3DA` | `#FF9B80` / `#3A2620` | delete/remove text buttons, errors |
+| `--chart-future` *(new)* | `#EFE7DB` | `#25272C` | bars for days after today |
+| `--chart-ramp-1…5` *(new)* | `#BC522C #D9824F #E8B48C #CDBFAE #8C7E70` | `#FF7A59 #D9694E #A85643 #7A4639 #4E515A` | category shares, largest first; the 6th and later categories reuse 5 |
+| `--scrim` *(new)* | `rgba(43,36,31,.45)` | `rgba(0,0,0,.6)` | behind dialogs |
+| `--ring` | = `--accent` | = `--accent` | focus outline |
+
+**Shapes and spacing.** Cards: radius 18–20px, 1px `--border`, 20–28px padding, no shadow. Lists inside cards: rows
+14px × 18px, separated by 1px `--surface-muted` lines. Buttons and chips: fully rounded pills; primary = accent fill,
+secondary = transparent with a `--border` outline, destructive = `--danger` text on no fill. Inputs: radius 10–12px,
+44–48px tall, `--field` background, accent border when focused or in an open edit form. Dialogs: radius 24px, large
+soft shadow. Floating Add: accent pill with shadow. Touch targets ≥ 44px on phones.
+
+**Amounts.** Always formatted with their currency (`formatMoney`), right-aligned in lists, `tabular-nums`. Income
+`+€…` in `--income`; expenses `−€…` in the text colour (the dot carries the kind); transfers muted. Negative balances
+in `--expense`.
+
+**Charts** are hand-built (CSS grid bars + an inline SVG line with `preserveAspectRatio="none"` and
+`vector-effect: non-scaling-stroke`); no chart library. Each chart has a text alternative (an `aria-label` summary
+and, where it carries data the page does not repeat, a visually hidden table).
+
+**Accessibility** as before: real `<label>`s, visible focus rings (`--ring`), errors tied to fields, pending state on
+buttons while an action runs, `aria-expanded` on rows that open, `aria-current` in the menu, radio groups for pill
+pickers. Every text/background pair in the table meets 4.5:1 (checked; the lowest are white on the Sand accent at 4.8:1 and
+income on income-soft at 4.65:1); the ramp and chart colours are decorative and never carry text.
+
+### Redesign build order
+
+Each step leaves the app working and passes `npm run typecheck`, `npm run lint` and `npm test`; each is checked on the
+demo database (`npm run dev:demo`) at 375px and desktop width, in both colour schemes.
+
+1. **Foundation** — tokens and font; the top bar, account menu, floating Add button and the N shortcut; remove the
+   sidebar and bottom tab bar; `Dialog` + the `@modal` slot with the three intercepted routes; `Segmented`,
+   `PillPicker`. Update the CLAUDE.md gotcha about the full mobile bottom bar, and anything in README.md that
+   describes the old shell.
+2. **Data** — `server/insights.ts`, `listDayTotals`, the `month` filter, `listCategoriesWithUsage` options,
+   `getWalletMonth`, with service tests (single currency, several currencies, archived wallets, transfers, month
+   boundaries, a 31-day month against a 30-day one, an empty month).
+3. **Overview** — chart card, insight cards, wallets + latest.
+4. **Transactions** — chips, day strip, day groups with totals, in-place editing (+ the inline actions).
+5. **Wallets** — list, wallet page with its month chart and "balance after" days, the wallet dialog.
+6. **Add entry** — the dialog form (pills, date pills, keep-open), still working as a full page.
+7. **Categories** — split bar, lists with month figures, in-place rename / remove.
+8. **Import & export, sign in, register** — restyle to the new layout; no behaviour change.

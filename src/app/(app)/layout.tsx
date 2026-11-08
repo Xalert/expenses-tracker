@@ -1,73 +1,41 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/brand";
-import { BottomTabs, SidebarNav, TopBarDataLink } from "@/components/shell/nav";
-import { PlusIcon } from "@/components/shell/icons";
-import { SignOutButton } from "@/components/shell/sign-out-button";
-import { buttonClasses } from "@/components/ui/button";
+import { AccountMenu } from "@/components/shell/account-menu";
+import { AddButton } from "@/components/shell/add-button";
+import { MainMenu } from "@/components/shell/nav";
+import { NewEntryShortcut } from "@/components/shell/new-entry-shortcut";
 import { requireUser } from "@/lib/auth";
 
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
+/** Side padding shared by the top bar and the page container (16px on phones, 32px from `lg`). */
+const GUTTER = "px-4 sm:px-6 lg:px-8";
+
+export default async function AppLayout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
   const user = await requireUser();
-  // Under the display name: the user ID (what they sign in with), plus the email when there is one.
-  const secondary = user.email ? `${user.username} · ${user.email}` : user.username;
 
   return (
-    <div className="min-h-dvh lg:pl-64">
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-border bg-surface lg:flex">
-        <Link href="/" className="flex h-16 items-center gap-2 px-5 text-base font-semibold text-foreground">
-          <BrandMark />
-          Expenses Tracker
-        </Link>
-        <div className="px-3">
-          <Link href="/transactions/new" className={buttonClasses({ className: "mb-4 w-full" })}>
-            <PlusIcon className="size-4" />
-            Add transaction
+    <div className="min-h-dvh">
+      <header className="border-b border-border bg-surface">
+        {/* One row from `sm` up; below it, brand + account, then the menu as its own scrolling row. */}
+        <div className={`mx-auto flex max-w-[1240px] flex-wrap items-center gap-x-6 gap-y-2 py-3 ${GUTTER}`}>
+          <Link
+            href="/"
+            className="flex shrink-0 items-center gap-2.5 rounded-lg text-[17px] font-extrabold tracking-tight text-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          >
+            <BrandMark className="size-8" />
+            <span className="sm:max-md:sr-only">Expenses</span>
           </Link>
-          <SidebarNav />
-        </div>
-        <div className="mt-auto border-t border-border p-3">
-          <div className="px-3 pb-2">
-            <p className="truncate text-sm font-medium text-foreground" title={user.displayName}>
-              {user.displayName}
-            </p>
-            {user.displayName !== user.username && (
-              <p className="truncate text-xs text-muted-foreground" title={user.username}>
-                <span className="sr-only">User ID: </span>
-                {user.username}
-              </p>
-            )}
-            {user.email && (
-              <p className="truncate text-xs text-muted-foreground" title={user.email}>
-                {user.email}
-              </p>
-            )}
+          <MainMenu className="order-last w-full sm:order-none sm:w-auto sm:flex-1" />
+          <div className="ml-auto sm:ml-0">
+            <AccountMenu displayName={user.displayName} username={user.username} email={user.email} />
           </div>
-          <SignOutButton />
-        </div>
-      </aside>
-
-      {/* Mobile top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 backdrop-blur lg:hidden">
-        <Link href="/" className="flex items-center gap-2 font-semibold text-foreground">
-          <BrandMark className="size-6" />
-          <span className="sr-only sm:not-sr-only">Expenses Tracker</span>
-        </Link>
-        <div className="flex min-w-0 items-center gap-1">
-          <div className="min-w-0 pr-1 text-right leading-tight" title={secondary}>
-            <p className="truncate text-sm text-foreground">{user.displayName}</p>
-            {user.displayName !== user.username && (
-              <p className="truncate text-xs text-muted-foreground">{user.username}</p>
-            )}
-          </div>
-          <TopBarDataLink />
-          <SignOutButton compact />
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl px-4 pt-6 pb-28 sm:px-6 lg:px-8 lg:pt-10 lg:pb-12">{children}</main>
+      <main className={`mx-auto w-full max-w-[1240px] pt-6 pb-32 sm:pt-8 ${GUTTER}`}>{children}</main>
 
-      <BottomTabs />
+      <AddButton shellDefault />
+      <NewEntryShortcut />
+      {modal}
     </div>
   );
 }

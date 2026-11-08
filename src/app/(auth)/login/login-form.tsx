@@ -10,7 +10,7 @@ export function LoginForm() {
   const err = state.fieldErrors ?? {};
 
   return (
-    <form action={formAction} className="space-y-4" noValidate>
+    <form action={formAction} className="space-y-5" noValidate>
       <FormError message={state.message} />
       <Field id="identifier" label="User ID or email" error={err.identifier}>
         <Input
