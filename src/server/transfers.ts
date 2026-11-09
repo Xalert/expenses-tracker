@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { transactions, transfers, wallets } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
-import { assertDate, assertId, assertPositiveAmount, normalizeNote } from "./_validate";
+import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
 import { getOwnedWalletRow } from "./wallets";
 
 type TransferSide = { walletId: number; walletName: string; currency: string; amountMinor: number };
@@ -27,8 +27,8 @@ export type TransferInput = {
   note?: string | null;
 };
 
-function legs(userId: number, transferId: number, tx: DBOrTx) {
-  return tx
+async function legs(userId: number, transferId: number, tx: DBOrTx) {
+  return await tx
     .select({
       kind: transactions.kind,
       walletId: transactions.walletId,
@@ -38,19 +38,18 @@ function legs(userId: number, transferId: number, tx: DBOrTx) {
     })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
-    .where(and(eq(transactions.transferId, transferId), eq(transactions.userId, userId)))
-    .all();
+    .where(and(eq(transactions.transferId, transferId), eq(transactions.userId, userId)));
 }
 
-export function getTransfer(userId: number, transferId: number): TransferView | null {
-  const db = getDb();
-  const t = db
+export async function getTransfer(userId: number, transferId: number): Promise<TransferView | null> {
+  if (!isPgId(transferId)) return null;
+  const db = await getDb();
+  const [t] = await db
     .select()
     .from(transfers)
-    .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)))
-    .get();
+    .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)));
   if (!t) return null;
-  const ls = legs(userId, transferId, db);
+  const ls = await legs(userId, transferId, db);
   const out = ls.find((l) => l.kind === "transfer_out");
   const inn = ls.find((l) => l.kind === "transfer_in");
   if (!out || !inn) return null;
@@ -63,7 +62,7 @@ export function getTransfer(userId: number, transferId: number): TransferView | 
   return { id: t.id, date: t.date, note: t.note, from: side(out), to: side(inn) };
 }
 
-function validate(
+async function validate(
   userId: number,
   input: TransferInput,
   tx: DBOrTx,
@@ -78,8 +77,8 @@ function validate(
   const date = assertDate(input.date);
   const note = normalizeNote(input.note);
 
-  const from = getOwnedWalletRow(userId, fromWalletId, tx, "fromWalletId");
-  const to = getOwnedWalletRow(userId, toWalletId, tx, "toWalletId");
+  const from = await getOwnedWalletRow(userId, fromWalletId, tx, "fromWalletId");
+  const to = await getOwnedWalletRow(userId, toWalletId, tx, "toWalletId");
   // Archived wallets are rejected, except when editing a transfer that already used that wallet on that side.
   if (from.archivedAt && from.id !== previous?.fromWalletId) {
     throw new ServiceError("VALIDATION", "The source wallet is archived.", "fromWalletId");
@@ -106,15 +105,16 @@ function validate(
 }
 
 /** Create a transfer row and its two legs atomically. */
-export function createTransfer(userId: number, input: TransferInput): TransferView {
-  const id = getDb().transaction((tx) => {
-    const v = validate(userId, input, tx);
-    const t = tx
+export async function createTransfer(userId: number, input: TransferInput): Promise<TransferView> {
+  const db = await getDb();
+  const id = await db.transaction(async (tx) => {
+    const v = await validate(userId, input, tx);
+    const [t] = await tx
       .insert(transfers)
       .values({ userId, date: v.date, note: v.note })
-      .returning({ id: transfers.id })
-      .get();
-    tx.insert(transactions)
+      .returning({ id: transfers.id });
+    await tx
+      .insert(transactions)
       .values([
         {
           userId,
@@ -136,54 +136,60 @@ export function createTransfer(userId: number, input: TransferInput): TransferVi
           note: v.note,
           transferId: t.id,
         },
-      ])
-      .run();
+      ]);
     return t.id;
   });
-  return getTransfer(userId, id)!;
+  return (await getTransfer(userId, id))!;
 }
 
 /** Replace a transfer's wallets, amounts, date and note (both legs updated atomically). */
-export function updateTransfer(userId: number, transferId: number, input: TransferInput): TransferView {
-  const existing = getTransfer(userId, transferId);
+export async function updateTransfer(
+  userId: number,
+  transferId: number,
+  input: TransferInput,
+): Promise<TransferView> {
+  const existing = await getTransfer(userId, transferId);
   if (!existing) throw new ServiceError("NOT_FOUND", "Transfer not found.");
-  getDb().transaction((tx) => {
-    const v = validate(userId, input, tx, {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const v = await validate(userId, input, tx, {
       fromWalletId: existing.from.walletId,
       toWalletId: existing.to.walletId,
     });
-    tx.update(transfers)
+    await tx
+      .update(transfers)
       .set({ date: v.date, note: v.note })
-      .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)))
-      .run();
+      .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)));
     const legWhere = (kind: "transfer_out" | "transfer_in") =>
       and(
         eq(transactions.transferId, transferId),
         eq(transactions.userId, userId),
         eq(transactions.kind, kind),
       );
-    tx.update(transactions)
+    await tx
+      .update(transactions)
       .set({ walletId: v.fromWalletId, amountMinor: v.amountMinor, date: v.date, note: v.note })
-      .where(legWhere("transfer_out"))
-      .run();
-    tx.update(transactions)
+      .where(legWhere("transfer_out"));
+    await tx
+      .update(transactions)
       .set({ walletId: v.toWalletId, amountMinor: v.receivedAmountMinor, date: v.date, note: v.note })
-      .where(legWhere("transfer_in"))
-      .run();
+      .where(legWhere("transfer_in"));
   });
-  return getTransfer(userId, transferId)!;
+  return (await getTransfer(userId, transferId))!;
 }
 
 /** Delete a transfer and both legs. */
-export function deleteTransfer(userId: number, transferId: number): void {
-  getDb().transaction((tx) => {
-    const t = tx
-      .select({ id: transfers.id })
-      .from(transfers)
-      .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)))
-      .get();
+export async function deleteTransfer(userId: number, transferId: number): Promise<void> {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const [t] = !isPgId(transferId)
+      ? []
+      : await tx
+          .select({ id: transfers.id })
+          .from(transfers)
+          .where(and(eq(transfers.id, transferId), eq(transfers.userId, userId)));
     if (!t) throw new ServiceError("NOT_FOUND", "Transfer not found.");
-    tx.delete(transactions).where(eq(transactions.transferId, transferId)).run();
-    tx.delete(transfers).where(eq(transfers.id, transferId)).run();
+    await tx.delete(transactions).where(eq(transactions.transferId, transferId));
+    await tx.delete(transfers).where(eq(transfers.id, transferId));
   });
 }

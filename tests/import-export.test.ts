@@ -1,9 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { eq, sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDatabase, setDb, type DB } from "@/db";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { DB } from "@/db";
 import { categories, transactions, transfers, users, wallets } from "@/db/schema";
 import { parseCsv, toCsv } from "@/lib/csv";
 import { listCategories } from "@/server/categories";
@@ -15,11 +12,11 @@ import { archiveWallet, createWallet, listWallets } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
-let alice: ReturnType<typeof makeUser>;
+let alice: Awaited<ReturnType<typeof makeUser>>;
 
-beforeEach(() => {
-  db = useFreshDb();
-  alice = makeUser(db, "alice@example.com");
+beforeEach(async () => {
+  db = await useFreshDb();
+  alice = await makeUser(db, "alice@example.com");
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -27,51 +24,51 @@ beforeEach(() => {
 
 /** A varied account: 4 currencies incl. JPY (0 decimals) and KWD (3), an archived wallet with history,
  *  same- and cross-currency transfers, tricky notes and 3 identical purchases. */
-function seedAlice() {
-  const eur = createWallet(alice.id, { name: "Main", currency: "EUR", initialBalanceMinor: 100_000 });
-  const cash = createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: -2_550 });
-  const jpy = createWallet(alice.id, { name: "Tokyo", currency: "JPY", initialBalanceMinor: 30_000 });
-  const kwd = createWallet(alice.id, { name: "Kuwait", currency: "KWD", initialBalanceMinor: 1_234 });
-  const old = createWallet(alice.id, { name: "Old card", currency: "USD", initialBalanceMinor: 5_000 });
-  const twin = createWallet(alice.id, { name: "Main", currency: "EUR", initialBalanceMinor: 0 }); // same name + currency
+async function seedAlice() {
+  const eur = await createWallet(alice.id, { name: "Main", currency: "EUR", initialBalanceMinor: 100_000 });
+  const cash = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: -2_550 });
+  const jpy = await createWallet(alice.id, { name: "Tokyo", currency: "JPY", initialBalanceMinor: 30_000 });
+  const kwd = await createWallet(alice.id, { name: "Kuwait", currency: "KWD", initialBalanceMinor: 1_234 });
+  const old = await createWallet(alice.id, { name: "Old card", currency: "USD", initialBalanceMinor: 5_000 });
+  const twin = await createWallet(alice.id, { name: "Main", currency: "EUR", initialBalanceMinor: 0 }); // same name + currency
 
-  const t = (walletId: number, kind: "expense" | "income", cat: string, amountMinor: number, date: string, note?: string) =>
+  const t = async (walletId: number, kind: "expense" | "income", cat: string, amountMinor: number, date: string, note?: string) =>
     createTransaction(alice.id, { walletId, kind, categoryId: alice.cat(cat), amountMinor, date, note });
 
-  t(eur.id, "income", "Salary", 350_000, "2026-01-01", "January salary");
-  t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
-  t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
-  t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
-  t(cash.id, "expense", "Groceries", 899, "2026-01-03", "-5 refund later");
-  t(cash.id, "expense", "Groceries", 100, "2026-01-03", "'quoted' and \"double\", with comma; semicolon\nand newline");
-  t(cash.id, "income", "Refund", 500, "2026-01-04", "+plus @at");
-  t(jpy.id, "expense", "Food", 1_500, "2026-02-01", "Ramen");
-  t(kwd.id, "expense", "Bills", 1_234, "2026-02-02", "Three decimals");
-  t(old.id, "expense", "Transport", 2_000, "2025-12-01");
-  t(twin.id, "income", "Extra Income", 4_200, "2026-02-03", "Twin wallet");
+  await t(eur.id, "income", "Salary", 350_000, "2026-01-01", "January salary");
+  await t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
+  await t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
+  await t(eur.id, "expense", "Food", 1_250, "2026-01-02", "=SUM(A1:A9)");
+  await t(cash.id, "expense", "Groceries", 899, "2026-01-03", "-5 refund later");
+  await t(cash.id, "expense", "Groceries", 100, "2026-01-03", "'quoted' and \"double\", with comma; semicolon\nand newline");
+  await t(cash.id, "income", "Refund", 500, "2026-01-04", "+plus @at");
+  await t(jpy.id, "expense", "Food", 1_500, "2026-02-01", "Ramen");
+  await t(kwd.id, "expense", "Bills", 1_234, "2026-02-02", "Three decimals");
+  await t(old.id, "expense", "Transport", 2_000, "2025-12-01");
+  await t(twin.id, "income", "Extra Income", 4_200, "2026-02-03", "Twin wallet");
 
-  createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: cash.id, amountMinor: 10_000, date: "2026-01-05", note: "ATM" });
-  createTransfer(alice.id, {
+  await createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: cash.id, amountMinor: 10_000, date: "2026-01-05", note: "ATM" });
+  await createTransfer(alice.id, {
     fromWalletId: eur.id,
     toWalletId: jpy.id,
     amountMinor: 20_000,
     receivedAmountMinor: 3_200_000 / 100,
     date: "2026-01-20",
   });
-  createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: kwd.id, amountMinor: 5_000, receivedAmountMinor: 1_617, date: "2026-02-05" });
-  createTransfer(alice.id, { fromWalletId: old.id, toWalletId: eur.id, amountMinor: 1_000, receivedAmountMinor: 920, date: "2025-12-15" });
-  archiveWallet(alice.id, old.id);
+  await createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: kwd.id, amountMinor: 5_000, receivedAmountMinor: 1_617, date: "2026-02-05" });
+  await createTransfer(alice.id, { fromWalletId: old.id, toWalletId: eur.id, amountMinor: 1_000, receivedAmountMinor: 920, date: "2025-12-15" });
+  await archiveWallet(alice.id, old.id);
   return { eur, cash, jpy, kwd, old, twin };
 }
 
-function newUser(email: string) {
-  return makeUser(db, email);
+async function newUser(email: string) {
+  return await makeUser(db, email);
 }
 
 type WalletState = { name: string; currency: string; initial: number; balance: number; archived: boolean; count: number };
 
-function walletState(userId: number): WalletState[] {
-  return listWallets(userId, { includeArchived: true })
+async function walletState(userId: number): Promise<WalletState[]> {
+  return (await listWallets(userId, { includeArchived: true }))
     .map((w) => ({
       name: w.name,
       currency: w.currency,
@@ -83,31 +80,31 @@ function walletState(userId: number): WalletState[] {
     .sort((a, b) => `${a.name}|${a.currency}|${a.initial}`.localeCompare(`${b.name}|${b.currency}|${b.initial}`));
 }
 
-function counts(userId: number) {
-  const n = (q: ReturnType<typeof sql>) => db.get<{ n: number }>(q)!.n;
+async function counts(userId: number) {
+  const n = async (q: ReturnType<typeof sql>) => Number(((await db.execute(q)) as unknown as { rows: { n: unknown }[] }).rows[0].n);
   return {
-    transactions: n(sql`select count(*) as n from transactions where user_id = ${userId} and transfer_id is null`),
-    transfers: n(sql`select count(*) as n from transfers where user_id = ${userId}`),
-    legs: n(sql`select count(*) as n from transactions where user_id = ${userId} and transfer_id is not null`),
-    wallets: n(sql`select count(*) as n from wallets where user_id = ${userId}`),
-    categories: n(sql`select count(*) as n from categories where user_id = ${userId}`),
+    transactions: await n(sql`select count(*) as n from transactions where user_id = ${userId} and transfer_id is null`),
+    transfers: await n(sql`select count(*) as n from transfers where user_id = ${userId}`),
+    legs: await n(sql`select count(*) as n from transactions where user_id = ${userId} and transfer_id is not null`),
+    wallets: await n(sql`select count(*) as n from wallets where user_id = ${userId}`),
+    categories: await n(sql`select count(*) as n from categories where user_id = ${userId}`),
   };
 }
 
-const categoryNames = (userId: number) => listCategories(userId).map((c) => `${c.kind}:${c.name}`).sort();
+const categoryNames = async (userId: number) => (await listCategories(userId)).map((c) => `${c.kind}:${c.name}`).sort();
 
 /** Every row of every user-owned table: proves a failed import changed nothing. */
-function snapshot() {
+async function snapshot() {
   return {
-    wallets: db.select().from(wallets).orderBy(wallets.id).all(),
-    categories: db.select().from(categories).orderBy(categories.id).all(),
-    transfers: db.select().from(transfers).orderBy(transfers.id).all(),
-    transactions: db.select().from(transactions).orderBy(transactions.id).all(),
+    wallets: await db.select().from(wallets).orderBy(wallets.id),
+    categories: await db.select().from(categories).orderBy(categories.id),
+    transfers: await db.select().from(transfers).orderBy(transfers.id),
+    transactions: await db.select().from(transactions).orderBy(transactions.id),
   };
 }
 
 const json = (v: unknown) => JSON.stringify(v);
-const backupText = (userId: number) => json(buildBackup(userId));
+const backupText = async (userId: number) => json(await buildBackup(userId));
 
 function expectProblems(p: ImportPreview, expected: { line?: number; path?: string; message: RegExp }[]) {
   expect(p.ok).toBe(false);
@@ -125,9 +122,9 @@ const csv = (...rows: string[]) => [HEADER, ...rows].join("\n");
 // ---------------------------------------------------------------------------------------------------------
 
 describe("buildBackup", () => {
-  it("contains the account with local ids, minor units + decimals, and nothing about the user", () => {
-    const { old } = seedAlice();
-    const b = buildBackup(alice.id);
+  it("contains the account with local ids, minor units + decimals, and nothing about the user", async () => {
+    const { old } = await seedAlice();
+    const b = await buildBackup(alice.id);
     expect(b.app).toBe("expenses-tracker");
     expect(b.version).toBe(1);
     expect(b.wallets.map((w) => w.id)).toEqual([1, 2, 3, 4, 5, 6]);
@@ -143,22 +140,22 @@ describe("buildBackup", () => {
     expect(old.id).toBeGreaterThan(0);
   });
 
-  it("only exports the signed-in user's rows", () => {
-    seedAlice();
-    const bob = newUser("bob@example.com");
-    const b = buildBackup(bob.id);
+  it("only exports the signed-in user's rows", async () => {
+    await seedAlice();
+    const bob = await newUser("bob@example.com");
+    const b = await buildBackup(bob.id);
     expect(b.wallets).toEqual([]);
     expect(b.transactions).toEqual([]);
     expect(b.transfers).toEqual([]);
     expect(b.categories).toHaveLength(8);
-    expect(parseCsv(buildTransactionsCsv(bob.id)).records).toHaveLength(1); // header only
+    expect(parseCsv(await buildTransactionsCsv(bob.id)).records).toHaveLength(1); // header only
   });
 });
 
 describe("buildTransactionsCsv", () => {
-  it("writes one row per entry and per transfer, with a BOM, CRLF and protected formulas", () => {
-    seedAlice();
-    const out = buildTransactionsCsv(alice.id);
+  it("writes one row per entry and per transfer, with a BOM, CRLF and protected formulas", async () => {
+    await seedAlice();
+    const out = await buildTransactionsCsv(alice.id);
     expect(out.startsWith("﻿date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount\r\n")).toBe(true);
     const rows = parseCsv(out).records.slice(1).map((r) => r.cells);
     expect(rows).toHaveLength(11 + 4);
@@ -173,54 +170,54 @@ describe("buildTransactionsCsv", () => {
     expect(rows[0][0]).toBe("2025-12-01");
   });
 
-  it("applies the /transactions filters, including transfers on the destination wallet", () => {
-    const { cash, jpy } = seedAlice();
-    const only = (f: Parameters<typeof buildTransactionsCsv>[1]) =>
-      parseCsv(buildTransactionsCsv(alice.id, f)).records.slice(1).map((r) => r.cells);
-    expect(only({ kind: "transfer" }).every((r) => r[1] === "transfer")).toBe(true);
-    expect(only({ kind: "transfer" })).toHaveLength(4);
-    const cashRows = only({ walletId: cash.id });
+  it("applies the /transactions filters, including transfers on the destination wallet", async () => {
+    const { cash, jpy } = await seedAlice();
+    const only = async (f: Parameters<typeof buildTransactionsCsv>[1]) =>
+      parseCsv(await buildTransactionsCsv(alice.id, f)).records.slice(1).map((r) => r.cells);
+    expect((await only({ kind: "transfer" })).every((r) => r[1] === "transfer")).toBe(true);
+    expect(await only({ kind: "transfer" })).toHaveLength(4);
+    const cashRows = await only({ walletId: cash.id });
     expect(cashRows.map((r) => r[1]).sort()).toEqual(["expense", "expense", "income", "transfer"]); // ATM transfer arrives in Cash
-    expect(only({ walletId: jpy.id, kind: "transfer" })).toHaveLength(1);
-    expect(only({ categoryId: alice.cat("Food") })).toHaveLength(4);
-    expect(only({ from: "2026-02-01", to: "2026-02-03" })).toHaveLength(3);
-    expect(only({ q: "ramen" })).toHaveLength(1);
+    expect(await only({ walletId: jpy.id, kind: "transfer" })).toHaveLength(1);
+    expect(await only({ categoryId: alice.cat("Food") })).toHaveLength(4);
+    expect(await only({ from: "2026-02-01", to: "2026-02-03" })).toHaveLength(3);
+    expect(await only({ q: "ramen" })).toHaveLength(1);
   });
 });
 
 describe("backup round trip", () => {
-  it("reproduces wallets, categories, counts and every balance in a fresh account", () => {
-    seedAlice();
-    const bob = newUser("bob@example.com");
-    const file = backupText(alice.id);
+  it("reproduces wallets, categories, counts and every balance in a fresh account", async () => {
+    await seedAlice();
+    const bob = await newUser("bob@example.com");
+    const file = await backupText(alice.id);
 
-    const preview = previewImport(bob.id, file);
+    const preview = await previewImport(bob.id, file);
     expect(preview).toMatchObject({ format: "backup", ok: true, transactionsToAdd: 11, transfersToAdd: 4, duplicateTransactions: 0 });
     expect(preview.walletsToCreate).toHaveLength(6);
     expect(preview.walletsToCreate.find((w) => w.name === "Old card")?.archived).toBe(true);
 
-    const result = runImport(bob.id, file);
+    const result = await runImport(bob.id, file);
     expect(result.imported).toBe(true);
     expect(result.transactionsToAdd).toBe(preview.transactionsToAdd);
     expect(result.transfersToAdd).toBe(preview.transfersToAdd);
 
-    expect(walletState(bob.id)).toEqual(walletState(alice.id));
-    expect(categoryNames(bob.id)).toEqual(categoryNames(alice.id));
-    expect(counts(bob.id)).toEqual(counts(alice.id));
+    expect(await walletState(bob.id)).toEqual(await walletState(alice.id));
+    expect(await categoryNames(bob.id)).toEqual(await categoryNames(alice.id));
+    expect(await counts(bob.id)).toEqual(await counts(alice.id));
     // The export of the copy is the same document (apart from the timestamp).
-    const strip = (b: ReturnType<typeof buildBackup>) => ({ ...b, exportedAt: "" });
-    expect(strip(buildBackup(bob.id))).toEqual(strip(buildBackup(alice.id)));
+    const strip = (b: Awaited<ReturnType<typeof buildBackup>>) => ({ ...b, exportedAt: "" });
+    expect(strip(await buildBackup(bob.id))).toEqual(strip(await buildBackup(alice.id)));
   });
 
-  it("adds nothing when the same backup is imported again (into the copy or the original)", () => {
-    seedAlice();
-    const bob = newUser("bob@example.com");
-    const file = backupText(alice.id);
-    runImport(bob.id, file);
-    const before = snapshot();
+  it("adds nothing when the same backup is imported again (into the copy or the original)", async () => {
+    await seedAlice();
+    const bob = await newUser("bob@example.com");
+    const file = await backupText(alice.id);
+    await runImport(bob.id, file);
+    const before = await snapshot();
 
     for (const userId of [bob.id, alice.id]) {
-      const again = runImport(userId, file);
+      const again = await runImport(userId, file);
       expect(again).toMatchObject({
         ok: true,
         imported: true,
@@ -232,41 +229,41 @@ describe("backup round trip", () => {
         categoriesToCreate: [],
       });
     }
-    expect(snapshot()).toEqual(before);
+    expect(await snapshot()).toEqual(before);
   });
 
-  it("leaves an existing wallet's name, initial balance and archived state untouched", () => {
-    seedAlice();
-    const bob = newUser("bob@example.com");
-    const bobCash = createWallet(bob.id, { name: "CASH", currency: "EUR", initialBalanceMinor: 7 });
-    runImport(bob.id, backupText(alice.id));
-    const w = listWallets(bob.id, { includeArchived: true }).find((x) => x.id === bobCash.id)!;
+  it("leaves an existing wallet's name, initial balance and archived state untouched", async () => {
+    await seedAlice();
+    const bob = await newUser("bob@example.com");
+    const bobCash = await createWallet(bob.id, { name: "CASH", currency: "EUR", initialBalanceMinor: 7 });
+    await runImport(bob.id, await backupText(alice.id));
+    const w = (await listWallets(bob.id, { includeArchived: true })).find((x) => x.id === bobCash.id)!;
     expect(w).toMatchObject({ name: "CASH", initialBalanceMinor: 7, archivedAt: null });
-    expect(listWallets(bob.id, { includeArchived: true }).filter((x) => x.name.toLowerCase() === "cash")).toHaveLength(1);
+    expect((await listWallets(bob.id, { includeArchived: true })).filter((x) => x.name.toLowerCase() === "cash")).toHaveLength(1);
   });
 
-  it("works without duplicate skipping too (everything is added again)", () => {
-    seedAlice();
-    const bob = newUser("bob@example.com");
-    const file = backupText(alice.id);
-    runImport(bob.id, file);
+  it("works without duplicate skipping too (everything is added again)", async () => {
+    await seedAlice();
+    const bob = await newUser("bob@example.com");
+    const file = await backupText(alice.id);
+    await runImport(bob.id, file);
     // Bob's copy of "Old card" is archived: new entries on it are refused, so the import is blocked as a whole.
-    const blocked = runImport(bob.id, file, { skipDuplicates: false });
+    const blocked = await runImport(bob.id, file, { skipDuplicates: false });
     expect(blocked.imported).toBe(false);
     expect(blocked.problems[0].message).toMatch(/Old card.*archived/);
   });
 });
 
 describe("CSV round trip", () => {
-  it("reproduces wallets, used categories, counts and balance movements in a fresh account", () => {
-    seedAlice();
-    const carol = newUser("carol@example.com");
-    const file = buildTransactionsCsv(alice.id);
-    const result = runImport(carol.id, file);
+  it("reproduces wallets, used categories, counts and balance movements in a fresh account", async () => {
+    await seedAlice();
+    const carol = await newUser("carol@example.com");
+    const file = await buildTransactionsCsv(alice.id);
+    const result = await runImport(carol.id, file);
     expect(result).toMatchObject({ format: "csv", ok: true, imported: true, transactionsToAdd: 11, transfersToAdd: 4 });
 
-    const a = walletState(alice.id);
-    const c = walletState(carol.id);
+    const a = await walletState(alice.id);
+    const c = await walletState(carol.id);
     // CSV wallets are identified by name + currency, so the two "Main" EUR wallets merge into one.
     const merge = (ws: WalletState[]) => {
       const m = new Map<string, { movement: number; count: number }>();
@@ -280,29 +277,29 @@ describe("CSV round trip", () => {
     expect(merge(c)).toEqual(merge(a));
     // No initial balances or archived state in a CSV.
     expect(c.every((w) => w.initial === 0 && !w.archived)).toBe(true);
-    expect(counts(carol.id)).toMatchObject({ transactions: 11, transfers: 4, legs: 8 });
-    expect(categoryNames(carol.id)).toEqual(categoryNames(alice.id)); // all used ones exist among the defaults
+    expect(await counts(carol.id)).toMatchObject({ transactions: 11, transfers: 4, legs: 8 });
+    expect(await categoryNames(carol.id)).toEqual(await categoryNames(alice.id)); // all used ones exist among the defaults
     // Notes (formula-protected on export) come back exactly.
-    const notes = (u: number) =>
-      db.select({ note: transactions.note }).from(transactions).where(eq(transactions.userId, u)).all().map((r) => r.note ?? "").sort();
-    expect(notes(carol.id)).toEqual(notes(alice.id));
+    const notes = async (u: number) =>
+      (await db.select({ note: transactions.note }).from(transactions).where(eq(transactions.userId, u))).map((r) => r.note ?? "").sort();
+    expect(await notes(carol.id)).toEqual(await notes(alice.id));
   });
 
-  it("adds nothing when the same CSV is imported again, even onto an archived wallet", () => {
-    seedAlice();
-    const carol = newUser("carol@example.com");
-    const file = buildTransactionsCsv(alice.id);
-    runImport(carol.id, file);
-    const before = snapshot();
-    expect(runImport(carol.id, file)).toMatchObject({ imported: true, transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 11, duplicateTransfers: 4 });
+  it("adds nothing when the same CSV is imported again, even onto an archived wallet", async () => {
+    await seedAlice();
+    const carol = await newUser("carol@example.com");
+    const file = await buildTransactionsCsv(alice.id);
+    await runImport(carol.id, file);
+    const before = await snapshot();
+    expect(await runImport(carol.id, file)).toMatchObject({ imported: true, transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 11, duplicateTransfers: 4 });
     // Into the original account: the archived "Old card" rows are all duplicates, so they are fine.
-    expect(runImport(alice.id, file)).toMatchObject({ imported: true, transactionsToAdd: 0, transfersToAdd: 0 });
-    expect(snapshot()).toEqual(before);
+    expect(await runImport(alice.id, file)).toMatchObject({ imported: true, transactionsToAdd: 0, transfersToAdd: 0 });
+    expect(await snapshot()).toEqual(before);
   });
 
-  it("reads the file back after a spreadsheet re-saved it (semicolons, decimal commas, DD.MM.YYYY)", () => {
-    seedAlice();
-    const original = parseCsv(buildTransactionsCsv(alice.id)).records.map((r) => r.cells);
+  it("reads the file back after a spreadsheet re-saved it (semicolons, decimal commas, DD.MM.YYYY)", async () => {
+    await seedAlice();
+    const original = parseCsv(await buildTransactionsCsv(alice.id)).records.map((r) => r.cells);
     const resaved = original.map((cells, i) => {
       if (i === 0) return cells.map((h) => h.toUpperCase()); // header case changes too
       const [date, ...rest] = cells;
@@ -315,16 +312,16 @@ describe("CSV round trip", () => {
     const text = toCsv(resaved, { delimiter: ";", newline: "\n", bom: false });
     expect(text).toContain(";12,50;");
 
-    const dave = newUser("dave@example.com");
-    const carol = newUser("carol@example.com");
-    expect(runImport(dave.id, text)).toMatchObject({ ok: true, imported: true, transactionsToAdd: 11, transfersToAdd: 4 });
-    runImport(carol.id, buildTransactionsCsv(alice.id));
-    expect(walletState(dave.id)).toEqual(walletState(carol.id));
+    const dave = await newUser("dave@example.com");
+    const carol = await newUser("carol@example.com");
+    expect(await runImport(dave.id, text)).toMatchObject({ ok: true, imported: true, transactionsToAdd: 11, transfersToAdd: 4 });
+    await runImport(carol.id, await buildTransactionsCsv(alice.id));
+    expect(await walletState(dave.id)).toEqual(await walletState(carol.id));
     // …and it is recognised as the same data.
-    expect(previewImport(carol.id, text)).toMatchObject({ transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 11 });
+    expect(await previewImport(carol.id, text)).toMatchObject({ transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 11 });
   });
 
-  it("accepts columns in any order, unknown columns, tabs and blank lines", () => {
+  it("accepts columns in any order, unknown columns, tabs and blank lines", async () => {
     const text = [
       "Note\tAmount\tCurrency\tWallet\tType\tDate\tCategory\tMemo",
       "",
@@ -332,40 +329,40 @@ describe("CSV round trip", () => {
       "\t\t\t\t\t\t\t",
       "\t1500\tJPY\tTokyo\texpense\t2026-03-02\tFood\t",
     ].join("\r\n");
-    const r = runImport(alice.id, text);
+    const r = await runImport(alice.id, text);
     expect(r).toMatchObject({ ok: true, imported: true, transactionsToAdd: 2, categoriesToCreate: [] });
     expect(r.walletsToCreate).toEqual([
       { name: "Cash", currency: "EUR", archived: false, group: "Personal" },
       { name: "Tokyo", currency: "JPY", archived: false, group: "Personal" },
     ]);
-    const ws = listWallets(alice.id);
+    const ws = await listWallets(alice.id);
     expect(ws.find((w) => w.currency === "EUR")?.balanceMinor).toBe(-1_250);
     expect(ws.find((w) => w.currency === "JPY")?.balanceMinor).toBe(-1_500);
   });
 });
 
 describe("duplicates are a multiset", () => {
-  it("adds 2 when the file has 3 identical entries and the account has 1", () => {
-    const w = createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
-    createTransaction(alice.id, { walletId: w.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 450, date: "2026-03-01", note: "Coffee" });
+  it("adds 2 when the file has 3 identical entries and the account has 1", async () => {
+    const w = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
+    await createTransaction(alice.id, { walletId: w.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 450, date: "2026-03-01", note: "Coffee" });
     const row = "2026-03-01,expense,cash,EUR,4.50,FOOD,Coffee,,,";
-    const p = previewImport(alice.id, csv(row, row, row));
+    const p = await previewImport(alice.id, csv(row, row, row));
     expect(p).toMatchObject({ ok: true, transactionsToAdd: 2, duplicateTransactions: 1, walletsToCreate: [], categoriesToCreate: [] });
-    runImport(alice.id, csv(row, row, row));
-    expect(counts(alice.id).transactions).toBe(3);
+    await runImport(alice.id, csv(row, row, row));
+    expect((await counts(alice.id)).transactions).toBe(3);
     // A second time: all three now exist.
-    expect(previewImport(alice.id, csv(row, row, row))).toMatchObject({ transactionsToAdd: 0, duplicateTransactions: 3 });
+    expect(await previewImport(alice.id, csv(row, row, row))).toMatchObject({ transactionsToAdd: 0, duplicateTransactions: 3 });
     // Four in the file → one more.
-    expect(previewImport(alice.id, csv(row, row, row, row))).toMatchObject({ transactionsToAdd: 1, duplicateTransactions: 3 });
+    expect(await previewImport(alice.id, csv(row, row, row, row))).toMatchObject({ transactionsToAdd: 1, duplicateTransactions: 3 });
     // Without skipping, all are added.
-    expect(previewImport(alice.id, csv(row), { skipDuplicates: false })).toMatchObject({ transactionsToAdd: 1, duplicateTransactions: 0 });
+    expect(await previewImport(alice.id, csv(row), { skipDuplicates: false })).toMatchObject({ transactionsToAdd: 1, duplicateTransactions: 0 });
   });
 
-  it("differs on any of wallet, kind, category, date, amount or note", () => {
-    const w = createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
-    createWallet(alice.id, { name: "Cash", currency: "USD", initialBalanceMinor: 0 });
-    createTransaction(alice.id, { walletId: w.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 450, date: "2026-03-01", note: "Coffee" });
-    const p = previewImport(
+  it("differs on any of wallet, kind, category, date, amount or note", async () => {
+    const w = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
+    await createWallet(alice.id, { name: "Cash", currency: "USD", initialBalanceMinor: 0 });
+    await createTransaction(alice.id, { walletId: w.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 450, date: "2026-03-01", note: "Coffee" });
+    const p = await previewImport(
       alice.id,
       csv(
         "2026-03-01,expense,Cash,USD,4.50,Food,Coffee,,,",
@@ -380,11 +377,11 @@ describe("duplicates are a multiset", () => {
     expect(p).toMatchObject({ ok: true, transactionsToAdd: 6, duplicateTransactions: 1 });
   });
 
-  it("compares a transfer as one transfer, not as two transactions", () => {
-    const a = createWallet(alice.id, { name: "A", currency: "EUR", initialBalanceMinor: 0 });
-    const b = createWallet(alice.id, { name: "B", currency: "USD", initialBalanceMinor: 0 });
-    createTransfer(alice.id, { fromWalletId: a.id, toWalletId: b.id, amountMinor: 1_000, receivedAmountMinor: 1_100, date: "2026-03-01", note: "fx" });
-    const p = previewImport(
+  it("compares a transfer as one transfer, not as two transactions", async () => {
+    const a = await createWallet(alice.id, { name: "A", currency: "EUR", initialBalanceMinor: 0 });
+    const b = await createWallet(alice.id, { name: "B", currency: "USD", initialBalanceMinor: 0 });
+    await createTransfer(alice.id, { fromWalletId: a.id, toWalletId: b.id, amountMinor: 1_000, receivedAmountMinor: 1_100, date: "2026-03-01", note: "fx" });
+    const p = await previewImport(
       alice.id,
       csv(
         "2026-03-01,transfer,A,EUR,10.00,,fx,B,USD,11.00",
@@ -398,23 +395,23 @@ describe("duplicates are a multiset", () => {
 });
 
 describe("archived wallets", () => {
-  it("restores an archived wallet with its history from a backup", () => {
-    const { old } = seedAlice();
-    const bob = newUser("bob@example.com");
-    runImport(bob.id, backupText(alice.id));
-    const copy = listWallets(bob.id, { includeArchived: true }).find((w) => w.name === "Old card")!;
-    const orig = listWallets(alice.id, { includeArchived: true }).find((w) => w.id === old.id)!;
+  it("restores an archived wallet with its history from a backup", async () => {
+    const { old } = await seedAlice();
+    const bob = await newUser("bob@example.com");
+    await runImport(bob.id, await backupText(alice.id));
+    const copy = (await listWallets(bob.id, { includeArchived: true })).find((w) => w.name === "Old card")!;
+    const orig = (await listWallets(alice.id, { includeArchived: true })).find((w) => w.id === old.id)!;
     expect(copy.archivedAt).not.toBeNull();
     expect(copy.balanceMinor).toBe(orig.balanceMinor);
     expect(copy.transactionCount).toBe(orig.transactionCount);
   });
 
-  it("refuses new CSV rows (and transfers) on an existing archived wallet, naming the line", () => {
-    const w = createWallet(alice.id, { name: "Closed", currency: "EUR", initialBalanceMinor: 0 });
-    const open = createWallet(alice.id, { name: "Open", currency: "EUR", initialBalanceMinor: 0 });
-    archiveWallet(alice.id, w.id);
-    const before = snapshot();
-    const r = runImport(
+  it("refuses new CSV rows (and transfers) on an existing archived wallet, naming the line", async () => {
+    const w = await createWallet(alice.id, { name: "Closed", currency: "EUR", initialBalanceMinor: 0 });
+    const open = await createWallet(alice.id, { name: "Open", currency: "EUR", initialBalanceMinor: 0 });
+    await archiveWallet(alice.id, w.id);
+    const before = await snapshot();
+    const r = await runImport(
       alice.id,
       csv(
         "2026-03-01,expense,Open,EUR,1,Food,,,,",
@@ -428,38 +425,38 @@ describe("archived wallets", () => {
       { line: 4, message: /“Closed” \(EUR\) is archived/ },
     ]);
     expect(r.problemCount).toBe(2);
-    expect(snapshot()).toEqual(before);
+    expect(await snapshot()).toEqual(before);
     expect(open.id).toBeGreaterThan(0);
   });
 
-  it("prefers an active wallet when a CSV name matches both an active and an archived one", () => {
-    const archived = createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
-    archiveWallet(alice.id, archived.id);
-    const active = createWallet(alice.id, { name: "cash", currency: "EUR", initialBalanceMinor: 0 });
-    const r = runImport(alice.id, csv("2026-03-01,expense,CASH,EUR,1,Food,,,,"));
+  it("prefers an active wallet when a CSV name matches both an active and an archived one", async () => {
+    const archived = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
+    await archiveWallet(alice.id, archived.id);
+    const active = await createWallet(alice.id, { name: "cash", currency: "EUR", initialBalanceMinor: 0 });
+    const r = await runImport(alice.id, csv("2026-03-01,expense,CASH,EUR,1,Food,,,,"));
     expect(r.imported).toBe(true);
-    expect(listWallets(alice.id).find((w) => w.id === active.id)?.transactionCount).toBe(1);
+    expect((await listWallets(alice.id)).find((w) => w.id === active.id)?.transactionCount).toBe(1);
   });
 });
 
 describe("CSV problems", () => {
-  const check = (text: string, expected: Parameters<typeof expectProblems>[1]) => {
-    const before = snapshot();
-    const p = previewImport(alice.id, text);
+  const check = async (text: string, expected: Parameters<typeof expectProblems>[1]) => {
+    const before = await snapshot();
+    const p = await previewImport(alice.id, text);
     expectProblems(p, expected);
-    const r = runImport(alice.id, text);
+    const r = await runImport(alice.id, text);
     expect(r.imported).toBe(false);
-    expect(snapshot()).toEqual(before);
+    expect(await snapshot()).toEqual(before);
     return p;
   };
 
-  it("reports missing required columns on line 1", () => {
-    check("date,wallet,amount,note\n2026-01-01,Cash,1,x", [{ line: 1, message: /Missing columns: type, currency/ }]);
+  it("reports missing required columns on line 1", async () => {
+    await check("date,wallet,amount,note\n2026-01-01,Cash,1,x", [{ line: 1, message: /Missing columns: type, currency/ }]);
   });
 
-  it("reports every broken row with its line number and imports nothing", () => {
-    createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
-    const p = check(
+  it("reports every broken row with its line number and imports nothing", async () => {
+    await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
+    const p = await check(
       csv(
         "2026-01-01,expense,Cash,EUR,1.00,Food,ok,,,", // line 2: fine
         "03/04/2026,expense,Cash,EUR,1.00,Food,,,,", // 3: ambiguous date
@@ -503,39 +500,39 @@ describe("CSV problems", () => {
     expect(p.problemCount).toBe(16);
   });
 
-  it("counts lines across quoted multi-line notes", () => {
-    check(csv('2026-01-01,expense,Cash,EUR,1,Food,"line one\nline two",,,', "2026-13-01,expense,Cash,EUR,1,Food,,,,"), [
+  it("counts lines across quoted multi-line notes", async () => {
+    await check(csv('2026-01-01,expense,Cash,EUR,1,Food,"line one\nline two",,,', "2026-13-01,expense,Cash,EUR,1,Food,,,,"), [
       { line: 4, message: /date/ },
     ]);
   });
 
-  it("reports malformed quoting", () => {
-    check(csv('2026-01-01,expense,Cash,EUR,1,Food,"never closed,,,'), [{ line: 2, message: /never closed/ }]);
+  it("reports malformed quoting", async () => {
+    await check(csv('2026-01-01,expense,Cash,EUR,1,Food,"never closed,,,'), [{ line: 2, message: /never closed/ }]);
   });
 
-  it("shows the first 50 problems and the total", () => {
+  it("shows the first 50 problems and the total", async () => {
     const rows = Array.from({ length: 120 }, () => "bad,expense,Cash,EUR,1,Food,,,,");
-    const p = check(csv(...rows), [{ line: 2, message: /date/ }]);
+    const p = await check(csv(...rows), [{ line: 2, message: /date/ }]);
     expect(p.problems).toHaveLength(MAX_PROBLEMS_SHOWN);
     expect(p.problemCount).toBe(120);
   });
 
-  it("rejects more than 50 000 rows and files over 5 MB, and empty files", () => {
+  it("rejects more than 50 000 rows and files over 5 MB, and empty files", async () => {
     const row = "2026-01-01,expense,Cash,EUR,1,Food,,,,";
-    check(csv(...Array.from({ length: 50_001 }, () => row)), [{ message: /50,001 rows; the limit is 50,000/ }]);
-    check("x".repeat(IMPORT_MAX_BYTES + 1), [{ message: /larger than 5 MB/ }]);
-    check("", [{ message: /empty/ }]);
-    check("﻿  \n", [{ message: /empty/ }]);
+    await check(csv(...Array.from({ length: 50_001 }, () => row)), [{ message: /50,001 rows; the limit is 50,000/ }]);
+    await check("x".repeat(IMPORT_MAX_BYTES + 1), [{ message: /larger than 5 MB/ }]);
+    await check("", [{ message: /empty/ }]);
+    await check("﻿  \n", [{ message: /empty/ }]);
   });
 });
 
 describe("backup problems", () => {
-  const check = (text: string, expected: Parameters<typeof expectProblems>[1]) => {
-    const before = snapshot();
-    const p = previewImport(alice.id, text);
+  const check = async (text: string, expected: Parameters<typeof expectProblems>[1]) => {
+    const before = await snapshot();
+    const p = await previewImport(alice.id, text);
     expectProblems(p, expected);
-    expect(runImport(alice.id, text).imported).toBe(false);
-    expect(snapshot()).toEqual(before);
+    expect((await runImport(alice.id, text)).imported).toBe(false);
+    expect(await snapshot()).toEqual(before);
     return p;
   };
   type Row = Record<string, unknown>;
@@ -556,22 +553,22 @@ describe("backup problems", () => {
     transfers: [{ date: "2026-01-02", note: null, fromWalletId: 1, toWalletId: 2, amountMinor: 100, receivedAmountMinor: 110 }],
   });
 
-  it("accepts the minimal valid document, ignoring unknown fields", () => {
+  it("accepts the minimal valid document, ignoring unknown fields", async () => {
     const doc = { ...base(), extra: { anything: true } } as Record<string, unknown>;
     (doc.wallets as Record<string, unknown>[])[0].colour = "red";
-    expect(previewImport(alice.id, json(doc))).toMatchObject({ ok: true, transactionsToAdd: 1, transfersToAdd: 1 });
+    expect(await previewImport(alice.id, json(doc))).toMatchObject({ ok: true, transactionsToAdd: 1, transfersToAdd: 1 });
   });
 
-  it("rejects malformed JSON, JSON of the wrong shape and unknown versions", () => {
-    check('{"app": "expenses-tracker", "version": 1, ', [{ path: "(file)", message: /not valid JSON/ }]);
-    check("[1,2,3]", [{ message: /not an Expenses Tracker backup/ }]);
-    check(json({ hello: "world" }), [{ message: /not an Expenses Tracker backup/ }]);
-    check(json({ ...base(), version: 2 }), [{ path: "version", message: /version 2, made by a newer version/ }]);
-    check(json({ ...base(), version: "1" }), [{ path: "version", message: /Unsupported backup version "1"/ }]);
-    check(json({ ...base(), wallets: "nope" }), [{ path: "wallets", message: /./ }]);
+  it("rejects malformed JSON, JSON of the wrong shape and unknown versions", async () => {
+    await check('{"app": "expenses-tracker", "version": 1, ', [{ path: "(file)", message: /not valid JSON/ }]);
+    await check("[1,2,3]", [{ message: /not an Expenses Tracker backup/ }]);
+    await check(json({ hello: "world" }), [{ message: /not an Expenses Tracker backup/ }]);
+    await check(json({ ...base(), version: 2 }), [{ path: "version", message: /version 2, made by a newer version/ }]);
+    await check(json({ ...base(), version: "1" }), [{ path: "version", message: /Unsupported backup version "1"/ }]);
+    await check(json({ ...base(), wallets: "nope" }), [{ path: "wallets", message: /./ }]);
   });
 
-  it("reports schema problems with their path", () => {
+  it("reports schema problems with their path", async () => {
     const doc = base();
     (doc.transactions[0] as Record<string, unknown>).amountMinor = 2 ** 53;
     (doc.transactions[0] as Record<string, unknown>).date = undefined;
@@ -579,7 +576,7 @@ describe("backup problems", () => {
     (doc.categories[1] as Record<string, unknown>).kind = "transfer";
     (doc.transfers[0] as Record<string, unknown>).amountMinor = -5;
     (doc.wallets[0] as Record<string, unknown>).name = "x".repeat(5_000);
-    check(json(doc), [
+    await check(json(doc), [
       { path: "transactions[0].amountMinor", message: /whole number/ },
       { path: "transactions[0].date", message: /YYYY-MM-DD/ },
       { path: "wallets[1].initialBalanceMinor", message: /whole number/ },
@@ -589,7 +586,7 @@ describe("backup problems", () => {
     ]);
   });
 
-  it("reports dangling references, duplicate ids and rule violations with their path", () => {
+  it("reports dangling references, duplicate ids and rule violations with their path", async () => {
     const doc = base();
     doc.wallets.push({ id: 2, name: "Dup", currency: "EUR", initialBalanceMinor: 0 });
     doc.categories.push({ id: 1, name: "Dup", kind: "expense" });
@@ -607,7 +604,7 @@ describe("backup problems", () => {
       { date: "2026-01-02", note: null, fromWalletId: 1, toWalletId: 2, amountMinor: 1 } as never,
       { date: "2026-01-02", note: null, fromWalletId: 1, toWalletId: 9, amountMinor: 1, receivedAmountMinor: 2 },
     );
-    check(json(doc), [
+    await check(json(doc), [
       { path: "wallets[2].id", message: /Duplicate wallet id 2/ },
       { path: "categories[2].id", message: /Duplicate category id 1/ },
       { path: "wallets[3].name", message: /Enter a name/ },
@@ -624,21 +621,21 @@ describe("backup problems", () => {
     ]);
   });
 
-  it("rejects more than 50 000 transactions + transfers", () => {
+  it("rejects more than 50 000 transactions + transfers", async () => {
     const doc = base();
     const t = doc.transactions[0];
     // Minimal entries so the file stays under the 5 MB cap.
     doc.transactions = Array.from({ length: 45_000 }, () => ({ ...t, amount: undefined, note: undefined }));
     doc.transfers = Array.from({ length: 5_001 }, () => doc.transfers[0]);
-    check(json(doc), [{ path: "(file)", message: /50,001 transactions and transfers; the limit is 50,000/ }]);
+    await check(json(doc), [{ path: "(file)", message: /50,001 transactions and transfers; the limit is 50,000/ }]);
   });
 });
 
 describe("isolation and atomicity", () => {
-  it("never touches another user's rows, whatever ids the file uses", () => {
-    const { eur } = seedAlice();
-    const before = snapshot();
-    const bob = newUser("bob@example.com");
+  it("never touches another user's rows, whatever ids the file uses", async () => {
+    const { eur } = await seedAlice();
+    const before = await snapshot();
+    const bob = await newUser("bob@example.com");
     const doc = {
       app: "expenses-tracker",
       version: 1,
@@ -648,13 +645,13 @@ describe("isolation and atomicity", () => {
       transactions: [{ date: "2026-01-02", kind: "expense", walletId: eur.id, categoryId: alice.cat("Food"), amountMinor: 1_250, note: "=SUM(A1:A9)" }],
       transfers: [],
     };
-    const r = runImport(bob.id, json(doc));
+    const r = await runImport(bob.id, json(doc));
     // Alice has this exact entry three times, but it is not a duplicate for Bob.
     expect(r).toMatchObject({ imported: true, transactionsToAdd: 1, duplicateTransactions: 0 });
-    const bobRows = db.select().from(transactions).where(eq(transactions.userId, bob.id)).all();
+    const bobRows = await db.select().from(transactions).where(eq(transactions.userId, bob.id));
     expect(bobRows).toHaveLength(1);
     expect(bobRows[0].walletId).not.toBe(eur.id);
-    const after = snapshot();
+    const after = await snapshot();
     const aliceOnly = (s: typeof before) => ({
       wallets: s.wallets.filter((w) => w.userId === alice.id),
       categories: s.categories.filter((c) => c.userId === alice.id),
@@ -663,57 +660,48 @@ describe("isolation and atomicity", () => {
     });
     expect(aliceOnly(after)).toEqual(aliceOnly(before));
     // CSV into Bob: Alice's wallet "Main" is not Bob's.
-    expect(previewImport(bob.id, buildTransactionsCsv(alice.id)).walletsToCreate.length).toBeGreaterThan(0);
+    expect((await previewImport(bob.id, await buildTransactionsCsv(alice.id))).walletsToCreate.length).toBeGreaterThan(0);
   });
 
-  it("writes nothing when a problem is found late in a large file", () => {
+  it("writes nothing when a problem is found late in a large file", async () => {
     const rows = Array.from({ length: 2_000 }, (_, i) => `2026-01-01,expense,Cash,EUR,${i + 1},Food,,,,`);
     rows.push("2026-01-01,expense,Cash,EUR,abc,Food,,,,");
-    const before = snapshot();
-    const r = runImport(alice.id, csv(...rows));
+    const before = await snapshot();
+    const r = await runImport(alice.id, csv(...rows));
     expect(r).toMatchObject({ imported: false, problemCount: 1 });
     expect(r.problems[0].line).toBe(2_002);
-    expect(snapshot()).toEqual(before);
+    expect(await snapshot()).toEqual(before);
   });
 });
 
 describe("money with 0 and 3 decimals", () => {
-  it("round-trips JPY and KWD through both formats", () => {
-    const jpy = createWallet(alice.id, { name: "Yen", currency: "JPY", initialBalanceMinor: -7 });
-    const kwd = createWallet(alice.id, { name: "Dinar", currency: "KWD", initialBalanceMinor: 1 });
-    createTransaction(alice.id, { walletId: jpy.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 123_456, date: "2026-01-01" });
-    createTransaction(alice.id, { walletId: kwd.id, kind: "income", categoryId: alice.cat("Salary"), amountMinor: 1_001, date: "2026-01-01" });
-    createTransfer(alice.id, { fromWalletId: kwd.id, toWalletId: jpy.id, amountMinor: 5, receivedAmountMinor: 3, date: "2026-01-02" });
+  it("round-trips JPY and KWD through both formats", async () => {
+    const jpy = await createWallet(alice.id, { name: "Yen", currency: "JPY", initialBalanceMinor: -7 });
+    const kwd = await createWallet(alice.id, { name: "Dinar", currency: "KWD", initialBalanceMinor: 1 });
+    await createTransaction(alice.id, { walletId: jpy.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 123_456, date: "2026-01-01" });
+    await createTransaction(alice.id, { walletId: kwd.id, kind: "income", categoryId: alice.cat("Salary"), amountMinor: 1_001, date: "2026-01-01" });
+    await createTransfer(alice.id, { fromWalletId: kwd.id, toWalletId: jpy.id, amountMinor: 5, receivedAmountMinor: 3, date: "2026-01-02" });
 
-    const b = buildBackup(alice.id);
+    const b = await buildBackup(alice.id);
     expect(b.wallets.map((w) => w.initialBalance)).toEqual(["-7", "0.001"]);
     expect(b.transfers[0]).toMatchObject({ amount: "0.005", receivedAmount: "3" });
-    const csvText = buildTransactionsCsv(alice.id);
+    const csvText = await buildTransactionsCsv(alice.id);
     expect(csvText).toContain("123456");
     expect(csvText).toContain("1.001");
 
-    const bob = newUser("bob@example.com");
-    const carol = newUser("carol@example.com");
-    runImport(bob.id, json(b));
-    runImport(carol.id, csvText);
-    expect(walletState(bob.id)).toEqual(walletState(alice.id));
-    const movement = (u: number) => walletState(u).map((w) => [w.name, w.balance - w.initial]);
-    expect(movement(carol.id)).toEqual(movement(alice.id));
+    const bob = await newUser("bob@example.com");
+    const carol = await newUser("carol@example.com");
+    await runImport(bob.id, json(b));
+    await runImport(carol.id, csvText);
+    expect(await walletState(bob.id)).toEqual(await walletState(alice.id));
+    const movement = async (u: number) => (await walletState(u)).map((w) => [w.name, w.balance - w.initial]);
+    expect(await movement(carol.id)).toEqual(await movement(alice.id));
   });
 });
 
 describe("performance", () => {
-  let dir: string;
-  afterEach(() => {
-    setDb(undefined);
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("imports 50 000 CSV rows into a file-backed DB in a few seconds, and re-imports them as duplicates", () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "et-import-"));
-    db = createDatabase(path.join(dir, "perf.db"));
-    setDb(db);
-    const u = makeUser(db, "perf@example.com");
+  it("imports 50 000 CSV rows into the in-process Postgres in a few seconds, and re-imports them as duplicates", async () => {
+    const u = await makeUser(db, "perf@example.com");
     const wallets = ["Main|EUR", "Cash|EUR", "Card|USD", "Yen|JPY"];
     const cats = ["Food", "Groceries", "Bills", "Transport", "Housing"];
     const rows: string[][] = [["date", "type", "wallet", "currency", "amount", "category", "note", "to_wallet", "to_currency", "to_amount"]];
@@ -731,23 +719,23 @@ describe("performance", () => {
     expect(Buffer.byteLength(text)).toBeLessThan(IMPORT_MAX_BYTES);
 
     let t0 = performance.now();
-    const preview = previewImport(u.id, text);
+    const preview = await previewImport(u.id, text);
     const previewMs = performance.now() - t0;
     expect(preview).toMatchObject({ ok: true, transactionsToAdd: 45_000, transfersToAdd: 5_000 });
 
     t0 = performance.now();
-    const r = runImport(u.id, text);
+    const r = await runImport(u.id, text);
     const importMs = performance.now() - t0;
     expect(r).toMatchObject({ imported: true, transactionsToAdd: 45_000, transfersToAdd: 5_000 });
-    expect(counts(u.id)).toMatchObject({ transactions: 45_000, transfers: 5_000, legs: 10_000 });
+    expect(await counts(u.id)).toMatchObject({ transactions: 45_000, transfers: 5_000, legs: 10_000 });
 
     t0 = performance.now();
-    const again = runImport(u.id, text);
+    const again = await runImport(u.id, text);
     const reimportMs = performance.now() - t0;
     expect(again).toMatchObject({ imported: true, transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 45_000, duplicateTransfers: 5_000 });
 
     t0 = performance.now();
-    const exported = buildTransactionsCsv(u.id);
+    const exported = await buildTransactionsCsv(u.id);
     const exportMs = performance.now() - t0;
     expect(parseCsv(exported).records).toHaveLength(50_001);
 
@@ -757,6 +745,6 @@ describe("performance", () => {
     );
     expect(importMs).toBeLessThan(15_000);
     // The users table is untouched by imports.
-    expect(db.select().from(users).all()).toHaveLength(1);
+    expect(await db.select().from(users)).toHaveLength(2); // alice (beforeEach) and perf
   }, 60_000);
 });

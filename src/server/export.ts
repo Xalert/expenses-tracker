@@ -1,6 +1,6 @@
 import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, transfers, walletGroups, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
@@ -23,6 +23,9 @@ export const CSV_COLUMNS = [
   "to_amount",
 ] as const;
 
+/** Read-only transactions of the exports see one consistent snapshot. */
+const SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
+
 const outLeg = alias(transactions, "out_leg");
 const inLeg = alias(transactions, "in_leg");
 
@@ -37,8 +40,8 @@ export type TransferRow = {
 };
 
 /** Internal: every transfer of the user with both legs, oldest first (date, id). One query. */
-export function listTransferRows(userId: number, tx: DBOrTx = getDb()): TransferRow[] {
-  return tx
+export async function listTransferRows(userId: number, tx?: DBOrTx): Promise<TransferRow[]> {
+  return (tx ?? (await getDb()))
     .select({
       id: transfers.id,
       date: transfers.date,
@@ -52,39 +55,36 @@ export function listTransferRows(userId: number, tx: DBOrTx = getDb()): Transfer
     .innerJoin(outLeg, and(eq(outLeg.transferId, transfers.id), eq(outLeg.kind, "transfer_out")))
     .innerJoin(inLeg, and(eq(inLeg.transferId, transfers.id), eq(inLeg.kind, "transfer_in")))
     .where(eq(transfers.userId, userId))
-    .orderBy(asc(transfers.date), asc(transfers.id))
-    .all();
+    .orderBy(asc(transfers.date), asc(transfers.id));
 }
 
 /**
  * The whole account as a versioned backup. Ids in the file are local (1..n per list, in export order); the
  * user's email, password hash and sessions are never included.
  */
-export function buildBackup(userId: number, now: Date = new Date()): Backup {
-  const db = getDb();
-  return db.transaction((tx) => {
-    const walletRows = tx.select().from(wallets).where(eq(wallets.userId, userId)).orderBy(asc(wallets.id)).all();
+export async function buildBackup(userId: number, now: Date = new Date()): Promise<Backup> {
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
+    const walletRows = await tx.select().from(wallets).where(eq(wallets.userId, userId)).orderBy(asc(wallets.id));
     const groupName = new Map(
-      tx
-        .select({ id: walletGroups.id, name: walletGroups.name })
-        .from(walletGroups)
-        .where(eq(walletGroups.userId, userId))
-        .all()
-        .map((g) => [g.id, g.name]),
+      (
+        await tx
+          .select({ id: walletGroups.id, name: walletGroups.name })
+          .from(walletGroups)
+          .where(eq(walletGroups.userId, userId))
+      ).map((g) => [g.id, g.name]),
     );
-    const categoryRows = tx
+    const categoryRows = await tx
       .select()
       .from(categories)
       .where(eq(categories.userId, userId))
-      .orderBy(asc(categories.id))
-      .all();
-    const txRows = tx
+      .orderBy(asc(categories.id));
+    const txRows = await tx
       .select()
       .from(transactions)
       .where(and(eq(transactions.userId, userId), isNull(transactions.transferId)))
-      .orderBy(asc(transactions.date), asc(transactions.id))
-      .all();
-    const transferRows = listTransferRows(userId, tx);
+      .orderBy(asc(transactions.date), asc(transactions.id));
+    const transferRows = await listTransferRows(userId, tx);
 
     const walletRef = new Map(walletRows.map((w, i) => [w.id, i + 1]));
     const currencyOf = new Map(walletRows.map((w) => [w.id, w.currency]));
@@ -124,7 +124,7 @@ export function buildBackup(userId: number, now: Date = new Date()): Backup {
         receivedAmount: minorToInputValue(t.receivedAmountMinor, currencyOf.get(t.toWalletId)!),
       })),
     };
-  });
+  }, SNAPSHOT);
 }
 
 /**
@@ -132,21 +132,19 @@ export function buildBackup(userId: number, now: Date = new Date()): Backup {
  * account, in creation order, and nothing else (no ids, balances or transactions). Made for companion tools such as
  * the Statement Importer artifact.
  */
-export function buildContext(userId: number, now: Date = new Date()): ContextExport {
-  const db = getDb();
-  return db.transaction((tx) => {
-    const walletRows = tx
+export async function buildContext(userId: number, now: Date = new Date()): Promise<ContextExport> {
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
+    const walletRows = await tx
       .select({ name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
       .from(wallets)
       .where(eq(wallets.userId, userId))
-      .orderBy(asc(wallets.id))
-      .all();
-    const categoryRows = tx
+      .orderBy(asc(wallets.id));
+    const categoryRows = await tx
       .select({ name: categories.name, kind: categories.kind })
       .from(categories)
       .where(eq(categories.userId, userId))
-      .orderBy(asc(categories.id))
-      .all();
+      .orderBy(asc(categories.id));
     return {
       app: BACKUP_APP,
       kind: CONTEXT_KIND,
@@ -155,7 +153,7 @@ export function buildContext(userId: number, now: Date = new Date()): ContextExp
       wallets: walletRows.map((w) => ({ name: w.name, currency: w.currency, archived: w.archivedAt !== null })),
       categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind })),
     };
-  });
+  }, SNAPSHOT);
 }
 
 export type CsvExportFilters = Omit<TransactionFilters, "limit" | "offset">;
@@ -165,26 +163,25 @@ export type CsvExportFilters = Omit<TransactionFilters, "limit" | "offset">;
  * A transfer is one row (`wallet` → `to_wallet`) and is included when either of its legs matches the filters.
  * Text cells are protected against spreadsheet formula injection (`escapeFormula`).
  */
-export function buildTransactionsCsv(userId: number, filters: CsvExportFilters = {}): string {
-  const db = getDb();
-  return db.transaction((tx) => {
+export async function buildTransactionsCsv(userId: number, filters: CsvExportFilters = {}): Promise<string> {
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
     const where = filterConditions(userId, filters);
-    const walletRows = tx
+    const walletRows = await tx
       .select({ id: wallets.id, name: wallets.name, currency: wallets.currency })
       .from(wallets)
-      .where(eq(wallets.userId, userId))
-      .all();
+      .where(eq(wallets.userId, userId));
     const walletById = new Map(walletRows.map((w) => [w.id, w]));
     const categoryName = new Map(
-      tx
-        .select({ id: categories.id, name: categories.name })
-        .from(categories)
-        .where(eq(categories.userId, userId))
-        .all()
-        .map((c) => [c.id, c.name]),
+      (
+        await tx
+          .select({ id: categories.id, name: categories.name })
+          .from(categories)
+          .where(eq(categories.userId, userId))
+      ).map((c) => [c.id, c.name]),
     );
 
-    const matching = tx
+    const matching = await tx
       .select({
         kind: transactions.kind,
         walletId: transactions.walletId,
@@ -196,11 +193,10 @@ export function buildTransactionsCsv(userId: number, filters: CsvExportFilters =
       })
       .from(transactions)
       .where(where)
-      .orderBy(asc(transactions.date), asc(transactions.id))
-      .all();
+      .orderBy(asc(transactions.date), asc(transactions.id));
 
     const needTransfers = matching.some((r) => r.transferId !== null);
-    const transferById = needTransfers ? new Map(listTransferRows(userId, tx).map((t) => [t.id, t])) : new Map();
+    const transferById = needTransfers ? new Map((await listTransferRows(userId, tx)).map((t) => [t.id, t])) : new Map();
 
     const rows: string[][] = [[...CSV_COLUMNS]];
     const seenTransfers = new Set<number>();
@@ -243,5 +239,5 @@ export function buildTransactionsCsv(userId: number, filters: CsvExportFilters =
       ]);
     }
     return toCsv(rows);
-  });
+  }, SNAPSHOT);
 }

@@ -22,7 +22,7 @@ export async function createCategoryAction(kindArg: string, _prev: FormState, fo
   if (!kind) return { message: "Choose expense or income.", values };
   let name: string;
   try {
-    name = createCategory(user.id, { name: nameField(formData), kind }).name;
+    name = (await createCategory(user.id, { name: nameField(formData), kind })).name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -42,7 +42,7 @@ export async function renameCategoryAction(
   if (!categoryId) return { ...NOT_FOUND_STATE, values };
   let name: string;
   try {
-    name = renameCategory(user.id, categoryId, { name: nameField(formData) }).name;
+    name = (await renameCategory(user.id, categoryId, { name: nameField(formData) })).name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -62,7 +62,7 @@ export async function deleteCategoryAction(
   const user = await requireUser();
   const values = formValues(formData);
   const categoryId = parseCategoryId(categoryIdArg);
-  const category = categoryId ? getCategory(user.id, categoryId) : null;
+  const category = categoryId ? await getCategory(user.id, categoryId) : null;
   if (!category) {
     revalidateCategories();
     return NOT_FOUND_STATE;
@@ -70,14 +70,14 @@ export async function deleteCategoryAction(
   const moveToCategoryId = parseMoveTo(formData);
   let moved: number;
   try {
-    moved = deleteCategory(user.id, category.id, { moveToCategoryId }).movedTransactions;
+    moved = (await deleteCategory(user.id, category.id, { moveToCategoryId })).movedTransactions;
   } catch (err) {
     // The category gained transactions since the page was rendered: refresh the counts so the row offers the
     // replacement picker.
     if (isServiceError(err) && err.code === "CONFLICT") revalidateCategories();
     return serviceErrorState(err, values);
   }
-  const target = moved > 0 && moveToCategoryId ? getCategory(user.id, moveToCategoryId) : null;
+  const target = moved > 0 && moveToCategoryId ? await getCategory(user.id, moveToCategoryId) : null;
   revalidateCategories();
   return {
     ok: true,

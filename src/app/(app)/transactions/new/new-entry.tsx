@@ -27,7 +27,7 @@ export async function NewEntry({
   /** "dialog" from the intercepted route: no card, and a save closes the dialog instead of redirecting. */
   variant?: "page" | "dialog";
 }) {
-  const wallets = walletOptions(userId);
+  const wallets = await walletOptions(userId);
 
   if (wallets.length === 0) {
     const empty = (
@@ -45,7 +45,7 @@ export async function NewEntry({
   const walletParam = parseId(searchParams.wallet);
   // A `wallet` param wins; else the first active wallet of the selected group, if it has one.
   const { selected } = await getGroupScope();
-  const groupFirst = selected ? listWallets(userId, { groupId: selected.id })[0]?.id : undefined;
+  const groupFirst = selected ? (await listWallets(userId, { groupId: selected.id }))[0]?.id : undefined;
   const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : groupFirst;
 
   const today = todayISO();
@@ -53,7 +53,7 @@ export async function NewEntry({
     <EntryForm
       variant={variant}
       wallets={wallets}
-      categories={categoryOptions(userId)}
+      categories={await categoryOptions(userId)}
       initial={{ kind, walletId, fromWalletId: walletId, date: today }}
       today={today}
       transactionAction={createTransactionAction}

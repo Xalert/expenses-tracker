@@ -9,8 +9,8 @@ import { authenticateUser, registerUser } from "@/server/users";
 import { useFreshDb } from "./helpers";
 
 let db: DB;
-beforeEach(() => {
-  db = useFreshDb();
+beforeEach(async () => {
+  db = await useFreshDb();
 });
 
 const PW = "password1";
@@ -30,8 +30,8 @@ describe("registration", () => {
   it("needs only a user ID and a password; optional fields are stored as NULL", async () => {
     const u = await registerUser({ username: " Ana_1 ", password: PW, email: "", firstName: "  ", lastName: "" });
     expect(u).toEqual({ id: u.id, username: "ana_1", email: null, firstName: null, lastName: null, displayName: "ana_1" });
-    expect(db.select().from(users).all()[0]).toMatchObject({ username: "ana_1", email: null, firstName: null, lastName: null });
-    expect(listCategories(u.id)).toHaveLength(8);
+    expect((await db.select().from(users))[0]).toMatchObject({ username: "ana_1", email: null, firstName: null, lastName: null });
+    expect(await listCategories(u.id)).toHaveLength(8);
 
     // Omitted entirely behaves the same as empty.
     const v = await registerUser({ username: "bob", password: PW });
@@ -99,7 +99,7 @@ describe("registration", () => {
     await registerUser({ username: "one", password: PW });
     await registerUser({ username: "two", password: PW, email: "" });
     await registerUser({ username: "three", password: PW, email: "   " });
-    expect(db.select().from(users).all().map((u) => u.email)).toEqual([null, null, null]);
+    expect((await db.select().from(users).orderBy(users.id)).map((u) => u.email)).toEqual([null, null, null]);
   });
 
   it("validates email, names and password", async () => {
@@ -118,7 +118,7 @@ describe("registration", () => {
     await expect(
       registerUser({ username: "ana", password: PW, firstName: "x".repeat(80), lastName: "y".repeat(80) }),
     ).resolves.toMatchObject({ firstName: "x".repeat(80) });
-    expect(db.select().from(users).all()).toHaveLength(1);
+    expect(await db.select().from(users)).toHaveLength(1);
   });
 });
 

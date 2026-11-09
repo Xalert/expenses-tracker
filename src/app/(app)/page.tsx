@@ -43,13 +43,13 @@ export default async function OverviewPage({ searchParams }: Props) {
   const month = requested > maxMonth ? maxMonth : requested;
   const { selected } = await getGroupScope();
   const groupId = selected?.id;
-  const data = getDashboard(user.id, { month, groupId });
+  const data = await getDashboard(user.id, { month, groupId });
 
-  const held = [...new Set(listWallets(user.id, { includeArchived: true, groupId }).map((w) => w.currency))];
+  const held = [...new Set((await listWallets(user.id, { includeArchived: true, groupId })).map((w) => w.currency))];
   const { currency, explicit } =
     data.wallets.length === 0
       ? { currency: null, explicit: false }
-      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month, { groupId }));
+      : await resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month, { groupId }));
 
   if (currency === null) {
     return (
@@ -105,8 +105,8 @@ export default async function OverviewPage({ searchParams }: Props) {
   const convertMonth = view === "all" && canSwitchView;
   const dailyRates = convertMonth ? await getDailyRates(monthRange(previousMonth).from, monthRange(month).to) : null;
   const convert = convertMonth ? { rates: dailyRates } : undefined;
-  const timeline = getMonthTimeline(user.id, { month, currency, convert, groupId });
-  const insights = getMonthInsights(user.id, { month, currency, convert, groupId });
+  const timeline = await getMonthTimeline(user.id, { month, currency, convert, groupId });
+  const insights = await getMonthInsights(user.id, { month, currency, convert, groupId });
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
   const monthMissing = [
     ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
@@ -145,11 +145,11 @@ export default async function OverviewPage({ searchParams }: Props) {
 
   const changes = new Map<number, number>();
   for (const w of shownWallets) {
-    const m = getWalletMonth(user.id, w.id, month);
+    const m = await getWalletMonth(user.id, w.id, month);
     changes.set(w.id, m ? m.inMinor - m.outMinor : 0);
   }
 
-  const activeCurrencies = listUserCurrencies(user.id, { groupId });
+  const activeCurrencies = await listUserCurrencies(user.id, { groupId });
   const pace = paceSummary({ ...insights.pace, previousMonth, isCurrentMonth });
   const previousName = monthName(previousMonth);
   const { noSpendDays: noSpend, topCategory } = insights;

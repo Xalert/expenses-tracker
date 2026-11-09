@@ -1,16 +1,37 @@
 # Expenses Tracker, built from this source folder — `docker compose up -d` is the whole install. Then open
 # http://<host>:3000. To run the published image without cloning or building, use deploy/compose.yaml instead.
+# Set POSTGRES_PASSWORD in a `.env` file next to this one (URL-safe characters only); the default is `expenses`.
 services:
+  db:
+    # Pinned to a major version: moving to another major is a dump and restore (docs/SELF-HOSTING.md).
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: expenses
+      POSTGRES_DB: expenses
+      # The port is not published, so only this Compose network can reach it.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-expenses}
+    volumes:
+      - pg-data:/var/lib/postgresql/data   # all app data lives here
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U expenses -d expenses"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   expenses-tracker:
     build: .
     # Built locally from this folder (deploy/compose.yaml runs the prebuilt ghcr.io image instead).
     image: expenses-tracker:latest
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "3000:3000"           # host:container — change the left side to use another host port
     environment:
-      # SQLite file inside the /data volume (created and migrated on first start).
-      DATABASE_URL: /data/app.db
+      # Migrated on first start.
+      DATABASE_URL: postgres://expenses:${POSTGRES_PASSWORD:-expenses}@db:5432/expenses
       # Session cookie `Secure` flag: auto = only when the request came in over HTTPS (X-Forwarded-Proto: https).
       # Use true only if every request reaches the app through HTTPS; false never marks it secure.
       COOKIE_SECURE: auto
@@ -20,8 +41,6 @@ services:
       EXCHANGE_RATES: "true"
       # Port the server listens on inside the container (keep the right side of `ports:` in sync).
       PORT: 3000
-    volumes:
-      - expenses-data:/data   # all app data lives here (app.db + its -wal/-shm files)
 
 volumes:
-  expenses-data:
+  pg-data:

@@ -12,5 +12,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.{ts,tsx}"],
+    // Tests run on PGlite (`useFreshDb()`); a test that reaches `getDb()` without it must fail, never fall back to
+    // the default dev database (the owner's real data) — `.invalid` cannot resolve.
+    env: { DATABASE_URL: "postgres://tests-must-use-pglite@db.invalid:1/none" },
   },
 });

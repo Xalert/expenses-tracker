@@ -24,7 +24,7 @@ export default async function EditTransferPage({
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const returnTo = safeReturnTo(sp.returnTo);
   const transferId = parseId(id);
-  const t = transferId ? getTransfer(user.id, transferId) : null;
+  const t = transferId ? await getTransfer(user.id, transferId) : null;
   if (!t) notFound();
 
   return (
@@ -47,8 +47,8 @@ export default async function EditTransferPage({
         }
       />
       <EntryForm
-        wallets={walletOptions(user.id, [t.from.walletId, t.to.walletId])}
-        categories={categoryOptions(user.id)}
+        wallets={await walletOptions(user.id, [t.from.walletId, t.to.walletId])}
+        categories={await categoryOptions(user.id)}
         initial={{
           kind: "transfer",
           fromWalletId: t.from.walletId,

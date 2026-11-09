@@ -60,7 +60,7 @@ export default async function TransactionsPage({
   const filters = { ...listFilters(params, thisMonth), groupId };
   const filtered = hasFilters(params, thisMonth);
 
-  const { items, total } = listTransactions(user.id, {
+  const { items, total } = await listTransactions(user.id, {
     ...filters,
     limit: PAGE_SIZE,
     offset: (params.page - 1) * PAGE_SIZE,
@@ -71,10 +71,10 @@ export default async function TransactionsPage({
   if (params.page > lastPage) redirect(listHref(params, { page: lastPage }));
 
   const currentHref = listHref(params);
-  const wallets = listWallets(user.id, { includeArchived: true, groupId });
-  const categories = listCategories(user.id);
-  const anyAtAll = total > 0 || listTransactions(user.id, { limit: 1, groupId }).total > 0;
-  const totals = listDayTotals(user.id, filters, [...new Set(items.map((t) => t.date))]);
+  const wallets = await listWallets(user.id, { includeArchived: true, groupId });
+  const categories = await listCategories(user.id);
+  const anyAtAll = total > 0 || (await listTransactions(user.id, { limit: 1, groupId })).total > 0;
+  const totals = await listDayTotals(user.id, filters, [...new Set(items.map((t) => t.date))]);
 
   // The day strip: only when one month is in view (or one day of it is selected).
   const strip = anyAtAll ? stripMonth(view) : null;
@@ -84,16 +84,17 @@ export default async function TransactionsPage({
     const held = [...new Set(wallets.map((w) => w.currency))];
     const currency = walletFilter
       ? walletFilter.currency
-      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month, { groupId })).currency;
+      : (await resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month, { groupId })))
+          .currency;
     if (currency) {
-      const timeline = getMonthTimeline(user.id, {
+      const timeline = await getMonthTimeline(user.id, {
         month: strip.month,
         currency,
         walletId: walletFilter?.id,
         categoryId: params.category,
         groupId,
       });
-      const activeCurrencies = listUserCurrencies(user.id, { groupId });
+      const activeCurrencies = await listUserCurrencies(user.id, { groupId });
       const showSwitch = !walletFilter && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
       stripNode = (
         <DayStrip
@@ -128,7 +129,7 @@ export default async function TransactionsPage({
   }));
   // The row editors offer every wallet (a transfer can cross groups), not just the selected group's.
   const editWalletOptions = toWalletOptions(
-    selected ? listWallets(user.id, { includeArchived: true }) : wallets,
+    selected ? await listWallets(user.id, { includeArchived: true }) : wallets,
     groups.length >= 2,
   );
   const categoryOptions = categories.map(({ id, name, kind }) => ({ id, name, kind }));

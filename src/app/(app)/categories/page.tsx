@@ -27,14 +27,16 @@ export default async function CategoriesPage({ searchParams }: Props) {
 
   // Same rule as the Overview: a held `?currency=` wins, else the month's default. With only archived wallets there
   // is no default; their first currency is shown then. No wallets at all → no amounts and no split card.
-  const held = [...new Set(listWallets(user.id, { includeArchived: true, groupId }).map((w) => w.currency))].sort();
-  const resolved = resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month, { groupId }));
+  const held = [...new Set((await listWallets(user.id, { includeArchived: true, groupId })).map((w) => w.currency))].sort();
+  const resolved = await resolveOverviewCurrency(params.currency, held, () =>
+    pickDefaultCurrency(user.id, month, { groupId }),
+  );
   const currency = resolved.currency ?? held[0] ?? null;
   const explicit = resolved.explicit;
 
-  const all = listCategoriesWithUsage(user.id, { month, ...(currency ? { currency } : {}), groupId });
+  const all = await listCategoriesWithUsage(user.id, { month, ...(currency ? { currency } : {}), groupId });
   const split = currency ? spendingSplit(all) : null;
-  const activeCurrencies = listUserCurrencies(user.id, { groupId });
+  const activeCurrencies = await listUserCurrencies(user.id, { groupId });
   const showSwitch = currency !== null && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
 
   return (

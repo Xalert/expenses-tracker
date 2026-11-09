@@ -45,11 +45,11 @@ async function redirectOf(promise: Promise<unknown>): Promise<string> {
   throw new Error("expected a redirect");
 }
 
-let user: ReturnType<typeof makeUser>;
+let user: Awaited<ReturnType<typeof makeUser>>;
 
-beforeEach(() => {
-  const db = useFreshDb();
-  user = makeUser(db, "alice@example.com");
+beforeEach(async () => {
+  const db = await useFreshDb();
+  user = await makeUser(db, "alice@example.com");
   session.userId = user.id;
   next.revalidated = [];
 });
@@ -62,7 +62,7 @@ describe("createWalletAction", () => {
     );
     expect(state).toEqual({ ok: true, message: "Created Probe (CHF)" });
     expect(next.revalidated).toEqual([["/", "layout"]]);
-    expect(listWallets(user.id)).toEqual([
+    expect(await listWallets(user.id)).toEqual([
       expect.objectContaining({ name: "Probe", currency: "CHF", initialBalanceMinor: 1250 }),
     ]);
   });
@@ -71,7 +71,7 @@ describe("createWalletAction", () => {
     // The form posts the pill first, then the text input (both named `currency`).
     await createWalletAction({}, fd([["mode", "dialog"], ["name", "A"], ["currency", "EUR"], ["currency", "chf"]]));
     await createWalletAction({}, fd([["mode", "dialog"], ["name", "B"], ["currency", "USD"], ["currency", "  "]]));
-    expect(listWallets(user.id).map((w) => [w.name, w.currency])).toEqual([
+    expect((await listWallets(user.id)).map((w) => [w.name, w.currency])).toEqual([
       ["A", "CHF"],
       ["B", "USD"],
     ]);
@@ -79,7 +79,7 @@ describe("createWalletAction", () => {
 
   it("without mode redirects to the new wallet (the full page and no-JS use)", async () => {
     const url = await redirectOf(createWalletAction({}, fd([["name", "Cash"], ["currency", "EUR"]])));
-    const id = listWallets(user.id)[0].id;
+    const id = (await listWallets(user.id))[0].id;
     expect(url).toBe(`/wallets/${id}`);
     expect(next.revalidated).toContainEqual([`/wallets/${id}`]);
   });
@@ -93,7 +93,7 @@ describe("createWalletAction", () => {
     expect(state.fieldErrors).toMatchObject({ name: "Enter a name.", currency: "Choose a currency." });
     expect(state.values).toMatchObject({ currency: "XYZ", mode: "dialog", initialBalance: "1" });
     expect(next.revalidated).toEqual([]);
-    expect(listWallets(user.id)).toHaveLength(0);
+    expect(await listWallets(user.id)).toHaveLength(0);
 
     const jpy = await createWalletAction({}, fd([["mode", "dialog"], ["name", "Tokyo"], ["currency", "JPY"], ["initialBalance", "1.5"]]));
     expect(jpy.fieldErrors?.initialBalance).toMatch(/whole amount in JPY/);
@@ -102,15 +102,15 @@ describe("createWalletAction", () => {
 
 describe("updateWalletAction", () => {
   let id: number;
-  beforeEach(() => {
-    id = createWallet(user.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 }).id;
+  beforeEach(async () => {
+    id = (await createWallet(user.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 })).id;
   });
 
   it("with mode=dialog saves and returns ok without redirecting", async () => {
     const state = await updateWalletAction(id, {}, fd([["mode", "dialog"], ["name", "Pocket"], ["initialBalance", "-3"]]));
     expect(state).toEqual({ ok: true, message: "Saved Pocket" });
     expect(next.revalidated).toEqual([["/", "layout"]]);
-    expect(getWallet(user.id, id)).toMatchObject({ name: "Pocket", initialBalanceMinor: -300, currency: "EUR" });
+    expect(await getWallet(user.id, id)).toMatchObject({ name: "Pocket", initialBalanceMinor: -300, currency: "EUR" });
   });
 
   it("without mode redirects to the wallet", async () => {
@@ -120,9 +120,9 @@ describe("updateWalletAction", () => {
   it("echoes errors and treats another user's wallet as missing", async () => {
     const bad = await updateWalletAction(id, {}, fd([["mode", "dialog"], ["name", " "], ["initialBalance", "x"]]));
     expect(Object.keys(bad.fieldErrors ?? {}).sort()).toEqual(["initialBalance", "name"]);
-    expect(getWallet(user.id, id)?.name).toBe("Cash");
+    expect((await getWallet(user.id, id))?.name).toBe("Cash");
 
-    const other = makeUser(getDb(), "bob@example.com");
+    const other = await makeUser(await getDb(), "bob@example.com");
     session.userId = other.id;
     const state = await updateWalletAction(id, {}, fd([["mode", "dialog"], ["name", "Mine"]]));
     expect(state.message).toBe("Wallet not found.");

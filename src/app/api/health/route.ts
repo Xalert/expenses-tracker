@@ -4,9 +4,9 @@ import { getDb } from "@/db";
 export const dynamic = "force-dynamic";
 
 /** Public liveness/readiness probe for Docker HEALTHCHECK and reverse proxies. */
-export function GET() {
+export async function GET() {
   try {
-    getDb().get(sql`select 1`);
+    await (await getDb()).execute(sql`select 1`);
     return Response.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     console.error("[health] database check failed", err);

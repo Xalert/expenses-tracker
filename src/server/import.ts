@@ -105,24 +105,27 @@ export type ImportResult = ImportPreview & { imported: boolean };
 export type ImportInput = string | ImportFileInput[];
 
 /** Parse, validate and plan an import without writing anything. */
-export function previewImport(userId: number, input: ImportInput, opts: ImportOptions = {}): ImportPreview {
+export async function previewImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportPreview> {
   const parsed = parseImportFiles(input, opts);
   if (parsed.file.problems.length) return summarize(parsed, null);
-  return getDb().transaction((tx) => summarize(parsed, planImport(tx, userId, parsed.file, opts)));
+  const db = await getDb();
+  // A transaction only so the read-only plan sees one consistent snapshot of the account.
+  return await db.transaction(async (tx) => summarize(parsed, await planImport(tx, userId, parsed.file, opts)));
 }
 
 /**
  * Re-run the whole validation and planning (nothing from a previous preview is trusted) and, when there are no
  * problems, write everything in one DB transaction. With problems nothing is written and `imported` is false.
  */
-export function runImport(userId: number, input: ImportInput, opts: ImportOptions = {}): ImportResult {
+export async function runImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportResult> {
   const parsed = parseImportFiles(input, opts);
   if (parsed.file.problems.length) return { ...summarize(parsed, null), imported: false };
-  return getDb().transaction((tx) => {
-    const plan = planImport(tx, userId, parsed.file, opts);
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
+    const plan = await planImport(tx, userId, parsed.file, opts);
     const summary = summarize(parsed, plan);
     if (!summary.ok) return { ...summary, imported: false };
-    writePlan(tx, userId, parsed.file, plan);
+    await writePlan(tx, userId, parsed.file, plan);
     return { ...summary, imported: true };
   });
 }
@@ -316,17 +319,16 @@ type Plan = {
   problems: ImportProblem[];
 };
 
-function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: ImportOptions): Plan {
+async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: ImportOptions): Promise<Plan> {
   const skipDuplicates = opts.skipDuplicates ?? true;
   const problems: ImportProblem[] = [];
 
   // Wallets ------------------------------------------------------------------------------------------
-  const existingWallets = tx
+  const existingWallets = await tx
     .select({ id: wallets.id, name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
     .from(wallets)
     .where(eq(wallets.userId, userId))
-    .orderBy(wallets.id)
-    .all();
+    .orderBy(wallets.id);
   const candidates = new Map<string, { id: number; archived: boolean }[]>();
   for (const w of existingWallets) {
     const key = walletKey(w.name, w.currency);
@@ -343,8 +345,8 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   const walletsToCreate: number[] = [];
   const targetGroupId =
     opts.groupId === undefined
-      ? getDefaultGroupId(userId, tx)
-      : getOwnedGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx).id;
+      ? await getDefaultGroupId(userId, tx)
+      : (await getOwnedGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx)).id;
   parsed.wallets.forEach((w, i) => {
     const k = used.get(w.key) ?? 0;
     used.set(w.key, k + 1);
@@ -357,12 +359,11 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   });
 
   // Groups of the wallets to create -----------------------------------------------------------------
-  const groupRows = tx
+  const groupRows = await tx
     .select({ id: walletGroups.id, name: walletGroups.name })
     .from(walletGroups)
     .where(eq(walletGroups.userId, userId))
-    .orderBy(walletGroups.id)
-    .all();
+    .orderBy(walletGroups.id);
   const groupByFolded = new Map(groupRows.map((g) => [g.name.toLowerCase(), g]));
   const targetGroup = groupRows.find((g) => g.id === targetGroupId)!;
   const walletGroups_ = new Map<number, { name: string; id: number | null }>();
@@ -390,12 +391,11 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
 
   // Categories ---------------------------------------------------------------------------------------
   const existingCategories = new Map<string, number>();
-  for (const c of tx
+  for (const c of await tx
     .select({ id: categories.id, name: categories.name, kind: categories.kind })
     .from(categories)
     .where(eq(categories.userId, userId))
-    .orderBy(categories.id)
-    .all()) {
+    .orderBy(categories.id)) {
     const key = categoryKey(c.kind, c.name);
     if (!existingCategories.has(key)) existingCategories.set(key, c.id);
   }
@@ -411,7 +411,7 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   const entryCounts = new Map<string, number>();
   const transferCounts = new Map<string, number>();
   if (skipDuplicates) {
-    const groups = tx
+    const groups = await tx
       .select({
         walletId: transactions.walletId,
         kind: transactions.kind,
@@ -419,7 +419,7 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
         date: transactions.date,
         amountMinor: transactions.amountMinor,
         note: transactions.note,
-        n: sql<number>`count(*)`,
+        n: sql<number>`count(*)`.mapWith(Number),
       })
       .from(transactions)
       .where(and(eq(transactions.userId, userId), isNull(transactions.transferId)))
@@ -430,13 +430,12 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
         transactions.date,
         transactions.amountMinor,
         transactions.note,
-      )
-      .all();
+      );
     for (const g of groups) {
       const key = entryKey(ident(g.walletId), g.kind, g.categoryId!, g.date, g.amountMinor, g.note);
       entryCounts.set(key, (entryCounts.get(key) ?? 0) + g.n);
     }
-    for (const t of listTransferRows(userId, tx)) {
+    for (const t of await listTransferRows(userId, tx)) {
       const key = transferKey(ident(t.fromWalletId), ident(t.toWalletId), t.date, t.amountMinor, t.receivedAmountMinor, t.note);
       transferCounts.set(key, (transferCounts.get(key) ?? 0) + 1);
     }
@@ -568,7 +567,7 @@ function publicLocation<T extends { file?: string }>(x: T): T {
 // ---------------------------------------------------------------------------------------------------------
 // Writing (inside the caller's DB transaction)
 
-/** Rows per multi-row INSERT: 9 bound columns × 1000 stays far below SQLite's 32 766 variable limit. */
+/** Rows per multi-row INSERT: 9 bound columns × 1000 stays far below Postgres' 65 535 bind-parameter limit. */
 const CHUNK = 1000;
 
 function chunks<T>(items: T[], size = CHUNK): T[][] {
@@ -577,22 +576,23 @@ function chunks<T>(items: T[], size = CHUNK): T[][] {
   return out;
 }
 
-function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): void {
+async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): Promise<void> {
   const now = new Date();
 
   const createdGroupIds = new Map<string, number>();
   for (const name of plan.groupsToCreate) {
-    createdGroupIds.set(
-      name.toLowerCase(),
-      tx.insert(walletGroups).values({ userId, name, createdAt: now }).returning({ id: walletGroups.id }).get().id,
-    );
+    const [group] = await tx
+      .insert(walletGroups)
+      .values({ userId, name, createdAt: now })
+      .returning({ id: walletGroups.id });
+    createdGroupIds.set(name.toLowerCase(), group.id);
   }
 
   const walletIds = plan.walletTargets.map((t) => t.id);
   for (const i of plan.walletsToCreate) {
     const w = parsed.wallets[i];
     const target = plan.walletGroups.get(i)!;
-    walletIds[i] = tx
+    const [created] = await tx
       .insert(wallets)
       .values({
         userId,
@@ -605,22 +605,23 @@ function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): 
         archivedAt: w.archived ? now : null,
         createdAt: now,
       })
-      .returning({ id: wallets.id })
-      .get().id;
+      .returning({ id: wallets.id });
+    walletIds[i] = created.id;
   }
 
   const categoryIds = [...plan.categoryTargets];
   for (const i of plan.categoriesToCreate) {
     const c = parsed.categories[i];
-    categoryIds[i] = tx
+    const [created] = await tx
       .insert(categories)
       .values({ userId, name: c.name, kind: c.kind, createdAt: now })
-      .returning({ id: categories.id })
-      .get().id;
+      .returning({ id: categories.id });
+    categoryIds[i] = created.id;
   }
 
   for (const chunk of chunks(plan.entriesToAdd)) {
-    tx.insert(transactions)
+    await tx
+      .insert(transactions)
       .values(
         chunk.map((e) => ({
           userId,
@@ -633,21 +634,22 @@ function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): 
           transferId: null,
           createdAt: now,
         })),
-      )
-      .run();
+      );
   }
 
   for (const chunk of chunks(plan.transfersToAdd, CHUNK / 2)) {
-    // SQLite assigns rowids in VALUES order within one INSERT, so the ascending ids line up with `chunk`.
-    const ids = tx
-      .insert(transfers)
-      .values(chunk.map((t) => ({ userId, date: t.date, note: t.note, createdAt: now })))
-      .returning({ id: transfers.id })
-      .all()
+    // Identity values are assigned in VALUES order within one INSERT, so the ascending ids line up with `chunk`.
+    const ids = (
+      await tx
+        .insert(transfers)
+        .values(chunk.map((t) => ({ userId, date: t.date, note: t.note, createdAt: now })))
+        .returning({ id: transfers.id })
+    )
       .map((r) => r.id)
       .sort((a, b) => a - b);
     if (ids.length !== chunk.length) throw new Error("Transfer insert returned an unexpected number of rows.");
-    tx.insert(transactions)
+    await tx
+      .insert(transactions)
       .values(
         chunk.flatMap((t, j) => [
           {
@@ -673,7 +675,6 @@ function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): 
             createdAt: now,
           },
         ]),
-      )
-      .run();
+      );
   }
 }

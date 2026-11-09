@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # better-sqlite3 is native: each platform is built (emulated for arm64) so its own prebuilt binary is traced in.
+      # The image is pure JavaScript, but the base image and npm packages are per platform: arm64 is built under QEMU.
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -73,7 +73,7 @@ jobs:
             type=ref,event=pr
           labels: |
             org.opencontainers.image.title=Expenses Tracker
-            org.opencontainers.image.description=Self-hosted, multi-user expenses tracker (Next.js + SQLite)
+            org.opencontainers.image.description=Self-hosted, multi-user expenses tracker (Next.js + PostgreSQL)
 
       - name: Build and push
         uses: docker/build-push-action@v6

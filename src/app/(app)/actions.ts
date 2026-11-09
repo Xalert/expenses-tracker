@@ -24,7 +24,7 @@ export async function selectGroupAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const raw = formData.get("groupId");
   const id = parseGroupCookie(typeof raw === "string" ? raw : undefined);
-  const group = id === null ? null : getWalletGroup(user.id, id);
+  const group = id === null ? null : await getWalletGroup(user.id, id);
 
   const store = await cookies();
   if (group) {

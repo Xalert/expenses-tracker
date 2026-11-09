@@ -1,8 +1,8 @@
 # Self-hosting
 
-The app runs from a single container: a Next.js standalone server plus a SQLite file in a volume. No hosted
-platform, external database or account is needed. The image builds on `linux/amd64` and `linux/arm64` (x86
-servers, Raspberry Pi 4/5, Apple silicon).
+The app runs from two containers started by one Compose file: a Next.js standalone server and a PostgreSQL 17
+database with its data in a volume. No hosted platform or account is needed. The image is pure JavaScript and is
+published for `linux/amd64` and `linux/arm64` (x86 servers, Raspberry Pi 4/5, Apple silicon).
 
 The [README](../README.md#self-hosting) has the Compose quick start. This page has the [settings](#settings) and
 everything else: running without Compose, HTTPS behind a reverse proxy, closing registration, where the
@@ -17,7 +17,7 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Where the data lives](#where-the-data-lives)
 - [Bind mount instead of a named volume](#bind-mount-instead-of-a-named-volume)
 - [Backup](#backup) · [Restore](#restore)
-- [Upgrading](#upgrading) (automatic pre-migration copy, rolling back, the user-ID migration)
+- [Upgrading](#upgrading) (rolling back, [PostgreSQL itself](#upgrading-postgresql-itself), [moving from SQLite](#moving-from-sqlite-older-versions))
 - [Running without Docker (standalone build)](#running-without-docker-standalone-build)
 - [Database notes](#database-notes)
 
@@ -29,13 +29,13 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 
 | variable | default (image) | default (dev) | meaning |
 |---|---|---|---|
-| `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
+| `DATABASE_URL` | — (required; the Compose files set it) | `postgres://expenses:expenses@localhost:5432/expenses` | PostgreSQL connection URL (`postgres://user:password@host:5432/dbname`); the app migrates it on first use. Unset in production: the app refuses to start using the database |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
 | `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
 | `PORT` | `3000` | `3000` | listen port inside the container |
 | `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
-| `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |
+| `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | folder the SQL migrations are read from; leave as is |
 | `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
 
 `deploy/compose.yaml` also reads these (they configure Compose, not the app):
@@ -45,6 +45,7 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 | `EXPENSES_TRACKER_VERSION` | `latest` | image tag; pin a release (`1.2.3`, or `1.2` for its fixes) or `sha-<commit>` |
 | `EXPENSES_TRACKER_PORT` | `3000` | host port |
 | `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
+| `POSTGRES_PASSWORD` | `expenses` | password of the `db` service's `expenses` user, also put into `DATABASE_URL`; use URL-safe characters (or URL-encode). Set it in `.env` before the first start; the port is not published, which is why the default is tolerable |
 
 ## Prebuilt image
 
@@ -64,7 +65,7 @@ it, so the file itself never needs editing and can simply be downloaded again:
 Its variables are in [Settings](#settings).
 
 The file sets the Compose project name to `expenses-tracker`, the same as a clone of the repository, so both
-use the volume `expenses-tracker_expenses-data`: switching between the prebuilt image and a source build keeps
+use the volume `expenses-tracker_pg-data`: switching between the prebuilt image and a source build keeps
 the data. (Running a second instance on the same machine needs `-p <other-name>`.)
 
 **Publishing from a fork.** Push the repository to GitHub; the workflow publishes `ghcr.io/<owner>/<repo>`
@@ -75,17 +76,23 @@ a `docker login ghcr.io`. Then set `EXPENSES_TRACKER_IMAGE` (or edit the image l
 
 ## Plain `docker run`
 
+The app needs a PostgreSQL database; without Compose, start one and point `DATABASE_URL` at it:
+
 ```bash
-docker run -d --name expenses-tracker --restart unless-stopped \
+docker network create expenses
+docker run -d --name expenses-db --network expenses --restart unless-stopped \
+  -e POSTGRES_USER=expenses -e POSTGRES_PASSWORD=change-me -e POSTGRES_DB=expenses \
+  -v expenses-pg:/var/lib/postgresql/data postgres:17-alpine
+docker run -d --name expenses-tracker --network expenses --restart unless-stopped \
   -p 3000:3000 \
-  -v expenses-data:/data \
+  -e DATABASE_URL=postgres://expenses:change-me@expenses-db:5432/expenses \
   -e COOKIE_SECURE=auto -e ALLOW_REGISTRATION=true \
   ghcr.io/xalert/expenses-tracker:latest
 ```
 
 To build it yourself, `docker build -t expenses-tracker .` and use `expenses-tracker` as the image.
 
-Build the image on (or for) the architecture it runs on: `better-sqlite3` is a native module.
+The image has no native modules, so it is not tied to the architecture it was built on;
 `docker buildx build --platform linux/amd64,linux/arm64 …` builds both if you publish to a registry.
 
 With Compose, settings live in the `environment:` block of [`docker-compose.yml`](../docker-compose.yml); after
@@ -97,7 +104,7 @@ build time, and a restart applies a change.
 `GET /api/health` returns `200 {"status":"ok"}` after a trivial DB query (`503` otherwise) and needs no auth.
 The image's `HEALTHCHECK` uses it, so `docker ps` shows `healthy` / `unhealthy`.
 
-The container runs as the unprivileged `node` user (uid/gid `1000`), not root.
+The app container runs as the unprivileged `node` user (uid/gid `1000`), not root.
 
 ## Behind a reverse proxy (HTTPS)
 
@@ -145,10 +152,17 @@ someone.
 
 ## Where the data lives
 
-Everything is in the `/data` volume: `app.db` plus SQLite's `app.db-wal` and `app.db-shm` (the database runs in
-WAL mode — the three files belong together). With Compose the volume is named `<folder>_expenses-data`
-(e.g. `expenses-tracker_expenses-data`; see `docker volume ls`), on Linux stored under
-`/var/lib/docker/volumes/<name>/_data`. `docker compose down` keeps it; `docker compose down -v` **deletes it**.
+Everything is in PostgreSQL, in the `db` service's volume `pg-data`, mounted at `/var/lib/postgresql/data`. With
+Compose the volume is named `<folder>_pg-data` (e.g. `expenses-tracker_pg-data`; see `docker volume ls`), on Linux
+stored under `/var/lib/docker/volumes/<name>/_data`. The app container keeps nothing. `docker compose down` keeps
+the volume; `docker compose down -v` **deletes it**, and with it every account.
+
+The database port is not published, so only the Compose network reaches it. The default password (`expenses`) is
+acceptable for that reason alone; put `POSTGRES_PASSWORD=<URL-safe password>` in `.env` before the first start
+(or URL-encode special characters, since the password is part of `DATABASE_URL`). Changing it afterwards does not
+change the password stored in an existing database (`docker compose exec db psql -U expenses -c "ALTER USER expenses
+PASSWORD '…'"` does, then update `.env` and run `docker compose up -d`). To reach the database from the host (a GUI,
+`psql`), publish it on loopback only by adding `ports: ["127.0.0.1:5432:5432"]` to the `db` service.
 
 There is no reset command for a deployed instance (`npm run db:reset` is a development tool and refuses to run
 with `NODE_ENV=production`). To start over, take a [backup](#backup), then `docker compose down -v` and
@@ -156,66 +170,52 @@ with `NODE_ENV=production`). To start over, take a [backup](#backup), then `dock
 
 ## Bind mount instead of a named volume
 
-If you would rather keep the data in a host folder (e.g. `- ./data:/data`), that folder must be writable by
-uid `1000`, the user the container runs as. On a Linux host, a folder owned by root — including the one Docker
-creates automatically when `./data` does not exist yet — or by another uid makes the app fail with
-`SqliteError: unable to open database file`; `/api/health` returns 503 and the container stays `unhealthy`.
-Fix it with either:
-
-```bash
-mkdir -p data && sudo chown 1000:1000 data       # give the folder to the container's user
-```
-
-or run the container as the folder's owner instead (the app files are world-readable, so any uid works):
-
-```yaml
-    user: "1001:1001"     # your `id -u`:`id -g`; with docker run: --user "$(id -u):$(id -g)"
-    volumes:
-      - ./data:/data
-```
-
-Docker Desktop on macOS maps ownership of bind mounts loosely, so the problem does not show up there. Named
-volumes need none of this: Docker initialises them with the image's `/data`, already owned by uid 1000.
+The `postgres` image initialises its data directory itself, so a named volume (the default) needs no preparation.
+If you prefer a host folder (`- ./pg-data:/var/lib/postgresql/data` on the `db` service), it must be empty or hold
+a Postgres 17 data directory and be writable by the image's `postgres` user; a permission error in the `db`
+container's log means it is not. Avoid network shares (NFS/SMB) for it. The app container has no data directory,
+so the old requirement that a bind mount be writable by uid 1000 is gone.
 
 ## Backup
 
-Do not copy `app.db` on its own while the app is running: recent writes may still be in `app.db-wal`. Take a
-consistent online backup with SQLite's backup API (the image has no `sqlite3` CLI; this uses the app's own
-driver) and copy it out:
+Take a dump of the database with `pg_dump` (custom format) from the running `db` container; the app can stay up:
 
 ```bash
-docker compose exec expenses-tracker node -e "const D=require('better-sqlite3'); new D('/data/app.db').backup('/tmp/app-backup.db').then(() => new D('/tmp/app-backup.db').pragma('journal_mode=DELETE'))"
-docker compose cp expenses-tracker:/tmp/app-backup.db ./app-backup-$(date +%F).db
+docker compose exec -T db pg_dump -U expenses -Fc expenses > expenses-$(date +%F).dump
 ```
 
-The result is a single self-contained SQLite file (switched out of WAL mode), safe to store anywhere and
-readable with any `sqlite3`. Alternatively stop the container (`docker compose stop`) and copy all three files
-of the volume together.
+The result is one compressed file with the whole database (every account). Copy it somewhere else. Do not back
+up by copying the volume's files while Postgres runs. A dump taken with `pg_dump` from the same major version
+(17) restores anywhere.
 
-Each user can also download a **Full backup (JSON)** of their own account at `/data`; it restores into any
-instance by importing it, but it covers one account, not the whole database.
+Each user can also download a **Full backup (JSON)** of their own account at `/data`; it imports into any instance,
+but it covers one account (wallets, wallet groups, categories, transactions and transfers), not the whole
+database, and not the account itself or its password.
 
 ## Restore
 
+Stop the app so nothing writes during the restore, then load the dump into the running `db` container:
+
 ```bash
-docker compose stop
-docker compose run --rm --no-deps -v "$PWD/app-backup-2026-01-31.db:/restore.db:ro" --entrypoint node \
-  expenses-tracker -e "new (require('better-sqlite3'))('/restore.db',{readonly:true}).backup('/data/app.db').then(() => console.log('restored'))"
-docker compose start
+docker compose stop expenses-tracker
+docker compose exec -T db pg_restore -U expenses -d expenses --clean --if-exists < expenses-2026-01-31.dump
+docker compose start expenses-tracker
 ```
 
-This writes the backup into `/data/app.db` through SQLite, so the leftover `-wal`/`-shm` files are handled
-correctly (simply copying a file over `app.db` while an old `app.db-wal` sits next to it can corrupt the
-database). Use the exact path of an existing file: if it does not exist, Docker mounts an empty directory
-instead. It works on an empty volume too (e.g. moving to a new server).
+`--clean --if-exists` drops and recreates the objects in the dump, so the target can be the live database or an
+empty one. On a new server: start only the database (`docker compose up -d db`), run the `pg_restore` line, then
+`docker compose up -d`. Restore into the same Postgres major version (17), and use the image version that wrote
+the dump or a newer one: a newer app applies its pending migrations on start; an older app cannot read a newer
+schema.
 
 ## Upgrading
 
 With the prebuilt image ([`deploy/compose.yaml`](../deploy/compose.yaml)):
 
 ```bash
+docker compose exec -T db pg_dump -U expenses -Fc expenses > before-upgrade.dump   # first: see Backup
 docker compose pull             # the newest image for your EXPENSES_TRACKER_VERSION
-docker compose up -d            # recreates the container; the data volume is kept
+docker compose up -d            # recreates the app container; the database volume is kept
 ```
 
 Built from source:
@@ -223,82 +223,66 @@ Built from source:
 ```bash
 git pull
 docker compose build --pull     # rebuild on the latest node:24-bookworm-slim
-docker compose up -d            # recreates the container; the data volume is kept
+docker compose up -d            # recreates the container; the database volume is kept
 ```
 
-Pending database migrations are applied automatically when the new version starts (on first DB access, which
-the health check triggers within seconds). Take a backup first; migrations only move forward.
+Pending database migrations are applied automatically when the new version starts (on first DB access, which the
+health check triggers within seconds), all in one transaction: if one fails, nothing changes and the app logs the
+error and does not become healthy. **The app no longer makes a copy of the database before migrating**; the
+`pg_dump` above is your way back. To roll back, run the previous image (set `EXPENSES_TRACKER_VERSION`) and, if the
+new version already migrated, [restore](#restore) the dump taken before the upgrade. Migrations only move forward.
 
-### Automatic pre-migration copy
+### Upgrading PostgreSQL itself
 
-Before applying pending migrations to a database that already has data, the app writes a consistent copy of it
-next to the database file, named after the first pending migration — in the container
-`/data/app.db.before-migration-0001_user_ids.bak`. An existing copy is never overwritten; a later one gets a
-timestamp in its name. It is a self-contained SQLite file. The app logs
-`[db] Pending migrations …: copied the database to …` when it writes one. Delete it once you are happy with the
-upgrade; it is not cleaned up for you.
+The Compose files pin `postgres:17-alpine`, so `docker compose pull` never changes the major version. Moving to a
+new major (18, …) is a dump and restore: take a [backup](#backup), `docker compose down`, remove the database
+volume (`docker volume rm expenses-tracker_pg-data`), change the image tag in the `db` service, `docker compose up
+-d db`, then run the [restore](#restore) step and `docker compose up -d`. Minor releases (17.x) are picked up by the
+same tag with no extra steps.
 
-After applying migrations the app checks that no row points at something that no longer exists, and refuses to
-start (the error names the copy) if one does.
+### Moving from SQLite (older versions)
 
-### Rolling back
+Versions of this app before the move to PostgreSQL (2026-11-09) stored data in a SQLite file in a `/data` volume.
+**Those instances cannot be upgraded in place, and the owner decided not to write a migration.** Starting the new
+image against an old volume does nothing with the old file; the `/data` volume is ignored and can be deleted once
+you no longer need it. To bring data across, use each account's JSON backup:
 
-To go back to the state before the upgrade, run the **previous** version of the image (with the prebuilt image:
-set `EXPENSES_TRACKER_VERSION` to the release or `sha-<commit>` you ran before) and restore the copy into
-`/data/app.db` (the same procedure as [Restore](#restore), reading the file that is already in the volume):
+1. On the **old** version, each user signs in, opens `/data` and downloads **Full backup (JSON)**.
+2. Start the new version (empty PostgreSQL database) and register the account again (any user ID; it does not have
+   to be the old one).
+3. Signed in to the new instance, import the backup on `/data`: preview, then confirm.
 
-```bash
-docker compose stop
-docker compose run --rm --no-deps --entrypoint node expenses-tracker -e \
-  "new (require('better-sqlite3'))('/data/app.db.before-migration-0001_user_ids.bak',{readonly:true}).backup('/data/app.db').then(() => console.log('restored'))"
-```
-
-Starting the new version on the restored file simply migrates it again.
-
-### Upgrading to user IDs (migration `0001_user_ids`)
-
-Accounts created before user IDs existed keep signing in with their email and their password, and also get a
-user ID:
-
-- The user ID is the part of the email before `@`, lowercased, with every character other than `a–z 0–9 . _ -`
-  replaced by `-`, leading `.`/`_`/`-` dropped and cut to 32 characters — `Jane.Doe+bills@example.com` becomes
-  `jane.doe-bills`. If that leaves fewer than 3 characters it is `user<number>` (e.g. `user7`). If another,
-  older account already has the same user ID, `-<number>` is appended (`jane.doe-bills-12`). The number is the
-  account's internal id.
-- The name is split at its first space into first name and surname (`Ana Maria Pop` → `Ana` / `Maria Pop`).
-- Nothing else changes: emails, passwords, wallets, categories, transactions, transfers and sessions are kept
-  exactly as they were, and signed-in browsers stay signed in.
-
-The account menu (the initials at the top right) shows each account's user ID under its name. To list them all on a server:
-
-```bash
-docker compose exec expenses-tracker node -e "console.table(new (require('better-sqlite3'))('/data/app.db',{readonly:true}).prepare('select username, email from users').all())"
-```
+The import recreates wallets (name, currency, initial balance, archived flag, wallet group), categories,
+transactions and transfers, all under the signed-in account. It does **not** carry over the account itself (user ID,
+email, names), the password or sessions: the backup never contains them. Wallets and categories that the account already has are matched by name
+(and currency or kind), not duplicated. Do this once per account.
 
 ## Running without Docker (standalone build)
 
+You need a PostgreSQL server (17 recommended) with an empty database and a user that owns it, and Node 20.9+.
 `next build` produces a self-contained server in `.next/standalone` (`output: "standalone"`; the `drizzle/`
-migrations are traced into it). To run it directly with Node 20.9+:
+migrations are traced into it, and the app applies them on start):
 
 ```bash
 npm run build
 cp -r .next/static .next/standalone/.next/static
 cp -r public .next/standalone/public
-cd .next/standalone && DATABASE_URL=/srv/expenses/app.db PORT=3000 node server.js
+cd .next/standalone && DATABASE_URL=postgres://expenses:secret@localhost:5432/expenses PORT=3000 node server.js
 ```
 
-The reverse-proxy, backup and upgrade notes above apply unchanged (with the file at your `DATABASE_URL` instead
-of `/data/app.db`).
+`DATABASE_URL` is required in production. The reverse-proxy, backup and upgrade notes above apply unchanged (run
+`pg_dump` / `pg_restore` against your own server instead of through `docker compose exec`).
 
 ## Database notes
 
-- SQLite file at `data/app.db` (gitignored) in development, `/data/app.db` in the container. Override with
-  `DATABASE_URL` — a path, `file:./other.db`, or `:memory:`; the parent folder is created if missing.
-- Migrations live in `drizzle/` and are applied automatically the first time the app touches the DB, with
-  foreign keys switched off around them (SQLite rebuilds a table to change a column, and dropping the old table
-  with foreign keys on would cascade-delete everything that references it), followed by a foreign-key check. A
-  database that already has data is copied to `<file>.before-migration-<tag>.bak` first (see
-  [Upgrading](#automatic-pre-migration-copy)). Generated migrations that rebuild a table must be checked by hand
-  before they ship.
-- Locally, `sqlite3 data/app.db ".backup backup.db"` takes a consistent backup while the dev server runs. To
-  reset local data, use `npm run db:reset` (see the README); it keeps a copy of the old database.
+- PostgreSQL 17, through `pg` and Drizzle. `DATABASE_URL` is a `postgres://` or `postgresql://` URL and is required in
+  production; in development it defaults to `postgres://expenses:expenses@localhost:5432/expenses`, the database
+  that `npm run db:up` starts (see [`compose.dev.yaml`](../compose.dev.yaml)).
+- Migrations live in `drizzle/` and are applied automatically the first time the app touches the database
+  (once per process, in a transaction; foreign keys are always enforced).
+- The database `expenses_demo` (created by the development container's init script) holds the demo data; `npm run
+  dev:demo` and `npm run demo:reset` use it and never touch `expenses`. `npm run dev` is on `expenses`, the real
+  data. To reset local data, use `npm run db:reset` (see the README); it asks first and does not keep a copy, so
+  take a backup with the app's JSON export or `pg_dump` before confirming.
+- A scratch database: put `DATABASE_URL=postgres://expenses:expenses@localhost:5432/<scratch>` on the same command line
+  (never `export` it).

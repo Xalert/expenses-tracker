@@ -46,7 +46,7 @@ export async function createWalletAction(_prev: FormState, formData: FormData): 
 
   let walletId: number;
   try {
-    walletId = createWallet(user.id, parsed.data).id;
+    walletId = (await createWallet(user.id, parsed.data)).id;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -60,14 +60,14 @@ export async function updateWalletAction(walletIdArg: number, _prev: FormState, 
   const user = await requireUser();
   const values = formValues(formData);
   const walletId = parseWalletId(walletIdArg);
-  const wallet = walletId ? getWallet(user.id, walletId) : null;
+  const wallet = walletId ? await getWallet(user.id, walletId) : null;
   if (!wallet) return { ...NOT_FOUND_STATE, values };
 
   const parsed = parseUpdateWallet(formData, values, wallet.currency);
   if (!parsed.ok) return parsed.state;
 
   try {
-    updateWallet(user.id, wallet.id, parsed.data);
+    await updateWallet(user.id, wallet.id, parsed.data);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -82,7 +82,7 @@ export async function archiveWalletAction(walletIdArg: number): Promise<FormStat
   const walletId = parseWalletId(walletIdArg);
   if (!walletId) return NOT_FOUND_STATE;
   try {
-    archiveWallet(user.id, walletId);
+    await archiveWallet(user.id, walletId);
   } catch (err) {
     return serviceErrorState(err);
   }
@@ -96,7 +96,7 @@ export async function unarchiveWalletAction(walletIdArg: number): Promise<FormSt
   const walletId = parseWalletId(walletIdArg);
   if (!walletId) return NOT_FOUND_STATE;
   try {
-    unarchiveWallet(user.id, walletId);
+    await unarchiveWallet(user.id, walletId);
   } catch (err) {
     return serviceErrorState(err);
   }
@@ -110,7 +110,7 @@ export async function deleteWalletAction(walletIdArg: number): Promise<FormState
   const walletId = parseWalletId(walletIdArg);
   if (!walletId) return NOT_FOUND_STATE;
   try {
-    deleteWallet(user.id, walletId);
+    await deleteWallet(user.id, walletId);
   } catch (err) {
     return serviceErrorState(err);
   }
@@ -131,7 +131,7 @@ export async function createGroupAction(_prev: FormState, formData: FormData): P
   const values = formValues(formData);
   let name: string;
   try {
-    name = createWalletGroup(user.id, { name: groupNameField(formData) }).name;
+    name = (await createWalletGroup(user.id, { name: groupNameField(formData) })).name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -147,7 +147,7 @@ export async function renameGroupAction(groupIdArg: number, _prev: FormState, fo
   if (!groupId) return { ...GROUP_NOT_FOUND_STATE, values };
   let name: string;
   try {
-    name = renameWalletGroup(user.id, groupId, { name: groupNameField(formData) }).name;
+    name = (await renameWalletGroup(user.id, groupId, { name: groupNameField(formData) })).name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -159,13 +159,13 @@ export async function renameGroupAction(groupIdArg: number, _prev: FormState, fo
 export async function deleteGroupAction(groupIdArg: number): Promise<FormState> {
   const user = await requireUser();
   const groupId = parseGroupId(groupIdArg);
-  const group = groupId ? getWalletGroup(user.id, groupId) : null;
+  const group = groupId ? await getWalletGroup(user.id, groupId) : null;
   if (!group) {
     revalidateGroups();
     return GROUP_NOT_FOUND_STATE;
   }
   try {
-    deleteWalletGroup(user.id, group.id);
+    await deleteWalletGroup(user.id, group.id);
   } catch (err) {
     return serviceErrorState(err);
   }

@@ -31,7 +31,7 @@ function hashToken(token: string): string {
 export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  getDb().insert(sessions).values({ tokenHash: hashToken(token), userId, expiresAt }).run();
+  await (await getDb()).insert(sessions).values({ tokenHash: hashToken(token), userId, expiresAt });
 
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -47,7 +47,7 @@ export async function createSession(userId: number): Promise<void> {
 export async function destroySession(): Promise<void> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  if (token) getDb().delete(sessions).where(eq(sessions.tokenHash, hashToken(token))).run();
+  if (token) await (await getDb()).delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
   store.delete(SESSION_COOKIE);
 }
 
@@ -56,8 +56,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const db = getDb();
-  const row = db
+  const db = await getDb();
+  const [row] = await db
     .select({
       sessionId: sessions.id,
       expiresAt: sessions.expiresAt,
@@ -70,11 +70,11 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
     .where(eq(sessions.tokenHash, hashToken(token)))
-    .get();
+    .limit(1);
 
   if (!row) return null;
   if (row.expiresAt.getTime() <= Date.now()) {
-    db.delete(sessions).where(eq(sessions.id, row.sessionId)).run();
+    await db.delete(sessions).where(eq(sessions.id, row.sessionId));
     return null;
   }
   const { id, username, email, firstName, lastName } = row;

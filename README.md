@@ -2,7 +2,7 @@
 
 A self-hosted, multi-user expenses tracker: income, expenses and transfers across wallets in different currencies,
 filed under categories you manage, with totals grouped per currency (the Overview can also show all wallets
-converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a prebuilt
+converted into one currency at the day's ECB rates). One Next.js app on PostgreSQL, shipped as a prebuilt
 Docker image (amd64 and arm64). To run it:
 
 ```bash
@@ -11,18 +11,23 @@ curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deplo
 docker compose up -d     # then open http://localhost:3000 and create your account
 ```
 
-That runs the prebuilt image; nothing to clone or build. More in [Self-hosting](#self-hosting).
+That starts the prebuilt image and its PostgreSQL database; nothing to clone or build. More in [Self-hosting](#self-hosting).
 
 ## Run it
 
-Requires Node 20.9+ (developed on Node 24). Install the dependencies:
+Requires Node 20.9+ (developed on Node 24) and Docker (for the development database). Install the dependencies and
+start PostgreSQL 17 in Docker (`compose.dev.yaml`, on `127.0.0.1:5432`, data in a named volume):
 
 ```bash
 npm install
 ```
 
-Try it with demo data. This seeds `data/demo.db` with a demo user, five wallets and two months of sample data (only
-if it is not there yet) and starts the dev server on it at http://localhost:3000:
+```bash
+npm run db:up
+```
+
+Try it with demo data. This seeds the `expenses_demo` database with a demo user, five wallets and two months of
+sample data (only if it is not there yet) and starts the dev server on it at http://localhost:3000:
 
 ```bash
 npm run dev:demo
@@ -34,25 +39,27 @@ It prints the login to use:
 [demo] Sign in with user ID demo / password demo-password (if unchanged)
 ```
 
-Your own data lives in `data/app.db`, a separate file the demo never touches:
+Your own data lives in the `expenses` database, which the demo never touches (it is created and migrated on the
+first request; `DATABASE_URL` points the app at another):
 
 ```bash
 npm run dev
 ```
 
-Both files are gitignored and are created and migrated on the first request (`DATABASE_URL` points the app at
-another file). To put `data/demo.db` back to the fresh demo state, without a prompt:
+To put `expenses_demo` back to the fresh demo state, without a prompt:
 
 ```bash
 npm run demo:reset
 ```
 
 To reset your real database, `--demo` empties it and seeds the demo data, `--clean` leaves it empty. When it holds
-data, both copy it to `data/app.db.before-reset-<timestamp>.bak` first and ask you to type `reset`:
+data, both ask you to type `reset`; there is no copy, so take a backup first (the app's JSON export or `pg_dump`):
 
 ```bash
 npm run db:reset -- --clean
 ```
+
+`npm run db:down` stops the database container (the data stays in its volume).
 
 ## Debugging
 
@@ -66,32 +73,17 @@ Opening the dev server from another device works for this machine's own LAN addr
 `*.lan`) go in `ALLOWED_DEV_ORIGINS` (see [`.env.example`](.env.example)); under a hostname that is not allowed,
 pages render but buttons and forms do nothing.
 
-A second server on a scratch database. Keep `DATABASE_URL` on the same command line, never `export` it:
+A second server on a scratch database. Keep `DATABASE_URL` on the same command line, never `export` it (the
+database must exist; `docker compose -f compose.dev.yaml exec db createdb -U expenses scratch`):
 
 ```bash
-DATABASE_URL=/tmp/scratch.db PORT=3001 npm run dev
+DATABASE_URL=postgres://expenses:expenses@localhost:5432/scratch PORT=3001 npm run dev
 ```
 
-One test file:
-
-```bash
-npx vitest run tests/money.test.ts
-```
-
-Only the tests whose name matches:
+Tests (PGlite, no Docker needed): one file, or only the tests whose name matches:
 
 ```bash
 npx vitest run tests/money.test.ts -t "JPY"
-```
-
-Type-check and lint:
-
-```bash
-npm run typecheck
-```
-
-```bash
-npm run lint
 ```
 
 The Statement Importer page can be tried locally: the `statement-importer-harness` entry in
@@ -101,50 +93,36 @@ The Statement Importer page can be tried locally: the `statement-importer-harnes
 
 | script | what it does |
 |---|---|
-| `npm run dev:demo` | seed `data/demo.db` if needed, then the dev server on it (port 3000) |
-| `npm run demo:reset` | put `data/demo.db` back to the fresh demo state, no prompt |
-| `npm run dev` | Next.js dev server (Turbopack) on port 3000, on your data in `data/app.db` |
+| `npm run db:up` / `db:down` | start / stop the development PostgreSQL (`compose.dev.yaml`) |
+| `npm run dev:demo` | seed the `expenses_demo` database if needed, then the dev server on it (port 3000) |
+| `npm run demo:reset` | put `expenses_demo` back to the fresh demo state, no prompt |
+| `npm run dev` | Next.js dev server (Turbopack) on port 3000, on your data in `expenses` |
 | `npm run build` / `npm start` | production build / server (both force `NODE_ENV=production`) |
-| `npm run lint` | ESLint |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | vitest (services run against an in-memory SQLite DB) |
+| `npm run lint` / `npm run typecheck` | ESLint / `tsc --noEmit` |
+| `npm test` | vitest (services run against an in-process PGlite database) |
 | `npm run db:generate` | generate a new migration into `drizzle/` after editing `src/db/schema.ts` |
-| `npm run db:seed` | add the demo user and sample data to `data/app.db` (or `DATABASE_URL`) if missing (idempotent) |
+| `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
 | `npm run db:reset -- --demo` / `--clean` | real database: delete every row, then seed the demo data / leave it empty; asks first |
 
 ## Self-hosting
 
-A prebuilt image for `linux/amd64` and `linux/arm64` is published to `ghcr.io/xalert/expenses-tracker`. Nothing
-needs cloning or building — download one Compose file and start it on port 3000:
-
-```bash
-mkdir expenses-tracker && cd expenses-tracker
-curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/compose.yaml
-docker compose up -d
-```
-
-Open `http://<your-server>:3000`, create your account(s), then consider closing registration. Settings go in a
-`.env` file next to `compose.yaml` (`ALLOW_REGISTRATION=false`, `EXPENSES_TRACKER_PORT=8080`,
-`EXPENSES_TRACKER_VERSION=1.2.3` to pin a release); run `docker compose up -d` again after a change. Upgrading is
-`docker compose pull && docker compose up -d`.
+A prebuilt image for `linux/amd64` and `linux/arm64` is published to `ghcr.io/xalert/expenses-tracker`; the Compose
+file above starts it with `postgres:17-alpine` (data in the `pg-data` volume, port not published). Open
+`http://<your-server>:3000`, create your account(s), then consider closing registration. Settings go in a `.env`
+file next to `compose.yaml` (`POSTGRES_PASSWORD=<a password>` before the first start, `ALLOW_REGISTRATION=false`,
+`EXPENSES_TRACKER_PORT=8080`, `EXPENSES_TRACKER_VERSION=1.2.3`); run `docker compose up -d` again after a change.
+Back up with `docker compose exec -T db pg_dump -U expenses -Fc expenses > expenses.dump`; take one before
+upgrading (`docker compose pull && docker compose up -d`).
 
 To build from source instead, clone the repository and run `docker compose up -d` in it
-([`docker-compose.yml`](docker-compose.yml) builds the image; upgrade with `git pull`, `docker compose build --pull`,
-`docker compose up -d`). Both use the same data volume.
+([`docker-compose.yml`](docker-compose.yml)). Images are built and published by GitHub Actions
+([`.github/workflows/docker-image.yml`](.github/workflows/docker-image.yml)) after the tests pass: `latest` follows
+`main`, a `v1.2.3` tag publishes `1.2.3`, `1.2` and `1`, and `sha-<commit>` pins one commit.
 
-Images are built and published by GitHub Actions ([`.github/workflows/docker-image.yml`](.github/workflows/docker-image.yml))
-after the tests pass: `latest` follows `main`, a `v1.2.3` tag publishes `1.2.3`, `1.2` and `1`, and `sha-<commit>`
-pins one commit.
-
-All settings (the app's environment variables and the Compose file's own) are listed in
-[`docs/SELF-HOSTING.md` → Settings](docs/SELF-HOSTING.md#settings).
-
-All data is in the `/data` volume (`app.db` with its `-wal` and `-shm` files); back it up with SQLite's backup API,
-not by copying `app.db` alone while the app runs. Migrations run on start of a new version, after an automatic copy
-of the database.
-Reverse proxies, backup and restore, bind mounts, upgrading, publishing the image from a fork and running without
-Docker are in
-[`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
+All settings, reverse proxies, backup and restore, upgrading (including PostgreSQL itself), publishing the image
+from a fork and running without Docker are in [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md). **Instances from
+before the move to PostgreSQL cannot be upgraded in place**; carry each account across with its JSON backup
+([how](docs/SELF-HOSTING.md#moving-from-sqlite-older-versions)).
 
 ## Import & export
 
@@ -177,14 +155,14 @@ src/app/(app)/             signed-in pages: overview, wallets, transactions, cat
                            @modal holds the dialog versions of Add, New wallet and Edit wallet
 src/app/api/               health check + export downloads
 src/server/                service layer: domain rules, every query scoped by userId
-src/db/  drizzle/          Drizzle schema + connection (auto-migrate); SQL migrations
+src/db/  drizzle/          Drizzle schema + PostgreSQL connection (auto-migrate); SQL migrations
 src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell (top menu, account menu, Add button)
-scripts/                   db:seed and db:reset
+scripts/  compose.dev.yaml    db:seed and db:reset; development PostgreSQL
 tools/statement-importer/  the claude.ai Statement Importer page
 deploy/  .github/          Compose file for the prebuilt image; CI workflow that tests and publishes it
 tests/  docs/              vitest suites; spec, decisions, self-hosting, statement importer
 ```
 
-Next.js 16 (App Router, Server Components + Server Actions), SQLite via Drizzle + better-sqlite3, Tailwind CSS v4,
+Next.js 16 (App Router, Server Components + Server Actions), PostgreSQL via Drizzle + node-postgres, Tailwind CSS v4,
 zod, vitest. The build contract is [`docs/SPEC.md`](docs/SPEC.md); the reasons and known gaps are in
 [`docs/DECISIONS.md`](docs/DECISIONS.md).

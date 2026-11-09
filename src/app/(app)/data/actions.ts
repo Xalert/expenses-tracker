@@ -68,7 +68,7 @@ export async function previewImportAction(formData: FormData): Promise<ImportAct
   upload.opts.groupId = (await getGroupScope()).selected?.id;
   return {
     fileNames: upload.files.map((f) => f.name),
-    preview: previewImport(user.id, upload.files, upload.opts),
+    preview: await previewImport(user.id, upload.files, upload.opts),
   };
 }
 
@@ -81,7 +81,7 @@ export async function runImportAction(formData: FormData): Promise<ImportActionS
   const fileNames = upload.files.map((f) => f.name);
   let result: ImportResult;
   try {
-    result = runImport(user.id, upload.files, upload.opts);
+    result = await runImport(user.id, upload.files, upload.opts);
   } catch (err) {
     // Validation should make this unreachable; the DB transaction has rolled back either way.
     console.error("[import] unexpected failure", err);

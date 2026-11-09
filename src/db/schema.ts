@@ -1,17 +1,17 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   check,
   index,
   integer,
-  sqliteTable,
+  pgTable,
   text,
+  timestamp,
   uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 
-const createdAt = () =>
-  integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date());
+const createdAt = () => timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow();
+const id = () => integer("id").primaryKey().generatedByDefaultAsIdentity();
 
 export const CATEGORY_KINDS = ["expense", "income"] as const;
 export type CategoryKind = (typeof CATEGORY_KINDS)[number];
@@ -19,8 +19,8 @@ export type CategoryKind = (typeof CATEGORY_KINDS)[number];
 export const TRANSACTION_KINDS = ["expense", "income", "transfer_out", "transfer_in"] as const;
 export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
-export const users = sqliteTable("users", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const users = pgTable("users", {
+  id: id(),
   /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
   username: text("username").notNull().unique(),
   /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
@@ -31,24 +31,24 @@ export const users = sqliteTable("users", {
   createdAt: createdAt(),
 });
 
-export const sessions = sqliteTable(
+export const sessions = pgTable(
   "sessions",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     tokenHash: text("token_hash").notNull().unique(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
     createdAt: createdAt(),
   },
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
-export const walletGroups = sqliteTable(
+export const walletGroups = pgTable(
   "wallet_groups",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -58,10 +58,10 @@ export const walletGroups = sqliteTable(
   (t) => [index("wallet_groups_user_idx").on(t.userId)],
 );
 
-export const wallets = sqliteTable(
+export const wallets = pgTable(
   "wallets",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -70,8 +70,8 @@ export const wallets = sqliteTable(
       .references(() => walletGroups.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     currency: text("currency").notNull(),
-    initialBalanceMinor: integer("initial_balance_minor").notNull().default(0),
-    archivedAt: integer("archived_at", { mode: "timestamp" }),
+    initialBalanceMinor: bigint("initial_balance_minor", { mode: "number" }).notNull().default(0),
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -81,10 +81,10 @@ export const wallets = sqliteTable(
   ],
 );
 
-export const categories = sqliteTable(
+export const categories = pgTable(
   "categories",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -98,10 +98,10 @@ export const categories = sqliteTable(
   ],
 );
 
-export const transfers = sqliteTable(
+export const transfers = pgTable(
   "transfers",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -112,10 +112,10 @@ export const transfers = sqliteTable(
   (t) => [index("transfers_user_idx").on(t.userId)],
 );
 
-export const transactions = sqliteTable(
+export const transactions = pgTable(
   "transactions",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: id(),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -126,7 +126,7 @@ export const transactions = sqliteTable(
     categoryId: integer("category_id").references(() => categories.id, {
       onDelete: "restrict",
     }),
-    amountMinor: integer("amount_minor").notNull(),
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
     date: text("date").notNull(),
     note: text("note"),
     transferId: integer("transfer_id").references(() => transfers.id, {

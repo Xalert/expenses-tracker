@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Edit wallet" };
 /** The full page (direct visit, reload, no JS). A link from inside the app opens `@modal/(.)wallets/[id]/edit`. */
 export default async function EditWalletPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
-  const wallet = walletToEdit(user.id, (await params).id);
+  const wallet = await walletToEdit(user.id, (await params).id);
 
   return (
     <div className="mx-auto max-w-xl">

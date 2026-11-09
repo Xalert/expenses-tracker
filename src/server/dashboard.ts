@@ -24,13 +24,16 @@ export type Dashboard = {
 
 export const RECENT_COUNT = 8;
 
-export function getDashboard(userId: number, opts: { month?: string; groupId?: number } = {}): Dashboard {
+export async function getDashboard(
+  userId: number,
+  opts: { month?: string; groupId?: number } = {},
+): Promise<Dashboard> {
   const month = opts.month ?? currentMonth();
   if (!isValidMonth(month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
   const { from, to } = monthRange(month);
-  const db = getDb();
+  const db = await getDb();
 
-  const activeWallets = listWallets(userId, { groupId: opts.groupId });
+  const activeWallets = await listWallets(userId, { groupId: opts.groupId });
 
   const totals = new Map<string, CurrencyTotals>();
   for (const w of activeWallets) {
@@ -48,17 +51,16 @@ export function getDashboard(userId: number, opts: { month?: string; groupId?: n
     lte(transactions.date, to),
   );
 
-  const flows = db
+  const flows = await db
     .select({
       currency: wallets.currency,
       kind: transactions.kind,
-      amountMinor: sql<number>`sum(${transactions.amountMinor})`,
+      amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
     })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
     .where(and(inMonthOnActive, inArray(transactions.kind, ["income", "expense"])))
-    .groupBy(wallets.currency, transactions.kind)
-    .all();
+    .groupBy(wallets.currency, transactions.kind);
   for (const f of flows) {
     const t = totals.get(f.currency);
     if (!t) continue;
@@ -66,26 +68,25 @@ export function getDashboard(userId: number, opts: { month?: string; groupId?: n
     else t.expenseMinor += f.amountMinor;
   }
 
-  const expenseByCategory = db
+  const expenseByCategory = await db
     .select({
       currency: wallets.currency,
       categoryId: categories.id,
       categoryName: categories.name,
-      amountMinor: sql<number>`sum(${transactions.amountMinor})`,
+      amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
     })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
     .innerJoin(categories, eq(categories.id, transactions.categoryId))
     .where(and(inMonthOnActive, eq(transactions.kind, "expense")))
     .groupBy(wallets.currency, categories.id)
-    .orderBy(desc(sql`sum(${transactions.amountMinor})`), categories.name)
-    .all();
+    .orderBy(desc(sql`sum(${transactions.amountMinor})`), categories.name);
 
   return {
     month,
     wallets: activeWallets,
     totalsByCurrency: [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency)),
     expenseByCategory,
-    recent: listTransactions(userId, { limit: RECENT_COUNT, groupId: opts.groupId }).items,
+    recent: (await listTransactions(userId, { limit: RECENT_COUNT, groupId: opts.groupId })).items,
   };
 }

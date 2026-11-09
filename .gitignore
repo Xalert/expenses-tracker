@@ -36,7 +36,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local SQLite database
+# local data (SQLite files from before the move to PostgreSQL)
 /data/
 *.db
 *.db-journal

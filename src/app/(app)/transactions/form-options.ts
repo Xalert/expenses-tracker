@@ -28,17 +28,20 @@ export function toWalletOptions(wallets: WalletView[], grouped: boolean): Wallet
  * Active wallets, plus the given (possibly archived) wallets an existing entry already uses. Never narrowed by the
  * selected group (a transfer can cross groups); see `toWalletOptions` for the grouping.
  */
-export function walletOptions(userId: number, keepWalletIds: number[] = []): WalletOption[] {
-  const active = listWallets(userId);
-  const extra = keepWalletIds
-    .filter((id, i, all) => all.indexOf(id) === i && !active.some((w) => w.id === id))
-    .map((id) => getWallet(userId, id))
-    .filter((w): w is WalletView => w !== null);
-  return toWalletOptions([...active, ...extra], listWalletGroups(userId).length >= 2);
+export async function walletOptions(userId: number, keepWalletIds: number[] = []): Promise<WalletOption[]> {
+  const active = await listWallets(userId);
+  const extra = (
+    await Promise.all(
+      keepWalletIds
+        .filter((id, i, all) => all.indexOf(id) === i && !active.some((w) => w.id === id))
+        .map((id) => getWallet(userId, id)),
+    )
+  ).filter((w): w is WalletView => w !== null);
+  return toWalletOptions([...active, ...extra], (await listWalletGroups(userId)).length >= 2);
 }
 
-export function categoryOptions(userId: number): CategoryOption[] {
-  return listCategories(userId).map(({ id, name, kind }) => ({ id, name, kind }));
+export async function categoryOptions(userId: number): Promise<CategoryOption[]> {
+  return (await listCategories(userId)).map(({ id, name, kind }) => ({ id, name, kind }));
 }
 
 /** First value of a search param. */
@@ -50,5 +53,6 @@ export function param(value: string | string[] | undefined): string | undefined 
 export function parseId(value: string | string[] | undefined): number | null {
   const v = param(value);
   if (!v || !/^[1-9]\d{0,14}$/.test(v)) return null;
-  return Number(v);
+  const id = Number(v);
+  return id <= 2147483647 ? id : null; // a Postgres integer
 }

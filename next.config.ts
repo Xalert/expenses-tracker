@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Migrations are read from disk at runtime; ship them inside the standalone output too.
   outputFileTracingIncludes: { "/**": ["./drizzle/**/*"] },
-  serverExternalPackages: ["better-sqlite3"],
+  serverExternalPackages: ["pg"],
   // The app serves no optimised images, so the image optimiser is switched off.
   images: { unoptimized: true },
   experimental: {

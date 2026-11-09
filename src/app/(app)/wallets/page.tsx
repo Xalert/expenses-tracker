@@ -16,14 +16,14 @@ export default async function WalletsPage() {
   const user = await requireUser();
   const { groups, selected } = await getGroupScope();
   const groupId = selected?.id;
-  const all = listWallets(user.id, { includeArchived: true, groupId });
+  const all = await listWallets(user.id, { includeArchived: true, groupId });
   const active = all.filter((w) => w.archivedAt === null);
   const archived = all.filter((w) => w.archivedAt !== null);
   const month = currentMonth();
 
   const months = new Map<number, WalletCardMonth>();
   for (const w of active) {
-    const m = getWalletMonth(user.id, w.id, month);
+    const m = await getWalletMonth(user.id, w.id, month);
     if (m) {
       months.set(w.id, {
         openingMinor: m.openingMinor,
@@ -33,7 +33,7 @@ export default async function WalletsPage() {
     }
   }
 
-  const currencies = listUserCurrencies(user.id, { groupId });
+  const currencies = await listUserCurrencies(user.id, { groupId });
   // With All and two or more groups, the cards sit under one heading per group (the groups come by name).
   const byGroup = !selected && groups.length >= 2;
 

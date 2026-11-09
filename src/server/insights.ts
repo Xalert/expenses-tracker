@@ -6,7 +6,7 @@ import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { convertMinor, tableOn, type DailyRates } from "@/lib/fx";
-import { assertId } from "./_validate";
+import { assertId, isPgId } from "./_validate";
 import { signedAmountSql } from "./wallets";
 
 // Per-currency month figures for the redesigned Overview, wallet page and charts. Every figure is for ONE currency
@@ -121,20 +121,20 @@ function converter(to: string, convert: ConvertOption | undefined) {
  * Expense and income per date in [from, to] for one currency; with `convert`, for every currency converted into
  * `currency`, plus the currencies left out.
  */
-function dailyFlows(
+async function dailyFlows(
   userId: number,
   currency: string,
   from: string,
   to: string,
   narrow: Narrow = {},
   convert?: ConvertOption,
-): { byDate: Map<string, { expenseMinor: number; incomeMinor: number }>; missing: Set<string> } {
-  const rows = getDb()
+): Promise<{ byDate: Map<string, { expenseMinor: number; incomeMinor: number }>; missing: Set<string> }> {
+  const rows = await (await getDb())
     .select({
       date: transactions.date,
       kind: transactions.kind,
       currency: wallets.currency,
-      amountMinor: sql<number>`sum(${transactions.amountMinor})`,
+      amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
     })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
@@ -146,8 +146,7 @@ function dailyFlows(
         lte(transactions.date, to),
       ),
     )
-    .groupBy(transactions.date, transactions.kind, wallets.currency)
-    .all();
+    .groupBy(transactions.date, transactions.kind, wallets.currency);
   const toTarget = converter(currency, convert);
   const byDate = new Map<string, { expenseMinor: number; incomeMinor: number }>();
   const missing = new Set<string>();
@@ -173,8 +172,8 @@ const expenseOn = (flows: Map<string, { expenseMinor: number }>, date: string) =
 // Currencies
 
 /** Currencies of the user's active wallets, by code. */
-export function listUserCurrencies(userId: number, opts: { groupId?: number } = {}): string[] {
-  return getDb()
+export async function listUserCurrencies(userId: number, opts: { groupId?: number } = {}): Promise<string[]> {
+  const rows = await (await getDb())
     .selectDistinct({ currency: wallets.currency })
     .from(wallets)
     .where(
@@ -184,9 +183,8 @@ export function listUserCurrencies(userId: number, opts: { groupId?: number } = 
         opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId),
       ),
     )
-    .orderBy(asc(wallets.currency))
-    .all()
-    .map((r) => r.currency);
+    .orderBy(asc(wallets.currency));
+  return rows.map((r) => r.currency);
 }
 
 /**
@@ -194,11 +192,15 @@ export function listUserCurrencies(userId: number, opts: { groupId?: number } = 
  * the most, or when the month has none: the currency of the active wallet with the most transactions overall
  * (then by code). No active wallets then → null. The result can be a currency held only in archived wallets.
  */
-export function pickDefaultCurrency(userId: number, month: string, opts: { groupId?: number } = {}): string | null {
+export async function pickDefaultCurrency(
+  userId: number,
+  month: string,
+  opts: { groupId?: number } = {},
+): Promise<string | null> {
   const { from, to } = monthRange(assertMonth(month));
-  const db = getDb();
+  const db = await getDb();
   const inGroup = opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId);
-  const busiest = db
+  const busiest = await db
     .select({ currency: wallets.currency, n: count() })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
@@ -214,19 +216,17 @@ export function pickDefaultCurrency(userId: number, month: string, opts: { group
     )
     .groupBy(wallets.currency)
     .orderBy(desc(count()), asc(wallets.currency))
-    .limit(2)
-    .all();
+    .limit(2);
   if (busiest.length === 1 || (busiest.length === 2 && busiest[0].n > busiest[1].n)) return busiest[0].currency;
 
-  const fallback = db
+  const [fallback] = await db
     .select({ currency: wallets.currency, n: count(transactions.id) })
     .from(wallets)
     .leftJoin(transactions, eq(transactions.walletId, wallets.id))
     .where(and(eq(wallets.userId, userId), isNull(wallets.archivedAt), inGroup))
     .groupBy(wallets.id)
     .orderBy(desc(count(transactions.id)), asc(wallets.currency))
-    .limit(1)
-    .get();
+    .limit(1);
   return fallback?.currency ?? null;
 }
 
@@ -237,7 +237,7 @@ export function pickDefaultCurrency(userId: number, month: string, opts: { group
  * Per-day expenses / income of one currency for the month chart, plus the previous month's running total. With
  * `convert`: of every currency, converted into `currency` (see the note at the top).
  */
-export function getMonthTimeline(
+export async function getMonthTimeline(
   userId: number,
   opts: {
     month: string;
@@ -248,7 +248,7 @@ export function getMonthTimeline(
     categoryId?: number;
     convert?: ConvertOption;
   },
-): MonthTimeline {
+): Promise<MonthTimeline> {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
   const narrow: Narrow = {};
@@ -258,7 +258,7 @@ export function getMonthTimeline(
 
   const previous = shiftMonth(month, -1);
   const { convert } = opts;
-  const { byDate: flows, missing } = dailyFlows(
+  const { byDate: flows, missing } = await dailyFlows(
     userId,
     currency,
     monthRange(previous).from,
@@ -284,7 +284,7 @@ export function getMonthTimeline(
   if (top) {
     // The day's largest entry; with `convert` the entries are in several currencies, so they are compared after
     // conversion (few rows: one day of one user).
-    const entries = getDb()
+    const entriesQuery = (await getDb())
       .select({
         note: transactions.note,
         categoryName: categories.name,
@@ -302,8 +302,8 @@ export function getMonthTimeline(
         ),
       )
       .orderBy(desc(transactions.amountMinor), asc(transactions.id))
-      .limit(convert ? -1 : 1)
-      .all();
+      .$dynamic();
+    const entries = await (convert ? entriesQuery : entriesQuery.limit(1));
     const toTarget = converter(currency, convert);
     let entry: (typeof entries)[number] | undefined;
     let entryValue = -Infinity;
@@ -327,17 +327,24 @@ export function getMonthTimeline(
 }
 
 /** The Overview insight cards for one month and currency (with `convert`: every currency, converted). */
-export function getMonthInsights(
+export async function getMonthInsights(
   userId: number,
   opts: { month: string; currency: string; groupId?: number; convert?: ConvertOption },
-): MonthInsights {
+): Promise<MonthInsights> {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
   const previous = shiftMonth(month, -1);
   const { from, to } = monthRange(month);
   const { convert } = opts;
   const narrow: Narrow = opts.groupId === undefined ? {} : { groupId: assertId(opts.groupId, "groupId", "group") };
-  const { byDate: flows, missing } = dailyFlows(userId, currency, monthRange(previous).from, to, narrow, convert);
+  const { byDate: flows, missing } = await dailyFlows(
+    userId,
+    currency,
+    monthRange(previous).from,
+    to,
+    narrow,
+    convert,
+  );
 
   const dates = monthDates(month);
   const previousDates = monthDates(previous);
@@ -362,37 +369,35 @@ export function getMonthInsights(
   );
   let top: { categoryId: number; categoryName: string; amountMinor: number } | undefined;
   if (!convert) {
-    top = getDb()
+    [top] = await (await getDb())
       .select({
         categoryId: categories.id,
         categoryName: categories.name,
-        amountMinor: sql<number>`sum(${transactions.amountMinor})`,
+        amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
       })
       .from(transactions)
       .innerJoin(wallets, eq(wallets.id, transactions.walletId))
       .innerJoin(categories, eq(categories.id, transactions.categoryId))
       .where(inMonthExpenses)
       .groupBy(categories.id)
-      .orderBy(desc(sql`sum(${transactions.amountMinor})`), sql`${categories.name} collate nocase`, asc(categories.id))
-      .limit(1)
-      .get();
+      .orderBy(desc(sql`sum(${transactions.amountMinor})`), sql`lower(${categories.name})`, asc(categories.id))
+      .limit(1);
   } else {
     // Per category, date and currency, converted at each date's rate, then added per category; the same tie-break
     // as the query above (name without case, then id).
-    const rows = getDb()
+    const rows = await (await getDb())
       .select({
         categoryId: categories.id,
         categoryName: categories.name,
         date: transactions.date,
         currency: wallets.currency,
-        amountMinor: sql<number>`sum(${transactions.amountMinor})`,
+        amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
       })
       .from(transactions)
       .innerJoin(wallets, eq(wallets.id, transactions.walletId))
       .innerJoin(categories, eq(categories.id, transactions.categoryId))
       .where(inMonthExpenses)
-      .groupBy(categories.id, transactions.date, wallets.currency)
-      .all();
+      .groupBy(categories.id, transactions.date, wallets.currency);
     const toTarget = converter(currency, convert);
     const perCategory = new Map<number, { categoryId: number; categoryName: string; amountMinor: number }>();
     for (const row of rows) {
@@ -428,39 +433,35 @@ export function getMonthInsights(
 }
 
 /** One wallet's month: opening balance, money in / out (transfers included) and the balance after each day 1..N. */
-export function getWalletMonth(userId: number, walletId: number, month: string): WalletMonth | null {
+export async function getWalletMonth(userId: number, walletId: number, month: string): Promise<WalletMonth | null> {
   const { from, to } = monthRange(assertMonth(month));
-  if (typeof walletId !== "number" || !Number.isSafeInteger(walletId)) return null;
-  const db = getDb();
-  const wallet = db
+  if (!isPgId(walletId)) return null;
+  const db = await getDb();
+  const [wallet] = await db
     .select({ initialBalanceMinor: wallets.initialBalanceMinor })
     .from(wallets)
-    .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)))
-    .get();
+    .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)));
   if (!wallet) return null;
 
   const own = and(eq(transactions.walletId, walletId), eq(transactions.userId, userId));
-  const before = db
-    .select({ net: sql<number>`coalesce(sum(${signedAmountSql}), 0)`, n: count() })
+  const [before] = await db
+    .select({ net: sql<number>`coalesce(sum(${signedAmountSql}), 0)`.mapWith(Number), n: count() })
     .from(transactions)
-    .where(and(own, lt(transactions.date, from)))
-    .get();
-  const after = db
+    .where(and(own, lt(transactions.date, from)));
+  const [after] = await db
     .select({ n: count() })
     .from(transactions)
-    .where(and(own, sql`${transactions.date} > ${to}`))
-    .get();
-  const perDay = db
+    .where(and(own, sql`${transactions.date} > ${to}`));
+  const perDay = await db
     .select({
       date: transactions.date,
-      inMinor: sql<number>`coalesce(sum(case when ${transactions.kind} in ('income', 'transfer_in') then ${transactions.amountMinor} else 0 end), 0)`,
-      outMinor: sql<number>`coalesce(sum(case when ${transactions.kind} in ('expense', 'transfer_out') then ${transactions.amountMinor} else 0 end), 0)`,
+      inMinor: sql<number>`coalesce(sum(case when ${transactions.kind} in ('income', 'transfer_in') then ${transactions.amountMinor} else 0 end), 0)`.mapWith(Number),
+      outMinor: sql<number>`coalesce(sum(case when ${transactions.kind} in ('expense', 'transfer_out') then ${transactions.amountMinor} else 0 end), 0)`.mapWith(Number),
       n: count(),
     })
     .from(transactions)
     .where(and(own, gte(transactions.date, from), lte(transactions.date, to)))
-    .groupBy(transactions.date)
-    .all();
+    .groupBy(transactions.date);
   const byDate = new Map(perDay.map((r) => [r.date, r]));
 
   const openingMinor = wallet.initialBalanceMinor + (before?.net ?? 0);

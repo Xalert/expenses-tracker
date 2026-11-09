@@ -7,8 +7,16 @@ import { ServiceError } from "@/lib/errors";
 export const MAX_NOTE_LENGTH = 500;
 export const MAX_NAME_LENGTH = 60;
 
+/** Largest id a Postgres `integer` column can hold; anything above would make a query fail instead of match nothing. */
+export const MAX_ID = 2147483647;
+
+/** True for an id a Postgres `integer` column can hold (queries with anything else would error, not match nothing). */
+export function isPgId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= MAX_ID;
+}
+
 export function assertId(value: unknown, field: string, label: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > MAX_ID) {
     throw new ServiceError("VALIDATION", `Choose a ${label}.`, field);
   }
   return value;
@@ -45,10 +53,15 @@ export function normalizeName(value: unknown, field = "name", maxLength = MAX_NA
   return name;
 }
 
-/** True for a SQLite UNIQUE violation, whether raw (better-sqlite3) or wrapped by Drizzle (`cause`). */
-export function isUniqueViolation(err: unknown): boolean {
+/** The Postgres error (SQLSTATE `code`, `constraint`) behind `err`, raw or wrapped by Drizzle (`cause`) or null. */
+export function pgError(err: unknown, code: string): { code: string; constraint?: string } | null {
   for (let e: unknown = err, depth = 0; e && depth < 3; e = (e as { cause?: unknown }).cause, depth++) {
-    if ((e as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") return true;
+    if ((e as { code?: string }).code === code) return e as { code: string; constraint?: string };
   }
-  return false;
+  return null;
+}
+
+/** True for a Postgres unique violation (SQLSTATE 23505), raw or wrapped by Drizzle (`cause`). */
+export function isUniqueViolation(err: unknown): boolean {
+  return pgError(err, "23505") !== null;
 }

@@ -1,11 +1,11 @@
 import "server-only";
 import { and, desc, eq, gte, inArray, lte, ne, sql, type SQL } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
 import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
-import { assertDate, assertId, assertPositiveAmount, normalizeNote } from "./_validate";
+import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
 import { getOwnedWalletRow, signedAmountSql } from "./wallets";
 
 export type TransactionView = {
@@ -79,8 +79,8 @@ type Row = {
   cpAmountMinor: number | null;
 };
 
-function baseQuery(where: SQL | undefined) {
-  return getDb()
+function baseQuery(db: DBOrTx, where: SQL | undefined) {
+  return db
     .select({
       id: transactions.id,
       kind: transactions.kind,
@@ -172,26 +172,29 @@ export function filterConditions(userId: number, f: TransactionFilters): SQL {
     conds.push(lte(transactions.date, f.to));
   }
   const q = f.q?.trim();
-  if (q) conds.push(sql`${transactions.note} like ${`%${escapeLike(q)}%`} escape '\\'`);
+  if (q) conds.push(sql`${transactions.note} ilike ${`%${escapeLike(q)}%`} escape '\\'`);
   return and(...conds)!;
 }
 
 /** Filtered, paginated transactions (date desc, id desc) plus the total matching count. */
-export function listTransactions(
+export async function listTransactions(
   userId: number,
   filters: TransactionFilters = {},
-): { items: TransactionView[]; total: number } {
+): Promise<{ items: TransactionView[]; total: number }> {
+  const db = await getDb();
   const where = filterConditions(userId, filters);
   const limit = Math.min(Math.max(Math.trunc(filters.limit ?? DEFAULT_PAGE_SIZE), 1), MAX_PAGE_SIZE);
   const offset = Math.max(Math.trunc(filters.offset ?? 0), 0);
 
-  const rows = baseQuery(where)
+  const rows = await baseQuery(db, where)
     .orderBy(desc(transactions.date), desc(transactions.id))
     .limit(limit)
-    .offset(offset)
-    .all();
-  const total =
-    getDb().select({ n: sql<number>`count(*)` }).from(transactions).where(where).get()?.n ?? 0;
+    .offset(offset);
+  const [totalRow] = await db
+    .select({ n: sql<number>`count(*)`.mapWith(Number) })
+    .from(transactions)
+    .where(where);
+  const total = totalRow?.n ?? 0;
   return { items: rows.map(toView), total };
 }
 
@@ -202,33 +205,42 @@ export type DayTotal = { date: string; currency: string; netMinor: number };
  * headers of a paginated list. Transfer legs count as money out of / into their own wallet. Only pairs that have
  * entries are returned, by date desc then currency. Malformed dates in `dates` are ignored.
  */
-export function listDayTotals(userId: number, filters: TransactionFilters, dates: string[]): DayTotal[] {
+export async function listDayTotals(
+  userId: number,
+  filters: TransactionFilters,
+  dates: string[],
+): Promise<DayTotal[]> {
   const where = filterConditions(userId, filters);
   const wanted = [...new Set(dates.filter((d) => isValidDate(d)))];
   if (wanted.length === 0) return [];
-  return getDb()
+  return (await getDb())
     .select({
       date: transactions.date,
       currency: wallets.currency,
-      netMinor: sql<number>`sum(${signedAmountSql})`,
+      netMinor: sql<number>`sum(${signedAmountSql})`.mapWith(Number),
     })
     .from(transactions)
     .innerJoin(wallets, eq(wallets.id, transactions.walletId))
     .where(and(where, inArray(transactions.date, wanted)))
     .groupBy(transactions.date, wallets.currency)
-    .orderBy(desc(transactions.date), wallets.currency)
-    .all();
+    .orderBy(desc(transactions.date), wallets.currency);
 }
 
 /** One owned transaction (including transfer legs), or null. */
-export function getTransaction(userId: number, id: number): TransactionView | null {
-  const row = baseQuery(and(eq(transactions.id, id), eq(transactions.userId, userId))).get();
+export async function getTransaction(userId: number, id: number, tx?: DBOrTx): Promise<TransactionView | null> {
+  if (!isPgId(id)) return null;
+  const [row] = await baseQuery(tx ?? (await getDb()), and(eq(transactions.id, id), eq(transactions.userId, userId)));
   return row ? toView(row) : null;
 }
 
 type ValidatedInput = Required<Omit<TransactionInput, "note">> & { note: string | null };
 
-function validateInput(userId: number, input: TransactionInput, tx: DBOrTx, previousWalletId?: number): ValidatedInput {
+async function validateInput(
+  userId: number,
+  input: TransactionInput,
+  tx: DBOrTx,
+  previousWalletId?: number,
+): Promise<ValidatedInput> {
   const kind = input.kind as CategoryKind;
   if (kind !== "expense" && kind !== "income") {
     throw new ServiceError("VALIDATION", "Choose expense or income.", "kind");
@@ -239,16 +251,15 @@ function validateInput(userId: number, input: TransactionInput, tx: DBOrTx, prev
   const date = assertDate(input.date);
   const note = normalizeNote(input.note);
 
-  const wallet = getOwnedWalletRow(userId, walletId, tx);
+  const wallet = await getOwnedWalletRow(userId, walletId, tx);
   // An archived wallet only stays valid for a transaction that already belonged to it.
   if (wallet.archivedAt && wallet.id !== previousWalletId) {
     throw new ServiceError("VALIDATION", "This wallet is archived.", "walletId");
   }
-  const category = tx
+  const [category] = await tx
     .select({ kind: categories.kind })
     .from(categories)
-    .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)))
-    .get();
+    .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)));
   if (!category) throw new ServiceError("NOT_FOUND", "Category not found.", "categoryId");
   if (category.kind !== kind) {
     throw new ServiceError("VALIDATION", `Choose an ${kind} category.`, "categoryId");
@@ -256,25 +267,26 @@ function validateInput(userId: number, input: TransactionInput, tx: DBOrTx, prev
   return { walletId, kind, categoryId, amountMinor, date, note };
 }
 
-export function createTransaction(userId: number, input: TransactionInput): TransactionView {
-  const db = getDb();
-  const id = db.transaction((tx) => {
-    const v = validateInput(userId, input, tx);
-    return tx
+export async function createTransaction(userId: number, input: TransactionInput): Promise<TransactionView> {
+  const db = await getDb();
+  const id = await db.transaction(async (tx) => {
+    const v = await validateInput(userId, input, tx);
+    const [row] = await tx
       .insert(transactions)
       .values({ userId, ...v, transferId: null })
-      .returning({ id: transactions.id })
-      .get().id;
+      .returning({ id: transactions.id });
+    return row.id;
   });
-  return getTransaction(userId, id)!;
+  return (await getTransaction(userId, id))!;
 }
 
-function getEditableRow(userId: number, id: number, tx: DBOrTx) {
-  const row = tx
+async function getEditableRow(userId: number, id: number, tx: DBOrTx) {
+  const [row] = !isPgId(id)
+    ? []
+    : await tx
     .select({ id: transactions.id, walletId: transactions.walletId, transferId: transactions.transferId })
     .from(transactions)
-    .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
-    .get();
+    .where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
   if (!row) throw new ServiceError("NOT_FOUND", "Transaction not found.");
   if (row.transferId !== null) {
     throw new ServiceError("VALIDATION", "Transfer legs can only be changed through their transfer.");
@@ -283,22 +295,24 @@ function getEditableRow(userId: number, id: number, tx: DBOrTx) {
 }
 
 /** Update an expense/income. Rejects transfer legs. */
-export function updateTransaction(userId: number, id: number, input: TransactionInput): TransactionView {
-  getDb().transaction((tx) => {
-    const existing = getEditableRow(userId, id, tx);
-    const v = validateInput(userId, input, tx, existing.walletId);
-    tx.update(transactions)
+export async function updateTransaction(userId: number, id: number, input: TransactionInput): Promise<TransactionView> {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const existing = await getEditableRow(userId, id, tx);
+    const v = await validateInput(userId, input, tx, existing.walletId);
+    await tx
+      .update(transactions)
       .set(v)
-      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
-      .run();
+      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
   });
-  return getTransaction(userId, id)!;
+  return (await getTransaction(userId, id))!;
 }
 
 /** Delete an expense/income. Rejects transfer legs. */
-export function deleteTransaction(userId: number, id: number): void {
-  getDb().transaction((tx) => {
-    getEditableRow(userId, id, tx);
-    tx.delete(transactions).where(and(eq(transactions.id, id), eq(transactions.userId, userId))).run();
+export async function deleteTransaction(userId: number, id: number): Promise<void> {
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    await getEditableRow(userId, id, tx);
+    await tx.delete(transactions).where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
   });
 }

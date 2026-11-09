@@ -11,7 +11,8 @@ export type GroupScope = { groups: WalletGroupView[]; selected: WalletGroupView 
 
 /** The cookie value as a group id, or null (missing, empty, not a positive integer). Pure; exported for tests. */
 export function parseGroupCookie(value: string | undefined): number | null {
-  return value && /^[1-9]\d{0,14}$/.test(value) ? Number(value) : null;
+  const id = value && /^[1-9]\d{0,14}$/.test(value) ? Number(value) : null;
+  return id !== null && id <= 2147483647 ? id : null; // a Postgres integer
 }
 
 /**
@@ -20,7 +21,7 @@ export function parseGroupCookie(value: string | undefined): number | null {
  */
 export const getGroupScope = cache(async (): Promise<GroupScope> => {
   const user = await requireUser();
-  const groups = listWalletGroups(user.id);
+  const groups = await listWalletGroups(user.id);
   const id = parseGroupCookie((await cookies()).get(GROUP_COOKIE)?.value);
   return { groups, selected: id === null ? null : (groups.find((g) => g.id === id) ?? null) };
 });

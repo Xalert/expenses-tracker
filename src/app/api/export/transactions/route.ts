@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams;
   const params = parseListParams(Object.fromEntries([...sp.keys()].map((k) => [k, sp.getAll(k)])));
   const group = Number(sp.get("group"));
-  const csv = buildTransactionsCsv(user.id, {
+  const csv = await buildTransactionsCsv(user.id, {
     walletId: params.wallet,
     groupId: Number.isSafeInteger(group) && group > 0 ? group : undefined,
     kind: params.kind,

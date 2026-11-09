@@ -28,15 +28,15 @@ export function monthLength(month: string): number {
  * included) wins and is `explicit`; anything else — absent, malformed, or a currency the user has no wallet in — falls
  * back to `pickDefault()` (`pickDefaultCurrency` for the month). `null` means the user has no active wallet.
  */
-export function resolveOverviewCurrency(
+export async function resolveOverviewCurrency(
   requested: unknown,
   held: readonly string[],
-  pickDefault: () => string | null,
-): { currency: string | null; explicit: boolean } {
+  pickDefault: () => Promise<string | null> | string | null,
+): Promise<{ currency: string | null; explicit: boolean }> {
   if (typeof requested === "string" && isValidCurrency(requested) && held.includes(requested)) {
     return { currency: requested, explicit: true };
   }
-  return { currency: pickDefault(), explicit: false };
+  return { currency: await pickDefault(), explicit: false };
 }
 
 /**

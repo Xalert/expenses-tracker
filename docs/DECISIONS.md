@@ -10,7 +10,9 @@ here in the same change. Remove a gap when it is closed (and say so in the commi
 confirmed by the owner — the ones most worth a second look), or **built** (settled by the implementation where the
 plan left room).
 
-All entries below date from the initial build, 2026-11-05.
+Entries date from the initial build, 2026-11-05, unless a section says otherwise. A row marked *superseded
+2026-11-09 by Postgres* describes the SQLite era and is kept as history; the "Database: SQLite to PostgreSQL"
+section holds what replaced it.
 
 ---
 
@@ -21,12 +23,12 @@ All entries below date from the initial build, 2026-11-05.
 | Decision | Why | Decided by |
 |---|---|---|
 | One Next.js app (App Router, TypeScript, Tailwind v4) for UI and server | Simplest to run and deploy: one process, one image | owner |
-| SQLite in a single file, via Drizzle + better-sqlite3 | Zero setup, plenty for a personal tracker, trivial to back up | owner |
+| *(superseded 2026-11-09 by Postgres)* SQLite in a single file, via Drizzle + better-sqlite3 | Zero setup, plenty for a personal tracker, trivial to back up | owner |
 | No REST API. Server Components read through `src/server/*`; Server Actions mutate | Less code and one place for rules; nothing else consumes an API yet | planner |
 | All domain rules live in the service layer; every function takes `userId` first | One enforcement point for ownership and validation, testable without HTTP | planner |
 | Migrations apply automatically on first DB access | `npm run dev` and `docker compose up` work with no extra step; upgrades are just a restart | planner |
 | Next.js Cache Components switched off | Every page is per-user and reads the session cookie; the feature would force `<Suspense>` around each cookie read for no benefit | built |
-| Services are synchronous | better-sqlite3 is synchronous; only password hashing is async | built |
+| *(superseded 2026-11-09 by Postgres)* Services are synchronous | better-sqlite3 is synchronous; only password hashing is async | built |
 | `build` / `start` scripts set `NODE_ENV=production` inline | A globally exported `NODE_ENV=development` broke `next build` on the development machine | built |
 | `images: { unoptimized: true }` | The app serves no optimised images. It was expected to drop `sharp` from the image; it did not, and the setting was kept as harmless | planner |
 
@@ -62,12 +64,12 @@ All entries below date from the initial build, 2026-11-05.
 | "User ID" is a name the user chooses (3–32 of `a–z 0–9 . _ -`, case-insensitive), not the numeric database id | Memorable, and it does not reveal how many accounts exist. **This is the planner's reading of "log in with their user id" — confirm** | planner |
 | One sign-in field takes a user ID or an email; a user ID can never contain `@` | Existing email sign-ins keep working, and the two can never be confused | planner |
 | Existing accounts get a user ID derived from their email's local part, and their name is split at the first space | Nobody is locked out by the upgrade, and nothing has to be entered again | planner |
-| Migrations run with foreign keys switched off outside the transaction, are followed by a foreign-key check, and a copy of the database is written before pending migrations touch existing data | Making `email` nullable rebuilds the `users` table in SQLite; done naively, dropping the old table cascade-deletes every user's data | planner |
-| Measured hazard: with foreign keys on, the rebuild deletes every wallet, category and session of a database with no transactions; with any transaction it fails on `transactions.wallet_id` (RESTRICT) and rolls back, so the app could not start | Found by running drizzle's migrator on populated 0000 databases (`tests/migrations.test.ts`) rather than assuming; either outcome rules out the naive path | built |
-| Derived user IDs: leading `.`/`_`/`-` are dropped, the result is cut to 32, fewer than 3 characters → `user<id>`; on a collision the account with the lower id keeps the plain value; a suffixed value that hits another plain one → `user<id>`; anything beyond that fails the migration (rolled back) | The spec left "nothing valid", length and which side gets the suffix open; this always yields valid IDs and never guesses silently | built |
+| *(superseded 2026-11-09 by Postgres)* Migrations run with foreign keys switched off outside the transaction, are followed by a foreign-key check, and a copy of the database is written before pending migrations touch existing data | Making `email` nullable rebuilds the `users` table in SQLite; done naively, dropping the old table cascade-deletes every user's data | planner |
+| *(superseded 2026-11-09 by Postgres)* Measured hazard: with foreign keys on, the rebuild deletes every wallet, category and session of a database with no transactions; with any transaction it fails on `transactions.wallet_id` (RESTRICT) and rolls back, so the app could not start | Found by running drizzle's migrator on populated 0000 databases (`tests/migrations.test.ts`) rather than assuming; either outcome rules out the naive path | built |
+| *(superseded 2026-11-09 by Postgres)* Derived user IDs: leading `.`/`_`/`-` are dropped, the result is cut to 32, fewer than 3 characters → `user<id>`; on a collision the account with the lower id keeps the plain value; a suffixed value that hits another plain one → `user<id>`; anything beyond that fails the migration (rolled back) | The spec left "nothing valid", length and which side gets the suffix open; this always yields valid IDs and never guesses silently | built |
 | Emails keep their stored case through the migration; sign-in and the duplicate check compare `lower(email)` / `lower(username)` | The spec says emails are unchanged; comparing lowercased makes a legacy mixed-case email still work and still block duplicates | built |
-| `PRAGMA foreign_key_check` runs on every start, not only after migrating | Cheap at this app's size, and a dangling row is worth stopping for whenever it appears | built |
-| The pre-migration copy is made with `VACUUM INTO` (synchronous, includes WAL content, writes a non-WAL file), is never overwritten (a second one gets a timestamp) and is not deleted automatically | Startup is synchronous; the copy must be self-contained and must survive a retry after a failed upgrade | built |
+| *(superseded 2026-11-09 by Postgres)* `PRAGMA foreign_key_check` runs on every start, not only after migrating | Cheap at this app's size, and a dangling row is worth stopping for whenever it appears | built |
+| *(superseded 2026-11-09 by Postgres)* The pre-migration copy is made with `VACUUM INTO` (synchronous, includes WAL content, writes a non-WAL file), is never overwritten (a second one gets a timestamp) and is not deleted automatically | Startup is synchronous; the copy must be self-contained and must survive a retry after a failed upgrade | built |
 | Uniqueness of user ID and email is checked before hashing the password as well as inside the insert transaction | A taken user ID is reported without the scrypt delay; the second check closes the race | built |
 | The dashboard greeting uses the display name (it used the first word of the name) | Spec: display name everywhere; with optional names the first word is no longer meaningful | built |
 | Mobile top bar shows the display name with the user ID under it (when they differ); the sidebar shows user ID and email on separate lines; the user ID line is left out when it already is the display name | Migrated users learn their user ID from the shell; the top bar has room for two short lines | built |
@@ -152,13 +154,31 @@ All entries below date from the initial build, 2026-11-05.
 | Wallet and category names read from files or memory must be strings (a number is no longer turned into a name) | Defensive shape checks asked for by the plan; nothing the tracker or the page writes uses numbers there | built |
 | `tools/**` is excluded from eslint | The artifact is plain browser JS outside the Next.js app; its contract is checked by the harness and by `tests/statement-importer-csv.test.ts` | built |
 
+### Database: SQLite to PostgreSQL
+
+Decided 2026-11-09.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| The app supports **PostgreSQL only**; SQLite support is removed, not kept alongside | One database to build, test and document; the app is meant to be hosted for a household, where a real server is normal; keeping two dialects would double every query and migration | owner |
+| **No migration of existing SQLite data**: no importer, no converter. An old instance's way across is each account's JSON backup export from the old version, imported into the new one (wallets, categories, transactions and transfers come over; the account itself and its password do not) | The owner has no instance worth converting and wanted a fresh start; the backup format already round-trips an account's data | owner |
+| Tests run on **PGlite** (Postgres compiled to WASM, in process), not on a real server | `npm test` and CI keep needing no Docker and no database service, and the tests still run Postgres SQL and constraints | owner |
+| Driver is **node-postgres** (`pg`, a `Pool` of 10) with `drizzle-orm/node-postgres`; the `DB` type is Drizzle's generic `PgDatabase`, so PGlite instances fit it too | The standard driver, pure JavaScript (no native module, so the image needs no per-platform steps) | planner |
+| All services are **async**, and `getDb()` is a **memoized promise** on `globalThis` that connects and migrates once; a failed attempt clears it so the next call retries | Postgres drivers are asynchronous; sharing one promise stops concurrent first requests from migrating twice, and `globalThis` survives dev hot reload | planner |
+| Money columns are **`bigint` in `mode: "number"`** | SQLite integers were 64-bit; `integer` in Postgres is 32-bit and would cap amounts (a 0-decimal currency reaches it quickly). Aggregates (`sum` returns numeric, `count` bigint) are mapped to `number` | planner |
+| Timestamps are **`timestamptz`** (`mode: "date"`, `created_at` defaults to `now()`); calendar dates stay **`text`** `YYYY-MM-DD` | Real instants need a time zone; a calendar date is not an instant, and string compare semantics are what the code and the tests already rely on | planner |
+| One fresh `0000` Postgres migration replaced the three SQLite ones | With no data to carry, a clean schema is simpler than translating table rebuilds that only existed for SQLite's limits | planner |
+| The Compose files run **`postgres:17-alpine`**, pinned to a major | A major bump needs a dump and restore; a floating tag would break the volume on pull | planner |
+| The default database password is `expenses` (`POSTGRES_PASSWORD` overrides it) because the database port is **not published** | `docker compose up -d` with no `.env` has to keep working; the database is reachable only from the Compose network. Documented as "set `POSTGRES_PASSWORD` in `.env`" | planner |
+| Development uses Postgres in Docker (`compose.dev.yaml`, `npm run db:up`); `npm run dev` is on database `expenses` (the owner's real data), the demo on `expenses_demo` | Same safety split as the SQLite files had (`app.db` / `demo.db`); the reset's `--yes` rule now guards `DEFAULT_DEV_DATABASE_URL` | planner |
+
 ### Deployment
 
 | Decision | Why | Decided by |
 |---|---|---|
 | Docker is the deployment target; no dependency on Vercel or any hosted platform | The owner runs a homelab and wants anyone to be able to self-host | owner |
-| Image on `node:24-bookworm-slim`, three stages, runs as the non-root `node` user (uid 1000), data on a `/data` volume | glibc base so the native SQLite module's prebuilt binaries work on amd64 and arm64; least privilege | planner |
-| `npm ci --ignore-scripts` in the image | The slim image has no compiler toolchain, and the native module ships prebuilt Linux binaries | built |
+| *(superseded 2026-11-09 by Postgres)* Image on `node:24-bookworm-slim`, three stages, runs as the non-root `node` user (uid 1000), data on a `/data` volume | glibc base so the native SQLite module's prebuilt binaries work on amd64 and arm64; least privilege | planner |
+| *(superseded 2026-11-09 by Postgres)* `npm ci --ignore-scripts` in the image | The slim image has no compiler toolchain, and the native module ships prebuilt Linux binaries | built |
 | Health check uses Node's `fetch` against `/api/health` | No curl or wget needed in the image | built |
 | All runtime configuration is environment variables | Standard for containers; nothing to bake into the image | planner |
 | A prebuilt multi-arch image on GitHub Container Registry, published by GitHub Actions, is the default way to deploy; building from source stays supported | "It should be easy to deploy with docker": downloading one Compose file beats cloning and a several-minute build, and arm64 users (Raspberry Pi) get an image without building on the device. GHCR needs no extra account or secret (`GITHUB_TOKEN`) | owner asked for an easier Docker deploy; registry chosen by planner |
@@ -173,11 +193,11 @@ Added 2026-11-08.
 
 | Decision | Why | Decided by |
 |---|---|---|
-| `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
-| The reset writes `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database first (`--no-backup` skips it) and refuses with `NODE_ENV=production` | A reset is one typo away from losing real data; the command is a development tool | planner |
-| **`--yes` is honoured only with an explicit `DATABASE_URL` on the command; the default `data/app.db` always asks, and the answer must be the word `reset`** (not `y`). No terminal and no usable `--yes` → refuse | An agent wiped the developer's real database through a broken shell chain: a failed step before the command left `DATABASE_URL` unset, so the default file became the target. A `--yes` that reaches the default file by accident must not be able to wipe it | planner |
+| *(superseded 2026-11-09 by Postgres)* `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
+| *(superseded 2026-11-09 by Postgres)* The reset writes `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database first (`--no-backup` skips it) and refuses with `NODE_ENV=production` | A reset is one typo away from losing real data; the command is a development tool | planner |
+| *(superseded 2026-11-09 by Postgres)* **`--yes` is honoured only with an explicit `DATABASE_URL` on the command; the default `data/app.db` always asks, and the answer must be the word `reset`** (not `y`). No terminal and no usable `--yes` → refuse | An agent wiped the developer's real database through a broken shell chain: a failed step before the command left `DATABASE_URL` unset, so the default file became the target. A `--yes` that reaches the default file by accident must not be able to wipe it | planner |
 | The dev server prints `[demo] Sign in with user ID demo / password demo-password (if unchanged)` once, when it opens the database and a `demo` user exists; never in production. The seed and reset print the same line | The demo login was only in the README; this puts it where the developer is looking. The database opens lazily, so the line appears on the first request rather than at boot | planner (line), built (timing) |
-| Demo mode runs on its own file: `npm run dev:demo` seeds `data/demo.db` if needed and serves it; `npm run demo:reset` restores it without a prompt (`--yes` is allowed because `DATABASE_URL` is set inside the script) | Demo mode runs on its own file so it can never replace real data | planner |
+| *(superseded 2026-11-09 by Postgres)* Demo mode runs on its own file: `npm run dev:demo` seeds `data/demo.db` if needed and serves it; `npm run demo:reset` restores it without a prompt (`--yes` is allowed because `DATABASE_URL` is set inside the script) | Demo mode runs on its own file so it can never replace real data | planner |
 | README cut to a five-minute path (run, debug, scripts, compose quick start, env vars, pointers); long-form operations moved to `docs/SELF-HOSTING.md` | The README had grown to 368 lines, mostly operations detail most readers never need | planner |
 | In "Run it" and "Debugging", every command is its own one-line `bash` code block with the explanation in a sentence above, no trailing `# comments` | The owner reads the README in an app that puts a Run button on each single-line block; multi-line blocks with comments render badly there. This took the README to about 170 lines instead of the ~120 aimed for | owner (format), built (length) |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
@@ -300,7 +320,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 |---|---|---|
 | Wallet groups inside one account, not separate books or users; groups are user-defined; categories stay shared | Personal and business money should be looked at apart without a second login or duplicated categories; transfers between the two stay ordinary transfers | owner |
 | `wallets.group_id` is NOT NULL with ON DELETE RESTRICT; a group is deleted only when empty and not the user's last | A wallet can never be left without a group, and deleting a group never moves or removes money | planner |
-| Migration `0002` rebuilds `wallets` by hand and gives each user a `Personal` group; a wallet with a missing owner makes it fail and roll back instead of being dropped | `ALTER ... ADD NOT NULL` cannot work on a populated table; losing a row silently is worse than refusing to start (the pre-migration copy exists) | built (step 1) |
+| *(superseded 2026-11-09 by Postgres)* Migration `0002` rebuilds `wallets` by hand and gives each user a `Personal` group; a wallet with a missing owner makes it fail and roll back instead of being dropped | `ALTER ... ADD NOT NULL` cannot work on a populated table; losing a row silently is worse than refusing to start (the pre-migration copy exists) | built (step 1) |
 | Group names are unique per user ignoring case, compared case-folded in the service; there is no DB unique index | Same as categories; keeps the migration to the rebuild of one table | built (step 1) |
 | A group of another user in a `groupId` option behaves like an empty group; in a mutation it is NOT_FOUND on `groupId` | The rule for every other foreign row | built (step 1) |
 | The backup stays `version: 1` with an optional `group` per wallet | Old files still import (into the target group) and new files lose nothing; a version bump would reject them for no gain | built (step 1) |
@@ -331,10 +351,10 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   database by hand.
 - **No profile screen: user ID, email and names cannot be changed after registration** (nor can an email be added
   later to an account created without one).
-- **Migrated accounts are not told their new user ID** other than by the shell after signing in with their email;
+- *(superseded 2026-11-09 by Postgres)* **Migrated accounts are not told their new user ID** other than by the shell after signing in with their email;
   `docs/SELF-HOSTING.md` shows how an administrator can list them.
-- **Pre-migration copies are never cleaned up**; each one is a full copy of the database in the `/data` volume.
-- **A migration whose derived user IDs still collide after the `user<id>` fallback** (only possible with contrived
+- *(superseded 2026-11-09 by Postgres)* **Pre-migration copies are never cleaned up**; each one is a full copy of the database in the `/data` volume.
+- *(superseded 2026-11-09 by Postgres)* **A migration whose derived user IDs still collide after the `user<id>` fallback** (only possible with contrived
   emails) stops startup; it is rolled back and needs a manual fix of the colliding email before upgrading.
 - **Sign-in lookups compare `lower(...)`** and so do not use the unique indexes (a scan of `users`); irrelevant at
   household scale.
@@ -347,6 +367,14 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   Docker users start over by taking a backup and removing the volume (`docker compose down -v`).
 - **CI only on GitHub.** Tests and the image run in GitHub Actions; there is no other CI, and the image is only on
   GHCR (no Docker Hub mirror). Images are not signed and no SBOM or provenance policy is documented.
+- **No automatic backup before an upgrade.** The SQLite-era pre-migration copy is gone (Postgres has no file to
+  copy); take a `pg_dump` yourself before `docker compose pull`. A failing migration rolls back, but the app does not
+  start until it is fixed or the previous image is run.
+- **Existing SQLite instances have no in-place upgrade.** The owner decided there would be no data migration; the
+  way across is each account's JSON backup, which does not carry the account itself, its password or its sessions.
+- **The default database password (`expenses`)** is only safe while the database port stays unpublished, as in the
+  shipped Compose files; anyone who publishes it must set `POSTGRES_PASSWORD`.
+- **A Postgres major-version upgrade is a manual dump and restore** (the image is pinned to 17).
 - **No release process yet.** Until the first `vX.Y.Z` tag there are no version tags to pin, only `latest`/`main`
   and `sha-<commit>`.
 - **`build` / `start` scripts do not work in Windows `cmd`** because of the inline `NODE_ENV`. Docker users are
@@ -356,8 +384,9 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - **Conversion is only on Overview.** The Transactions strip, Categories and wallet pages stay per currency. The
   Overview Wallets card uses today's balances and the latest rates also for a past month.
-- **"Top category" in the converted view breaks ties by lower-cased name in JavaScript**, not SQLite's `nocase`;
-  the two can differ for non-ASCII names.
+- **"Top category" in the converted view breaks ties by lower-cased name in JavaScript**, not SQLite's `nocase` (the SQLite era; see below);
+  the two can differ for non-ASCII names. (The SQL ordering that used `collate nocase` is now `lower(x)` on Postgres,
+  whose result also depends on the database's collation for non-ASCII names.)
 - **Frankfurter quotes about 30 currencies (the ECB list).** Wallets in other currencies (e.g. KWD) are left out of
   the converted figures with a note. There is no second provider and no way to enter a rate by hand.
 - **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
@@ -377,7 +406,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - **The context export (Statement Importer) and the transactions CSV carry no group.** The CSV can be narrowed by
   `group=<id>` on the export URL but has no group column, so a CSV import always puts new wallets in the target
   group; only the backup round-trips groups.
-- **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
+- *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
   real `data/app.db`.
 
 ### Rough edges
@@ -445,6 +474,14 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Not verified
 
+- **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
+  and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
+  tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
+  balance, find it with `q=CAFÉ`, download the backup, all as no-JS form posts; then the documented `pg_dump` and
+  `pg_restore --clean --if-exists` round trip restored a deleted row with the app healthy afterwards. Not checked:
+  the amd64 image, the GitHub Actions run, `docker-compose.yml` (source build) end to end, `compose.dev.yaml` with
+  `npm run db:up` / `dev:demo` (not started, to keep agents off the dev volume), a JSON backup from an old SQLite
+  instance imported into the new version, the Postgres major-upgrade steps, and the app in a browser with JavaScript.
 - **Month stepper on /transactions** (arrows joined to the Month chip, the end-of-list month row, "This month", `[` / `]` / `T`) was
   covered by tests (static markup, the key predicate) and typecheck / lint only; not checked in a browser: the look
   at 375px (chip wrapping, the 44px arrows), the hover tint in dark mode, and the keys against a real open dialog
@@ -477,7 +514,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   drag-and-drop of a file onto the artifact's panel was simulated with a synthetic `drop` event in the harness.
 - **Dropping files on /data's import area** was only simulated (a synthetic `drop` event with a `DataTransfer` in
   headless Chrome); no real drag from Finder or Explorer, and not in Safari / Firefox.
-- **The 0001 migration on the owner's real database** was not run by the implementer (it is not theirs to touch);
+- *(superseded 2026-11-09 by Postgres)* **The 0001 migration on the owner's real database** was not run by the implementer (it is not theirs to touch);
   it is covered by synthetic populated databases in `tests/migrations.test.ts` and a browser upgrade check on a
   scratch database.
 - **The Statement Importer has not run on claude.ai.** Everything was exercised against `dev/mock-claude.js`:

@@ -10,46 +10,53 @@ this file in the same change and call the deviation out in your final report.
   **`cacheComponents` is off** (classic dynamic rendering): every page reads the session cookie, so pages and
   layouts can `await requireUser()` at the top level without `<Suspense>` boundaries. Don't use `'use cache'`.
 - Tailwind CSS v4
-- SQLite via Drizzle ORM + `better-sqlite3` (fall back to `@libsql/client` with a `file:` URL only if the
-  native module cannot be installed on Node 24). DB file: `data/app.db` (gitignored), overridable with `DATABASE_URL`.
+- PostgreSQL 17 via Drizzle ORM + `pg` (node-postgres, a `Pool` of at most 10). `DATABASE_URL` is a `postgres://`
+  URL (required in production; development defaults to `postgres://expenses:expenses@localhost:5432/expenses`,
+  started with `npm run db:up`). SQLite support was removed on 2026-11-09.
 - Migrations generated with `drizzle-kit` into `drizzle/` and **applied automatically on first DB access**, so
-  `npm install && npm run dev` works with no extra step.
-- Validation with `zod`. Tests with `vitest` (services run against an in-memory / temp-file SQLite DB).
+  `npm run db:up && npm run dev` works with no extra step.
+- Validation with `zod`. Tests with `vitest`; services run against an in-memory PGlite (`@electric-sql/pglite`,
+  Postgres compiled to WASM), so `npm test` needs no Docker and no running Postgres.
 - No external auth provider, no REST API layer: pages read through services in Server Components and mutate
   through Server Actions.
 - npm scripts: `dev`, `build`, `start`, `lint`, `typecheck` (`tsc --noEmit`), `test` (`vitest run`),
   `db:generate`, `db:seed` (demo user + sample data for local development; demo login
   `demo@example.com` / `demo-password`). `build`/`start` force `NODE_ENV=production` (a global
   `NODE_ENV=development` in the shell otherwise breaks prerendering).
-- Tests live in `tests/*.test.ts(x)`. `tests/helpers.ts` gives `useFreshDb()` (fresh migrated `:memory:` DB installed
-  via `setDb`) and `makeUser(db, email)` (user + default categories, `cat(name)` → category id).
+- Tests live in `tests/*.test.ts(x)`. `tests/helpers.ts` gives `useFreshDb()` (async: truncates every app table of the
+  file's in-memory PGlite, restarting identities, installs it via `setDb` and returns it) and `await makeUser(db, email)` (user + default categories, `cat(name)` → category id).
 
-## Development helpers
-
-- **`npm run db:reset -- --demo`** puts the database into the demo state: every row of every table is deleted
-  inside one transaction, then the demo user and sample data are seeded (same as `db:seed`), and the demo login
-  is printed. **`npm run db:reset -- --clean`** deletes every row and leaves an empty, migrated database.
-  Both keep the file (so a running dev server keeps working — it holds the same file open), run migrations
-  first, write a copy `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database before touching it
-  (`--no-backup` skips it), and refuse to run against a database with data unless confirmed. **`--yes` is
-  honoured only when `DATABASE_URL` is set explicitly on that command** (scratch databases); the default
-  `data/app.db` always asks, and the answer must be the word `reset` — a stray `--yes` or `y` can never wipe
-  it. Not a terminal and no usable `--yes` → refuse. They refuse outright when `NODE_ENV=production`. Without
-  `--demo`/`--clean` they print usage and exit 1.
-- **Demo mode on its own file.** `npm run dev:demo` runs `db:seed` and then `next dev`, both with
-  `DATABASE_URL=data/demo.db` set inside the script; `npm run demo:reset` runs the reset with `--demo --yes
-  --no-backup` on that file. Neither can reach `data/app.db`. `npm run dev` stays on the real database.
+- **Development database.** `compose.dev.yaml` runs `postgres:17-alpine` (user, password and database
+  `expenses`; port `127.0.0.1:5432`; named volume `expenses-dev-pg`; an init script creates a second database
+  `expenses_demo`). `npm run db:up` starts it and waits until healthy; `npm run db:down` stops it (the volume stays).
+  `npm run dev` uses the default `postgres://expenses:expenses@localhost:5432/expenses`, which is the owner's REAL
+  data from now on.
+- **`npm run db:reset -- --demo`** puts the database into the demo state: every row of every app table is deleted
+  (one `TRUNCATE … RESTART IDENTITY CASCADE`), then the demo user and sample data are seeded (same as `db:seed`), and
+  the demo login is printed. **`npm run db:reset -- --clean`** deletes every row and leaves an empty, migrated
+  database. Both keep the database (a running dev server keeps working), run migrations first, and refuse to run
+  against a database with data unless confirmed; there is no file to copy any more, so before confirming they print
+  a hint to take a backup with the app's JSON export or `pg_dump`. `--no-backup` is accepted and ignored. **`--yes` is
+  honoured only when `DATABASE_URL` is set explicitly on that command** (scratch databases); the default dev
+  database (`DEFAULT_DEV_DATABASE_URL`, or an unset `DATABASE_URL`) always asks, and the answer must be the word
+  `reset` — a stray `--yes` or `y` can never wipe it. Not a terminal and no usable `--yes` → refuse. They refuse
+  outright when `NODE_ENV=production`. Without `--demo`/`--clean` they print usage and exit 1.
+- **Demo mode on its own database.** `npm run dev:demo` runs `db:seed` and then `next dev`, both with
+  `DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` set inside the script; `npm run
+  demo:reset` runs the reset with `--demo --yes` on that database. Neither can reach `expenses`. `npm run dev` stays on
+  the real database. Scratch databases: put `DATABASE_URL=postgres://…/<scratch>` inline on the same command.
 - **Demo login in the terminal.** When the dev server (`next dev`) opens the database and a user with user ID
   `demo` exists, it logs one line: `[demo] Sign in with user ID demo / password demo-password (if unchanged)`.
   Never in production builds. `db:seed` and `db:reset --demo` print the same line.
-- As built: `scripts/reset.ts` and `scripts/seed.ts` share `src/server/maintenance.ts` (`wipeAllData`,
-  `backupBeforeReset` via `VACUUM INTO`, `findDemoUser`, `seedDemoData`) and `src/lib/demo.ts` (`DEMO_USER`,
-  `demoLoginLine`). The wipe also clears `sqlite_sequence`, so ids start at 1 again, and keeps
-  `__drizzle_migrations`; `-y` is accepted for `--yes`. The startup line comes from `logDemoLogin` in
+- As built: `scripts/reset.ts` and `scripts/seed.ts` share `src/server/maintenance.ts` (`appTables` from
+  `information_schema.tables` in schema `public`, `wipeAllData` returning the row counts taken before the truncate,
+  `findDemoUser`, `seedDemoData`) and `src/lib/demo.ts` (`DEMO_USER`, `demoLoginLine`); drizzle's own table lives in
+  schema `drizzle` and is never touched. The startup line comes from `logDemoLogin` (async) in
   `src/db/index.ts`, called by `getDb()` only when `NEXT_RUNTIME` is set (the scripts print it themselves); since
-  the dev server opens the database lazily, the line appears on its first request, not at boot.
-- The README's "Run it" section is the five-minute path: install, run, demo login, reset, where the DB is.
-  Everything long-form (reverse proxies, backup/restore, bind mounts, upgrading, standalone without Docker)
+  the dev server opens the database lazily, the line appears on its first request, not at boot. The scripts print a
+  "Database: …" line from `describeDatabase(url)` (password masked).
+- The README's "Run it" section is the five-minute path: install, `npm run db:up`, run, demo login, reset.
+  Everything long-form (reverse proxies, backup/restore, upgrading, standalone without Docker)
   lives in `docs/SELF-HOSTING.md`; the README links to it.
 
 ## Domain rules
@@ -89,7 +96,11 @@ this file in the same change and call the deviation out in your final report.
 
 ## Data model (Drizzle, `src/db/schema.ts`)
 
-Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign keys enforced (`PRAGMA foreign_keys = ON`).
+Integer identity primary keys (`generatedByDefaultAsIdentity`); foreign keys always enforced. Money columns
+(`*_minor`) are `bigint` in `mode: "number"` (the old range); `createdAt`, `expiresAt`, `archivedAt` are
+`timestamptz` (`timestamp` with time zone, `mode: "date"`, `createdAt` defaults to `now()`); calendar `date` columns
+stay `text` (`YYYY-MM-DD`, compared as strings); `kind` columns are `text` with a CHECK. Aggregates (`sum` of
+bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 
 | table | columns |
 |---|---|
@@ -113,54 +124,24 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
     email" (stored as NULL, never as an empty string).
   - First name / surname, when given: trimmed, at most 80 characters each; empty → NULL.
   - **Sign-in takes one identifier field, "User ID or email"**: a value containing `@` is looked up as an email,
-    anything else as a user ID. Both are case-insensitive. Accounts created before user IDs existed keep signing in
-    with their email, and also get a user ID (below).
+    anything else as a user ID. Both are case-insensitive. 
   - Display name everywhere (shell, greeting): first name + surname when either is set, otherwise the user ID. The
     shell's secondary line shows the user ID (and the email when there is one).
   - As built: the rules live in `src/lib/user-id.ts` (client-safe: `USER_ID_RE`, `USER_ID_HINT`, `NAME_MAX`,
     `normalizeUserId`, `userIdProblem`, `displayName`). Lookups compare `lower(username)` / `lower(email)`, so an
-    email the migration carried over in mixed case is still found and still blocks a duplicate. A user ID problem
+    email stored in mixed case would still be found and still block a duplicate. A user ID problem
     is reported in this order: empty, contains `@`, too short, too long, bad first character, other characters.
     The account menu (top bar, after the redesign; the old sidebar until then): display name, then the user ID
     (when it differs from the display name), then the email (when there is one), one per line, then Sign out. Long
     values truncate with an ellipsis and a tooltip.
   - There is no profile screen yet: the user ID, email and names cannot be changed after registration.
-- **Migration of existing accounts** (`drizzle/0001_*`): `email` becomes nullable; `name` is split at the first
-  space into `first_name` / `last_name`; `username` is derived from the email's local part, lowercased, with any
-  character outside the allowed set replaced by `-`, falling back to `user<id>` when that leaves nothing valid,
-  and suffixed with `-<id>` when it collides with another account. No account, wallet, category, transaction,
-  transfer or session may be lost or altered by it.
-  - As built (hand-written SQL in `drizzle/0001_user_ids.sql`, a recursive CTE walks the local part character by
-    character): the local part is everything before the first `@`; after replacing, leading `.`/`_`/`-` are
-    dropped and the result is cut to 32 characters; fewer than 3 characters left → `user<id>`. "Collides" means an
-    account with a lower id has the same value; the suffixed form shortens the base so it stays ≤ 32. A suffixed
-    value that equals another account's plain one (`bob-5`) makes the higher id fall back to `user<id>`; anything
-    still colliding fails the unique index, which rolls the whole migration back (startup then fails with the
-    backup's location). The name is trimmed first, split at the first space; the surname is trimmed, empty → NULL;
-    a blank name → both NULL. Email, password hash, `created_at` and `id` are copied unchanged (emails keep their
-    case). The `PRAGMA foreign_keys` lines drizzle-kit writes into the file were removed (no-ops in a transaction).
-- **Applying migrations safely (`src/db/index.ts`).** Changing a column's nullability in SQLite rebuilds the
-  table, and dropping the old `users` table while foreign keys are enforced would cascade-delete every row that
-  references a user. So: migrations run with `PRAGMA foreign_keys = OFF` set **before** the migrator starts (the
-  pragma is ignored inside a transaction, which is why a `PRAGMA` line inside the migration file is not enough),
-  then foreign keys are switched back on and `PRAGMA foreign_key_check` must come back empty, otherwise startup
-  fails loudly. Before applying pending migrations to an existing database file that already has data, a copy of
-  it is written next to it (`<file>.before-migration-<tag>.bak`), so a bad upgrade can be undone by hand.
-  - As built (`migrateDatabase(db, { file, migrationsFolder? })` in `src/db/index.ts`, called by `createDatabase`):
-    (1) `foreign_keys = OFF`; (2) pending = journal entries newer than the last row of `__drizzle_migrations`
-    (drizzle's own rule); (3) if any are pending, `file` is not `:memory:` and the database has at least one table,
-    `VACUUM INTO '<file>.before-migration-<first pending tag>.bak'` (a self-contained, non-WAL file; if that name
-    exists, `.<ISO timestamp>` is added before `.bak` — a copy is never overwritten) and a `[db] …` line is
-    logged; (4) drizzle's `migrate` (all pending migrations in one transaction); (5) `foreign_keys = ON` (in a
-    `finally`); (6) `PRAGMA foreign_key_check` — **on every start, not only after migrating** — must be empty,
-    else it throws "Database integrity check failed: N row(s) … Refusing to start." naming up to five rows and
-    the copy. A failed migration is rethrown as "Database migration failed: … Nothing was changed (the migration
-    was rolled back); a copy is at …". On any error the connection is closed.
-  - Why (measured, `tests/migrations.test.ts`): with foreign keys ON, `DROP TABLE users` in the rebuild is an
-    implicit `DELETE FROM users`. In a database with no transactions the migration "succeeds" and every wallet,
-    category and session is cascade-deleted. With at least one transaction the cascade reaches `wallets` before
-    `transactions`, `transactions.wallet_id` is `ON DELETE RESTRICT`, the statement fails with "FOREIGN KEY
-    constraint failed" and the migration is rolled back — no loss, but the app could never start.
+- **Migrations (`drizzle/`, `src/db/index.ts`).** The database is PostgreSQL only. The SQLite-era migrations
+  (`0000_init`, `0001_user_ids`, `0002_wallet_groups`) were deleted and replaced by one fresh Postgres `0000_*`
+  generated by `drizzle-kit`; there is no data migration from SQLite (see "Moving from SQLite" in
+  `docs/SELF-HOSTING.md`). `getDb()` applies pending migrations once per process through drizzle's node-postgres
+  migrator; Postgres DDL is transactional, so a failing migration rolls back and the app does not start, and foreign
+  keys are always enforced (no pragmas, no `foreign_key_check`, no copy of the database before migrating). Take a
+  `pg_dump` before upgrading. A migration that rewrites data still needs reading by hand before it ships.
 - Passwords hashed with `node:crypto` scrypt (random salt, timing-safe compare). Min length 8.
 - DB-backed sessions: random 32-byte token in an `httpOnly`, `sameSite=lax` cookie (30-day expiry) whose `secure`
   flag follows `COOKIE_SECURE` (see Deployment; logic in `src/lib/config.ts`); only its sha256 is stored. Logout
@@ -223,12 +204,15 @@ src/
 scripts/seed.ts  tests/  drizzle/
 ```
 
-`src/db/index.ts`: `getDb()` (process-wide connection, created + migrated on first access, survives HMR),
-`createDatabase(url?)`, `migrateDatabase(db, { file, migrationsFolder? })` and `pendingMigrations(db, folder?)` (see
-"Applying migrations safely"), `setDb(db)` (tests), `type DB` (includes `$client`, the better-sqlite3 handle),
-`type DBOrTx`. `DATABASE_URL` accepts a path,
-`file:./x.db` or `:memory:` (parent dir created if missing). Migrations folder: `MIGRATIONS_DIR` or
-`<cwd>/drizzle`; `next.config.ts` traces `drizzle/**` into `.next/standalone`, so `node server.js` run from
+`src/db/index.ts`: `getDb(): Promise<DB>` (a memoized promise on `globalThis`, so it survives HMR: connects, applies
+pending migrations once, then resolves; concurrent first calls share it; a failed attempt clears it so the next call
+retries), `createDatabase(url)` (async, for scripts), `createTestDatabase()` (async; in-memory PGlite plus its
+migrator, for tests), `setDb(db | undefined)` (tests), `describeDatabase(url)` (the URL with the password masked),
+`DEFAULT_DEV_DATABASE_URL`, `type DB` (`PgDatabase<PgQueryResultHKT, typeof schema>`, so node-postgres and PGlite
+both fit) and `type DBOrTx`. `DATABASE_URL` is a `postgres://` / `postgresql://` URL (required in production; the
+development default is `postgres://expenses:expenses@localhost:5432/expenses`). The runtime driver is `pg`'s `Pool`
+(max 10). Migrations folder: `MIGRATIONS_DIR` or `<cwd>/drizzle`; `next.config.ts` traces `drizzle/**` into
+`.next/standalone`, so `node server.js` run from `.next/standalone` auto-migrates without extra copying.
 `.next/standalone` auto-migrates without extra copying.
 
 ## Service layer (`src/server/*`, server-only, every function takes `userId` first)
@@ -238,9 +222,12 @@ with `code: 'NOT_FOUND' | 'VALIDATION' | 'CONFLICT'`, a user-presentable `messag
 the form input it belongs to). Server Actions parse form data with zod, call a service, map `ServiceError` to a
 returned form state, then `revalidatePath`/`redirect`.
 
-**Services are synchronous** (better-sqlite3): they return values, not promises (`await`-ing them is harmless).
-Only `registerUser`/`authenticateUser` are async (scrypt). Ids are `number`. Accessing another user's row
-behaves exactly like a missing row: getters return `null`, mutations throw `NOT_FOUND`.
+**Services are async.** Every service function returns a `Promise` (node-postgres / PGlite are asynchronous), so
+callers (pages, Server Actions, route handlers, `src/lib/auth.ts`, scripts, tests) `await` them, and `getDb()`
+itself is awaited (`const db = await getDb();`). Inside `await db.transaction(async (tx) => …)` every statement is
+awaited and only `tx` is used. Signatures elsewhere in this document are written as plain values for brevity; read
+each as `Promise<…>`. Ids are `number`. Accessing another user's row
+behaves exactly like a missing row: getters resolve `null`, mutations reject with `NOT_FOUND`.
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
@@ -1327,8 +1314,8 @@ type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; dat
   (one query each for the user's wallets, categories, grouped non-transfer entries and transfers-with-legs; the
   multiset is a `Map<key, count>` consumed per file entry) → `writePlan`. `runImport` re-parses and re-plans inside
   the same DB transaction it writes in; with any problem it writes nothing and returns `imported: false`.
-  Inserts are chunked multi-row `INSERT`s (≤ 1000 rows); transfer ids come back from `RETURNING`, sorted (SQLite
-  assigns them in VALUES order). Measured: 50 000 CSV rows (45 000 entries + 5 000 transfers, 2.5 MB) into a
+  Inserts are chunked multi-row `INSERT`s (≤ 1000 rows); transfer ids come back from `RETURNING`, sorted (assigned
+  in VALUES order). Measured on SQLite before the move to Postgres: 50 000 CSV rows (45 000 entries + 5 000 transfers, 2.5 MB) into a
   file-backed DB in ≈ 1 s; preview ≈ 0.1 s; re-import of the same file (all duplicates) ≈ 0.25 s.
 - Upload: two Server Actions in `src/app/(app)/data/actions.ts` (`previewImportAction(formData)`,
   `runImportAction(formData)` → `ImportActionState = { error?; fileNames?; preview?; result? }`). The FormData has
@@ -1427,10 +1414,9 @@ What the scope narrows:
 | `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` |
 | `wallets` | + `groupId` → wallet_groups (**restrict**), NOT NULL; index on `groupId` |
 
-Migration `drizzle/0002_*` (hand-checked, it rebuilds `wallets`): create `wallet_groups`; insert one `Personal`
-group per existing user; rebuild `wallets` with `group_id` set to that user's group; every wallet, transaction,
-transfer and id is kept unchanged. A test in `tests/migrations.test.ts` applies it to a populated 0001 database and
-checks that nothing was lost and every wallet has its owner's group.
+There is no separate migration for groups any more: the Postgres schema starts at `drizzle/0000_*` with
+`wallet_groups` and `wallets.group_id` (NOT NULL) in place. (The SQLite-era `0002` that back-filled a `Personal`
+group per user was removed with the SQLite migrations; there is no upgrade path from those databases.)
 
 ### Services
 
@@ -1464,9 +1450,8 @@ behaves like an empty group — no rows, never an error, except in mutations, wh
 
 As built (step 1, data model and services):
 
-- Migration `0002_wallet_groups.sql` creates the groups with `created_at = unixepoch()`. A wallet whose owner row
-  is missing has no group to get, so the NOT NULL fails and the whole migration rolls back (the runner's
-  pre-migration copy is the way back) instead of the wallet being dropped.
+- The wallet-groups migration is part of the single Postgres `0000` migration (the SQLite-era `0002` is gone, see
+  "Database"); it has no data to carry. `registerUser` seeds `Personal` for new accounts.
 - `getWalletGroup` returns `null` for a non-numeric id (never throws); the mutations throw NOT_FOUND on `groupId`.
   `listWalletGroups` counts archived wallets in `walletCount`.
 - Group narrowing is a condition on `wallets.group_id` (joined) or, in `filterConditions` and
@@ -1547,11 +1532,13 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
 - `next.config`: `output: 'standalone'` (+ `outputFileTracingIncludes` for `drizzle/**`, so the migrations are inside
   `.next/standalone/drizzle`). The standalone server still needs `.next/static` → `.next/standalone/.next/static`
   and `public/` → `.next/standalone/public` copied in (Next's standard standalone step). `public/` only holds a
-  `.gitkeep` today. `better-sqlite3` is in `serverExternalPackages` and is traced into
-  `.next/standalone/node_modules` with its native prebuild for the build platform — build inside the image.
+  `.gitkeep` today. `pg` is in `serverExternalPackages`; it is pure JavaScript and is traced into
+  `.next/standalone/node_modules` like any other dependency.
   No telemetry (`NEXT_TELEMETRY_DISABLED=1` in the image).
 - **Runtime configuration is environment-only** (documented in `.env.example` and `docs/SELF-HOSTING.md` → Settings):
-  - `DATABASE_URL` — path of the SQLite file. Default `data/app.db` locally, `/data/app.db` in the image.
+  - `DATABASE_URL` — a `postgres://` / `postgresql://` URL. **Required in production** (the first DB use throws "DATABASE_URL
+    is not set"); in development it defaults to `postgres://expenses:expenses@localhost:5432/expenses`. The Compose
+    files build it from `POSTGRES_PASSWORD` (a Compose variable, default `expenses`).
   - `COOKIE_SECURE` — `auto` (default: mark the session cookie `secure` only when the request arrived over
     HTTPS, judged by `x-forwarded-proto`), `true`, or `false`. Many homelabs serve plain HTTP on the LAN; a
     hard-coded `secure` cookie would silently break sign-in there.
@@ -1564,15 +1551,21 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
 - Migrations are applied automatically at startup, so the migrations folder must be resolvable in the
   standalone build (resolve from `process.cwd()`, overridable with `MIGRATIONS_DIR`) and copied into the image.
 - `GET /api/health` → `200 {"status":"ok"}` after a trivial DB query (`503` if the DB is unreachable); public, no auth.
-- `Dockerfile`: multi-stage on `node:24-bookworm-slim` (glibc, so `better-sqlite3` prebuilt binaries work on
-  amd64 and arm64), final stage runs the standalone server as a non-root user, `VOLUME /data`, `EXPOSE 3000`,
-  `HEALTHCHECK` on `/api/health`. As built: deps stage runs `npm ci --ignore-scripts` (better-sqlite3 13 ships its
-  Linux prebuilds in the package; its implicit `node-gyp rebuild` would otherwise need python3/make/g++) and then
-  loads the module to fail fast; runner uses the base image's `node` user (uid/gid 1000), copies `drizzle/` to
-  `/app/drizzle` explicitly (`MIGRATIONS_DIR=/app/drizzle`), drops non-Linux better-sqlite3 prebuilds, and the
-  healthcheck is a `node -e` fetch (no curl/wget in the image).
-- `docker-compose.yml`: one service, named volume mounted at `/data`, port mapping, the env vars above with
-  their defaults, `restart: unless-stopped`. `docker compose up -d` must be all a user needs.
+- `Dockerfile`: multi-stage on `node:24-bookworm-slim`, final stage runs the standalone server as a non-root user,
+  `EXPOSE 3000`, `HEALTHCHECK` on `/api/health`. The image is pure JavaScript (`pg` has no native module), so it
+  builds for `linux/amd64` and `linux/arm64` without per-platform steps. No `/data` volume and no `DATABASE_URL`
+  default in the image (the app requires `DATABASE_URL` in production). As built: deps stage runs `npm ci`;
+  runner uses the base image's `node` user (uid/gid 1000), copies `drizzle/` to `/app/drizzle` explicitly
+  (`MIGRATIONS_DIR=/app/drizzle`), and the healthcheck is a `node -e` fetch (no curl/wget in the image).
+- `docker-compose.yml` (source build) and `deploy/compose.yaml` (prebuilt image): two services. `db` is
+  `postgres:17-alpine` (pinned major; `restart: unless-stopped`; named volume `pg-data` at
+  `/var/lib/postgresql/data`; `POSTGRES_USER=expenses`, `POSTGRES_DB=expenses`, `POSTGRES_PASSWORD:
+  ${POSTGRES_PASSWORD:-expenses}`; healthcheck `pg_isready -U expenses -d expenses`; **no host port published**,
+  so the default password is reachable only from the Compose network). The app service has `depends_on: db:
+  condition: service_healthy`, `DATABASE_URL: postgres://expenses:${POSTGRES_PASSWORD:-expenses}@db:5432/expenses`
+  (the password must be URL-safe or URL-encoded), the port mapping, the other env vars above with their defaults and
+  `restart: unless-stopped`. There is no `expenses-data` volume any more. `docker compose up -d` must be all a user
+  needs, with no `.env` (default password).
 - `.dockerignore` keeps `node_modules`, `.next`, `data`, `.env*`, `.git`, `.github`, `deploy` out of the build context.
 - **Prebuilt image.** `.github/workflows/docker-image.yml`: job `test` (Node 24: `npm ci`, typecheck, lint,
   `npm test`), then job `image` builds `linux/amd64,linux/arm64` with Buildx (QEMU for arm64, GHA layer cache) and
@@ -1585,7 +1578,8 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   from the environment or a `.env` file with the app's defaults.
 - The README opens with the three-line prebuilt-image quick start and has the build-from-source alternative; the
   env var tables are in `docs/SELF-HOSTING.md` → Settings. `docs/SELF-HOSTING.md` also documents running behind a
-  reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore of the SQLite file, and upgrading.
+  reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore with `pg_dump` / `pg_restore`,
+  upgrading (and Postgres major upgrades) and how an old SQLite instance's data can be carried over (JSON backups).
 
 ## UI direction
 

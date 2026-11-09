@@ -32,7 +32,7 @@ type Props = {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const user = await getCurrentUser();
   const walletId = parseWalletId((await params).id);
-  const wallet = user && walletId ? getWallet(user.id, walletId) : null;
+  const wallet = user && walletId ? await getWallet(user.id, walletId) : null;
   return { title: wallet?.name ?? "Wallet" };
 }
 
@@ -45,7 +45,7 @@ const KIND_PILLS = [
 export default async function WalletPage({ params, searchParams }: Props) {
   const user = await requireUser();
   const walletId = parseWalletId((await params).id);
-  const wallet = walletId ? getWallet(user.id, walletId) : null;
+  const wallet = walletId ? await getWallet(user.id, walletId) : null;
   if (!wallet) notFound();
 
   const sp = await searchParams;
@@ -54,26 +54,26 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const month = requested > maxMonth ? maxMonth : requested;
   const isCurrentMonth = month === maxMonth;
   const today = todayISO();
-  const data = getWalletMonth(user.id, wallet.id, month);
+  const data = await getWalletMonth(user.id, wallet.id, month);
   if (!data) notFound();
 
   const archived = wallet.archivedAt !== null;
   const self = `/wallets/${wallet.id}`;
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
-  const { items, total } = listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
+  const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
   const closingByDate = new Map(data.days.map((d) => [d.date, d.closingMinor]));
   const endMinor = data.days.at(-1)?.closingMinor ?? data.openingMinor;
   const sinceStart = endMinor - data.openingMinor;
   const name = monthName(month);
 
-  const walletOptions = listWallets(user.id, { includeArchived: true }).map((w) => ({
+  const walletOptions = (await listWallets(user.id, { includeArchived: true })).map((w) => ({
     id: w.id,
     name: w.name,
     currency: w.currency,
     archived: w.archivedAt !== null,
   }));
-  const categoryOptions = listCategories(user.id).map(({ id, name, kind }) => ({ id, name, kind }));
+  const categoryOptions = (await listCategories(user.id)).map(({ id, name, kind }) => ({ id, name, kind }));
   const transactionsHref = `/transactions?wallet=${wallet.id}&month=${month}`;
 
   return (

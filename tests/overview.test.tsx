@@ -116,19 +116,19 @@ describe("pace wording", () => {
 describe("Overview currency and links", () => {
   const held = ["EUR", "JPY", "RON", "USD"];
 
-  it("uses ?currency= when the user holds a wallet in it", () => {
+  it("uses ?currency= when the user holds a wallet in it", async () => {
     const pick = vi.fn(() => "EUR");
-    expect(resolveOverviewCurrency("RON", held, pick)).toEqual({ currency: "RON", explicit: true });
+    expect(await resolveOverviewCurrency("RON", held, pick)).toEqual({ currency: "RON", explicit: true });
     expect(pick).not.toHaveBeenCalled();
   });
 
-  it("falls back to pickDefaultCurrency for an unknown, malformed, unheld or missing currency", () => {
+  it("falls back to pickDefaultCurrency for an unknown, malformed, unheld or missing currency", async () => {
     for (const requested of ["XXX", "ron", "GBP", "", undefined, ["RON"]]) {
       const pick = vi.fn(() => "EUR");
-      expect(resolveOverviewCurrency(requested, held, pick)).toEqual({ currency: "EUR", explicit: false });
+      expect(await resolveOverviewCurrency(requested, held, pick)).toEqual({ currency: "EUR", explicit: false });
       expect(pick).toHaveBeenCalledOnce();
     }
-    expect(resolveOverviewCurrency(undefined, [], () => null)).toEqual({ currency: null, explicit: false });
+    expect(await resolveOverviewCurrency(undefined, [], () => null)).toEqual({ currency: null, explicit: false });
   });
 
   it("builds /?month=&currency= links, leaving out the current month", () => {

@@ -24,7 +24,7 @@ export default async function EditTransactionPage({
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const returnTo = safeReturnTo(sp.returnTo);
   const transactionId = parseId(id);
-  const t = transactionId ? getTransaction(user.id, transactionId) : null;
+  const t = transactionId ? await getTransaction(user.id, transactionId) : null;
   if (!t) notFound();
   if (t.transferId !== null) redirect(withReturnTo(`/transactions/transfers/${t.transferId}/edit`, returnTo));
   if (t.kind !== "expense" && t.kind !== "income") notFound();
@@ -50,8 +50,8 @@ export default async function EditTransactionPage({
         }
       />
       <EntryForm
-        wallets={walletOptions(user.id, [t.walletId])}
-        categories={categoryOptions(user.id)}
+        wallets={await walletOptions(user.id, [t.walletId])}
+        categories={await categoryOptions(user.id)}
         initial={{
           kind: t.kind,
           walletId: t.walletId,

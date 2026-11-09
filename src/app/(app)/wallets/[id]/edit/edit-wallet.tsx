@@ -10,9 +10,9 @@ import { archiveWalletAction, deleteWalletAction, unarchiveWalletAction, updateW
 import { parseWalletId } from "../../form-input";
 
 /** The user's wallet named by the route's `id`, or the not-found page. */
-export function walletToEdit(userId: number, idParam: string): WalletView {
+export async function walletToEdit(userId: number, idParam: string): Promise<WalletView> {
   const walletId = parseWalletId(idParam);
-  const wallet = walletId ? getWallet(userId, walletId) : null;
+  const wallet = walletId ? await getWallet(userId, walletId) : null;
   if (!wallet) notFound();
   return wallet;
 }

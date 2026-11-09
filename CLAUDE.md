@@ -3,8 +3,8 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Self-hosted, multi-user expenses tracker: wallets in different currencies, expenses / income with user-defined
-categories, transfers between wallets, a dashboard, and import/export. One Next.js app backed by a single SQLite
-file, shipped as a Docker image.
+categories, transfers between wallets, a dashboard, and import/export. One Next.js app backed by PostgreSQL,
+shipped as a Docker image (run with a Postgres container by the Compose files).
 
 ## Documents to read before changing behaviour
 
@@ -17,9 +17,9 @@ file, shipped as a Docker image.
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — user-facing and short: run it (demo login, reset), debugging, scripts, the Compose quick start (its
   first lines), env vars only as a pointer to `docs/SELF-HOSTING.md` → Settings, a pointer for each larger topic. Keep it under ~120 lines; long-form material goes in a `docs/` file.
-- `docs/SELF-HOSTING.md` — long-form operations: reverse proxy and `COOKIE_SECURE`, closing registration, where
-  the data lives, bind mounts (uid 1000), backup/restore, upgrading and the pre-migration copy, the user-ID
-  migration, the standalone build without Docker, database notes.
+- `docs/SELF-HOSTING.md` — long-form operations: settings, reverse proxy and `COOKIE_SECURE`, closing registration,
+  where the data lives (the Postgres volume), `pg_dump` / `pg_restore` backup and restore, upgrading (and Postgres
+  major upgrades), moving from the old SQLite versions via JSON backups, the standalone build without Docker.
 - `docs/STATEMENT-IMPORTER.md` — the claude.ai Artifact in `tools/statement-importer/` that turns bank statements
   into this app's CSV (prompts, memory, harness). Not part of the Next.js app; eslint ignores `tools/**`, and
   `tests/statement-importer-csv.test.ts` keeps its CSV writer in line with `src/lib/csv.ts`.
@@ -27,14 +27,16 @@ file, shipped as a Docker image.
 ## Commands
 
 ```bash
-npm run dev                                   # dev server on :3000 on data/app.db (the owner's REAL data — see below)
-npm run dev:demo                              # seed data/demo.db if needed, then the dev server on it
-npm run demo:reset                            # data/demo.db back to the fresh demo state, no prompt
+npm run db:up                                 # development Postgres in Docker (compose.dev.yaml, 127.0.0.1:5432), waits until healthy
+npm run db:down                               # stop it (data stays in the expenses-dev-pg volume)
+npm run dev                                   # dev server on :3000 on database `expenses` (the owner's REAL data — see below); needs db:up
+npm run dev:demo                              # seed database `expenses_demo` if needed, then the dev server on it
+npm run demo:reset                            # expenses_demo back to the fresh demo state, no prompt
 npm run db:seed                               # idempotent demo user + data; prints the demo login
 npm run db:reset -- --demo | --clean          # REAL DB: wipe every row, then demo data / empty (asks; see below)
 npm run typecheck                             # tsc --noEmit
 npm run lint                                  # eslint
-npm test                                      # vitest run (whole suite, a few seconds)
+npm test                                      # vitest run (whole suite, a few seconds; PGlite, no Docker or Postgres needed)
 npx vitest run tests/money.test.ts            # one file
 npx vitest run tests/money.test.ts -t "JPY"   # tests whose name matches
 npm run build                                 # production build → .next/standalone (forces NODE_ENV=production)
@@ -43,8 +45,9 @@ docker compose up -d --build                  # the real deployment artefact
 npx tsx --conditions=react-server script.ts   # run a one-off script that imports src/server/* (needed for `server-only`)
 ```
 
-The DB is created and migrated on first request. `dev:demo` and `demo:reset` put `DATABASE_URL=data/demo.db`
-inside the npm script, so they never reach `data/app.db`.
+The database is migrated on first request. `dev:demo` and `demo:reset` put
+`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` inside the npm script, so they never reach
+`expenses`.
 
 `build` and `start` set `NODE_ENV=production` inline on purpose: a globally exported `NODE_ENV=development`
 breaks `next build`. A production build is best validated with `docker build .`, which runs it on Linux.
@@ -56,21 +59,21 @@ mutations are Server Actions. The only route handlers are `GET /api/health` and 
 downloads — route handlers are not covered by the `(app)` layout, so they check the session themselves.
 
 ```
-page.tsx (Server Component) ──────────────► src/server/*.ts ──► Drizzle ──► SQLite
+page.tsx (Server Component) ──────────────► src/server/*.ts ──► Drizzle ──► PostgreSQL
 form (client) ─► actions.ts (Server Action) ─► zod ─► src/server/*.ts
                    └─ ServiceError → FormState { message, fieldErrors, values } → useActionState
 ```
 
 **Service layer (`src/server/`).** All domain rules live here, not in actions or components. Every function
 takes `userId` first and scopes every query by it; another user's row behaves exactly like a missing one.
-Services are synchronous (better-sqlite3) and throw `ServiceError` (`code` + user-presentable `message` +
+Services are async (every function returns a Promise; callers `await` them and `await getDb()`) and throw `ServiceError` (`code` + user-presentable `message` +
 optional `field`). Actions follow one pattern — `requireUser()`, parse with zod, call the service, map errors
 with `serviceErrorState`, then `revalidatePath` / `redirect` outside the `try` — see
 `src/app/(auth)/register/actions.ts` and `src/lib/form.ts`. Form inputs are named after the service's field
 names so errors land on the right control.
 
 **Money.** Integer minor units everywhere (`amountMinor`), never floats; decimals come from the currency
-(`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored amounts are positive and the transaction kind gives the sign.
+(`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored as `bigint` (`mode: "number"`). Stored amounts are positive and the transaction kind gives the sign.
 User input goes through `parseAmount(value, currency)` with the currency of the wallet looked up server-side.
 There is no currency conversion except the Overview's "All in <currency>" view (`src/lib/fx.ts`, rates from
 `src/server/exchange-rates.ts`, the `convert` option of the month services); every other total is grouped per
@@ -80,15 +83,16 @@ currency and nothing converted is stored.
 one DB transaction; legs are only edited or deleted through the transfer. Cross-currency transfers store both
 amounts. A check constraint ties `kind`, `categoryId` and `transferId` together.
 
-**Database (`src/db/index.ts`).** `getDb()` lazily opens the file from `DATABASE_URL` (default `data/app.db`),
-sets WAL, and applies the migrations in `drizzle/` through `migrateDatabase` — foreign keys OFF around the
-migrator, a copy `<file>.before-migration-<tag>.bak` of a populated file DB first, then foreign keys ON and
-`PRAGMA foreign_key_check` (startup throws if it finds anything). Migrations must ship with the build
-(`outputFileTracingIncludes` in `next.config.ts`, and an explicit copy in the Dockerfile). Never edit an
-existing migration that has shipped; generate a new one. **A generated migration that rebuilds a table**
-(`__new_x` + `DROP TABLE x`) needs reading by hand: drizzle-kit can only copy columns, and its `PRAGMA
-foreign_keys` lines are no-ops inside the migrator's transaction (see `drizzle/0001_user_ids.sql`,
-`tests/migrations.test.ts`). `drizzle-kit generate` prompts (rename vs create) need a TTY.
+**Database (`src/db/index.ts`).** PostgreSQL through `pg` (a `Pool`) and Drizzle; SQLite support is gone.
+`getDb()` is a memoized *promise* on `globalThis`: it connects to `DATABASE_URL` (required in production; in
+development it defaults to `DEFAULT_DEV_DATABASE_URL`, `postgres://expenses:expenses@localhost:5432/expenses`),
+applies the migrations in `drizzle/` once, then resolves; a failed attempt clears it so the next call retries. DDL is
+transactional and foreign keys are always on; there is no pre-migration copy. Timestamps are `timestamptz`, calendar
+dates stay `text`. Inside `await db.transaction(async (tx) => …)` await every statement and use only `tx`.
+`createDatabase(url)` is for scripts, `createTestDatabase()` (PGlite) for tests. Migrations must ship with the build
+(`outputFileTracingIncludes` in `next.config.ts`, and an explicit copy in the Dockerfile). Never edit an existing
+migration that has shipped; generate a new one and read it by hand if it rewrites data. `drizzle-kit generate`
+prompts (rename vs create) need a TTY.
 
 **Auth (`src/lib/auth.ts`).** User ID (or email) + password (scrypt), DB-backed sessions, sha256 of the cookie
 token stored. Email, first name and surname are optional; show people by `user.displayName` (rules in
@@ -105,17 +109,20 @@ list — do not loosen the native CSV rules to fit a provider. A selection of se
 share one path, and
 `runImport` re-validates inside the transaction it writes in.
 
-**Deployment.** `output: "standalone"`; the Docker image runs `node server.js` as the non-root `node` user with
-the DB on the `/data` volume. All runtime configuration is environment variables (`.env.example`). The image
-must be built on Linux for its target platform because better-sqlite3 is a native module.
+**Deployment.** `output: "standalone"`; the Docker image runs `node server.js` as the non-root `node` user and
+holds no data. The Compose files (`deploy/compose.yaml`, `docker-compose.yml`) add a `postgres:17-alpine` `db`
+service (volume `pg-data`, port not published, `POSTGRES_PASSWORD` default `expenses`) and pass `DATABASE_URL`. All
+runtime configuration is environment variables (`.env.example`). The image is pure JavaScript, multi-arch.
 `.github/workflows/docker-image.yml` tests and publishes the multi-arch image to `ghcr.io` (`latest` from `main`,
 versions from `vX.Y.Z` tags); `deploy/compose.yaml` runs that image without a clone, `docker-compose.yml` builds
 from source. Keep the two Compose files' environment blocks in step.
 
 ## Conventions and gotchas
 
-- **Tests** live in `tests/` (not next to the code). Service tests call `useFreshDb()` in `beforeEach` and
-  `makeUser(db, email)` from `tests/helpers.ts` (user ID derived from the whole email), which installs an in-memory migrated DB via `setDb`.
+- **Tests** live in `tests/` (not next to the code). One in-memory PGlite per test file; service tests call
+  `db = await useFreshDb()` in `beforeEach` (truncates the app tables, installs the DB via `setDb`) and `await
+  makeUser(db, email)` from `tests/helpers.ts` (user ID derived from the whole email). Assert failures with
+  `await expect(f()).rejects.toThrow(…)`.
   `server-only` is stubbed in `vitest.config.mts`.
 - **Cache Components is deliberately off** (`next.config.ts`): every page is per-user and reads the session
   cookie. Don't add `'use cache'`.
@@ -146,8 +153,11 @@ from source. Keep the two Compose files' environment blocks in step.
 - **Revalidation:** category and import changes affect every signed-in page, so those actions call
   `revalidatePath("/", "layout")`.
 - **No real user data in the repo.** Import tests use synthetic fixtures; `data/` and `.env*` are gitignored.
-- **`data/app.db` is the developer's real data. Never run a database script (`db:seed`, `db:reset`, one-off
-  `tsx` scripts) or a dev server against it from an agent.** Put `DATABASE_URL=<scratch file>` inline on the
-  same command every time (`DATABASE_URL=/tmp/x.db npm run db:reset -- --demo --yes`), never via `export` or
-  earlier in a `&&` chain: a failed step before it (zsh's "no matches found" on an empty glob, for one) silently
-  leaves the default database as the target. `db:reset --yes` refuses the default file for this reason.
+- **The `expenses` database on the development Postgres is the developer's real data. Never run a database script
+  (`db:seed`, `db:reset`, one-off `tsx` scripts) or a dev server against it from an agent.** Use `expenses_demo`
+  (what `dev:demo` / `demo:reset` do) or a throwaway database, with `DATABASE_URL=<url>` inline on the
+  same command every time (`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo npm run db:reset
+  -- --demo --yes`), never via `export` or earlier in a `&&` chain: a failed step before it silently leaves the
+  default database as the target. `db:reset --yes` refuses the default database (`DEFAULT_DEV_DATABASE_URL` or an
+  unset `DATABASE_URL`) for this reason. There is no file to copy before a reset: take a `pg_dump` or the JSON
+  export first.

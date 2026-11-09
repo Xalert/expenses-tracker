@@ -159,13 +159,13 @@ describe("statement importer core", () => {
 
 describe("statement importer CSV is accepted by the app's importer", () => {
   let userId: number;
-  beforeEach(() => {
-    const db = useFreshDb();
-    userId = makeUser(db, "statements@example.com").id;
+  beforeEach(async () => {
+    const db = await useFreshDb();
+    userId = (await makeUser(db, "statements@example.com")).id;
   });
 
-  function expectAccepted(csv: string) {
-    const preview = previewImport(userId, csv);
+  async function expectAccepted(csv: string) {
+    const preview = await previewImport(userId, csv);
     expect(preview.problems).toEqual([]);
     expect(preview.ok).toBe(true);
     expect(preview.format).toBe("csv");
@@ -175,16 +175,16 @@ describe("statement importer CSV is accepted by the app's importer", () => {
     expect(preview.categoriesToCreate.map((c) => `${c.kind} ${c.name}`).sort()).toEqual(EXPECTED_NEW_CATEGORIES);
   }
 
-  it("accepts the CSV built by the page's core from the fixture answers", () => {
-    expectAccepted(buildScenarioCsv().csv);
+  it("accepts the CSV built by the page's core from the fixture answers", async () => {
+    await expectAccepted(buildScenarioCsv().csv);
   });
 
-  it("accepts the CSV the harness page downloaded, and skips it all on a second import", () => {
+  it("accepts the CSV the harness page downloaded, and skips it all on a second import", async () => {
     const csv = fs.readFileSync(path.join(FIXTURES, "harness-export.csv"), "utf8");
-    expectAccepted(csv);
-    const result = runImport(userId, csv);
+    await expectAccepted(csv);
+    const result = await runImport(userId, csv);
     expect(result.imported).toBe(true);
-    const again = previewImport(userId, csv);
+    const again = await previewImport(userId, csv);
     expect(again.problems).toEqual([]);
     expect(again.transactionsToAdd).toBe(0);
     expect(again.transfersToAdd).toBe(0);
@@ -232,13 +232,13 @@ describe("statement importer reads the tracker's wallets & categories", () => {
     expect([bak.wallets, bak.categories, bak.archivedSkipped]).toEqual([ctx.wallets, ctx.categories, ctx.archivedSkipped]);
   });
 
-  it("reads what the app's buildContext produces", () => {
-    const db = useFreshDb();
-    const user = makeUser(db, "ctx@example.com");
-    createWallet(user.id, { name: "Main", currency: "EUR", initialBalanceMinor: 0 });
-    const old = createWallet(user.id, { name: "Old", currency: "USD", initialBalanceMinor: 0 });
-    archiveWallet(user.id, old.id);
-    const r = read(JSON.stringify(buildContext(user.id), null, 2));
+  it("reads what the app's buildContext produces", async () => {
+    const db = await useFreshDb();
+    const user = await makeUser(db, "ctx@example.com");
+    await createWallet(user.id, { name: "Main", currency: "EUR", initialBalanceMinor: 0 });
+    const old = await createWallet(user.id, { name: "Old", currency: "USD", initialBalanceMinor: 0 });
+    await archiveWallet(user.id, old.id);
+    const r = read(JSON.stringify(await buildContext(user.id), null, 2));
     expect(r.source).toBe("context");
     expect(r.wallets).toEqual([{ name: "Main", currency: "EUR" }]);
     expect(r.archivedSkipped).toBe(1);

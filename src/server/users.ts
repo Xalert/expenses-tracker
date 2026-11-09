@@ -1,10 +1,11 @@
 import "server-only";
 import { sql } from "drizzle-orm";
-import { getDb } from "@/db";
+import { getDb, type DBOrTx } from "@/db";
 import { users, type User } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
 import { NAME_MAX, displayName, normalizeUserId, userIdProblem } from "@/lib/user-id";
+import { pgError } from "./_validate";
 import { seedDefaultCategories } from "./categories";
 import { seedDefaultGroup } from "./wallet-groups";
 
@@ -69,35 +70,34 @@ export async function registerUser(input: RegisterInput): Promise<UserView> {
     throw new ServiceError("VALIDATION", `Use at least ${MIN_PASSWORD_LENGTH} characters.`, "password");
   }
 
-  const db = getDb();
-  const assertFree = () => {
-    if (db.select({ id: users.id }).from(users).where(byUsername(username)).get()) {
-      throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
-    }
-    if (email !== null && db.select({ id: users.id }).from(users).where(byEmail(email)).get()) {
-      throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+  const db = await getDb();
+  const assertFree = async (conn: DBOrTx) => {
+    const [byName] = await conn.select({ id: users.id }).from(users).where(byUsername(username)).limit(1);
+    if (byName) throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
+    if (email !== null) {
+      const [byMail] = await conn.select({ id: users.id }).from(users).where(byEmail(email)).limit(1);
+      if (byMail) throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
     }
   };
-  assertFree(); // before the (slow) hash, so a taken name is reported at once
+  await assertFree(db); // before the (slow) hash, so a taken name is reported at once
   const passwordHash = await hashPassword(input.password);
 
   try {
-    return db.transaction((tx) => {
-      assertFree(); // again: another registration may have finished while we were hashing
-      const user = tx
+    return await db.transaction(async (tx) => {
+      await assertFree(tx); // again: another registration may have finished while we were hashing
+      const [user] = await tx
         .insert(users)
         .values({ username, email, firstName, lastName, passwordHash })
-        .returning()
-        .get();
-      seedDefaultCategories(user.id, tx);
-      seedDefaultGroup(user.id, tx);
+        .returning();
+      await seedDefaultCategories(user.id, tx);
+      await seedDefaultGroup(user.id, tx);
       return toUserView(user);
     });
   } catch (err) {
     // Lost a race with a concurrent registration: tell which unique index fired.
-    if ((err as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE") {
-      const message = (err as Error).message;
-      if (message.includes("users.email")) throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+    const unique = pgError(err, "23505");
+    if (unique) {
+      if (unique.constraint === "users_email_unique") throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
       throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
     }
     throw err;
@@ -110,13 +110,13 @@ export async function registerUser(input: RegisterInput): Promise<UserView> {
  */
 export async function authenticateUser(identifier: string, password: string): Promise<UserView | null> {
   const id = (identifier ?? "").trim().toLowerCase();
-  const row = id
-    ? getDb()
+  const [row] = id
+    ? await (await getDb())
         .select()
         .from(users)
         .where(id.includes("@") ? byEmail(id) : byUsername(id))
-        .get()
-    : undefined;
+        .limit(1)
+    : [];
   if (!row) {
     await verifyPassword(password ?? "", await getDummyPasswordHash());
     return null;

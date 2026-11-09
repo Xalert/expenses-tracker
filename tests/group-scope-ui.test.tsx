@@ -71,19 +71,19 @@ async function redirectOf(promise: Promise<unknown>): Promise<string> {
   throw new Error("expected a redirect");
 }
 
-let db: ReturnType<typeof useFreshDb>;
-let user: ReturnType<typeof makeUser>;
+let db: Awaited<ReturnType<typeof useFreshDb>>;
+let user: Awaited<ReturnType<typeof makeUser>>;
 let personal: number;
 
-beforeEach(() => {
-  db = useFreshDb();
-  user = makeUser(db, "alice@example.com");
+beforeEach(async () => {
+  db = await useFreshDb();
+  user = await makeUser(db, "alice@example.com");
   session.userId = user.id;
   jar.values.clear();
   jar.sets = [];
   jar.deleted = [];
   jar.revalidated = [];
-  personal = listWalletGroups(user.id)[0].id;
+  personal = (await listWalletGroups(user.id))[0].id;
 });
 
 describe("GroupSwitcher", () => {
@@ -113,7 +113,7 @@ describe("GroupSwitcher", () => {
 
 describe("selectGroupAction and getGroupScope", () => {
   it("sets the cookie for an own group, revalidates and returns to returnTo", async () => {
-    const business = createWalletGroup(user.id, { name: "Business" }).id;
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
     const url = await redirectOf(
       selectGroupAction(fd([["groupId", String(business)], ["returnTo", "/transactions?month=2026-10"]])),
     );
@@ -130,13 +130,13 @@ describe("selectGroupAction and getGroupScope", () => {
   });
 
   it("an empty, foreign or garbage id clears the cookie (All); an unsafe returnTo goes to /", async () => {
-    createWalletGroup(user.id, { name: "Business" });
+    await createWalletGroup(user.id, { name: "Business" });
     jar.values.set(GROUP_COOKIE, String(personal));
     expect(await redirectOf(selectGroupAction(fd([["groupId", ""], ["returnTo", "/wallets"]])))).toBe("/wallets");
     expect(jar.values.has(GROUP_COOKIE)).toBe(false);
 
-    const other = makeUser(db, "bob@example.com");
-    const foreign = createWalletGroup(other.id, { name: "Theirs" }).id;
+    const other = await makeUser(db, "bob@example.com");
+    const foreign = (await createWalletGroup(other.id, { name: "Theirs" })).id;
     for (const raw of [String(foreign), "abc", "-1", "999999"]) {
       jar.values.set(GROUP_COOKIE, String(personal));
       jar.sets = [];
@@ -147,7 +147,7 @@ describe("selectGroupAction and getGroupScope", () => {
   });
 
   it("getGroupScope: a stale or foreign cookie means All, no cookie means All", async () => {
-    createWalletGroup(user.id, { name: "Business" });
+    await createWalletGroup(user.id, { name: "Business" });
     expect((await getGroupScope()).selected).toBeNull();
     jar.values.set(GROUP_COOKIE, "4242");
     // React `cache` is per request; outside one it does not memoise, so this reads the cookie again.
@@ -160,13 +160,13 @@ describe("group actions", () => {
   it("create / rename / delete work and revalidate the layout", async () => {
     expect(await createGroupAction({}, fd([["name", "Business"]]))).toEqual({ ok: true, message: "Added the group “Business”." });
     expect(jar.revalidated).toEqual([["/", "layout"]]);
-    const business = listWalletGroups(user.id).find((g) => g.name === "Business")!;
+    const business = (await listWalletGroups(user.id)).find((g) => g.name === "Business")!;
 
     expect(await renameGroupAction(business.id, {}, fd([["name", "Work"]]))).toEqual({ ok: true, message: "Renamed to “Work”." });
-    expect(listWalletGroups(user.id).map((g) => g.name)).toEqual(["Personal", "Work"]);
+    expect((await listWalletGroups(user.id)).map((g) => g.name)).toEqual(["Personal", "Work"]);
 
     expect(await deleteGroupAction(business.id)).toEqual({ ok: true, message: "Deleted the group “Work”." });
-    expect(listWalletGroups(user.id).map((g) => g.name)).toEqual(["Personal"]);
+    expect((await listWalletGroups(user.id)).map((g) => g.name)).toEqual(["Personal"]);
   });
 
   it("maps service errors onto the form: duplicate name, non-empty group, last group", async () => {
@@ -175,8 +175,8 @@ describe("group actions", () => {
     expect(dup.fieldErrors?.name).toMatch(/already have a group/);
     expect(dup.values).toEqual({ name: "personal" });
 
-    const business = createWalletGroup(user.id, { name: "Business" }).id;
-    createWallet(user.id, { name: "Till", currency: "EUR", initialBalanceMinor: 0, groupId: business });
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
+    await createWallet(user.id, { name: "Till", currency: "EUR", initialBalanceMinor: 0, groupId: business });
     expect((await deleteGroupAction(business)).fieldErrors?.groupId).toMatch(/still has wallets/);
     expect((await deleteGroupAction(personal)).ok).toBe(true);
     expect((await deleteGroupAction(9999)).message).toMatch(/not found/i);
@@ -186,17 +186,17 @@ describe("group actions", () => {
 
 describe("wallet actions with a group", () => {
   it("createWalletAction and updateWalletAction take an optional groupId", async () => {
-    const business = createWalletGroup(user.id, { name: "Business" }).id;
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
     await createWalletAction({}, fd([["mode", "dialog"], ["name", "Till"], ["currency", "EUR"], ["groupId", String(business)]]));
     await createWalletAction({}, fd([["mode", "dialog"], ["name", "Cash"], ["currency", "EUR"]]));
-    const byName = Object.fromEntries(listWallets(user.id).map((w) => [w.name, w]));
+    const byName = Object.fromEntries((await listWallets(user.id)).map((w) => [w.name, w]));
     expect(byName.Till.groupId).toBe(business);
     expect(byName.Cash.groupId).toBe(personal);
 
     await updateWalletAction(byName.Cash.id, {}, fd([["mode", "dialog"], ["name", "Cash"], ["groupId", String(business)]]));
-    expect(listWallets(user.id).find((w) => w.name === "Cash")!.groupId).toBe(business);
+    expect((await listWallets(user.id)).find((w) => w.name === "Cash")!.groupId).toBe(business);
     await updateWalletAction(byName.Cash.id, {}, fd([["mode", "dialog"], ["name", "Cash"]]));
-    expect(listWallets(user.id).find((w) => w.name === "Cash")!.groupId).toBe(business);
+    expect((await listWallets(user.id)).find((w) => w.name === "Cash")!.groupId).toBe(business);
   });
 
   it("rejects a bad or foreign groupId on the groupId field", async () => {
@@ -204,7 +204,7 @@ describe("wallet actions with a group", () => {
     expect(bad.fieldErrors?.groupId).toBe("Choose a group.");
     const missing = await createWalletAction({}, fd([["mode", "dialog"], ["name", "A"], ["currency", "EUR"], ["groupId", "9999"]]));
     expect(missing.fieldErrors?.groupId).toMatch(/not found/i);
-    expect(listWallets(user.id)).toEqual([]);
+    expect(await listWallets(user.id)).toEqual([]);
   });
 });
 

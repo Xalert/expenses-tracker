@@ -4,30 +4,33 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:demo": "DATABASE_URL=data/demo.db npm run -s db:seed && DATABASE_URL=data/demo.db next dev",
+    "dev:demo": "DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo npm run -s db:seed && DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo next dev",
     "build": "NODE_ENV=production next build",
     "start": "NODE_ENV=production next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
+    "db:up": "docker compose -f compose.dev.yaml up -d --wait",
+    "db:down": "docker compose -f compose.dev.yaml down",
     "db:seed": "tsx --conditions=react-server scripts/seed.ts",
     "db:reset": "tsx --conditions=react-server scripts/reset.ts",
-    "demo:reset": "DATABASE_URL=data/demo.db tsx --conditions=react-server scripts/reset.ts --demo --yes --no-backup"
+    "demo:reset": "DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo tsx --conditions=react-server scripts/reset.ts --demo --yes"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.4",
     "next": "16.4.5",
+    "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "^0.0.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
     "@tailwindcss/turbopack": "^4",
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.11",

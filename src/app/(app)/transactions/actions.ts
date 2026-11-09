@@ -109,12 +109,16 @@ function revalidateAll(walletIds: Iterable<number>) {
 
 type Parsed<T> = { ok: true; input: T } | { ok: false; state: FormState };
 
-function parseTransaction(userId: number, formData: FormData, values: Record<string, string>): Parsed<TransactionInput> {
+async function parseTransaction(
+  userId: number,
+  formData: FormData,
+  values: Record<string, string>,
+): Promise<Parsed<TransactionInput>> {
   const parsed = transactionSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { ok: false, state: zodErrorState(parsed.error, values) };
   const d = parsed.data;
   // The currency comes from the wallet looked up server-side, never from the client.
-  const wallet = getWallet(userId, d.walletId);
+  const wallet = await getWallet(userId, d.walletId);
   if (!wallet) return { ok: false, state: { fieldErrors: { walletId: "Wallet not found." }, values } };
   const amount = amountFor(d.amount, wallet.currency);
   if ("error" in amount) return { ok: false, state: { fieldErrors: { amount: amount.error }, values } };
@@ -131,15 +135,19 @@ function parseTransaction(userId: number, formData: FormData, values: Record<str
   };
 }
 
-function parseTransfer(userId: number, formData: FormData, values: Record<string, string>): Parsed<TransferInput> {
+async function parseTransfer(
+  userId: number,
+  formData: FormData,
+  values: Record<string, string>,
+): Promise<Parsed<TransferInput>> {
   const parsed = transferSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { ok: false, state: zodErrorState(parsed.error, values) };
   const d = parsed.data;
   if (d.fromWalletId === d.toWalletId) {
     return { ok: false, state: { fieldErrors: { toWalletId: "Choose two different wallets." }, values } };
   }
-  const from = getWallet(userId, d.fromWalletId);
-  const to = getWallet(userId, d.toWalletId);
+  const from = await getWallet(userId, d.fromWalletId);
+  const to = await getWallet(userId, d.toWalletId);
   const fieldErrors: Record<string, string> = {};
   if (!from) fieldErrors.fromWalletId = "Wallet not found.";
   if (!to) fieldErrors.toWalletId = "Wallet not found.";
@@ -177,11 +185,11 @@ function parseTransfer(userId: number, formData: FormData, values: Record<string
 export async function createTransactionAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const values = formValues(formData);
-  const parsed = parseTransaction(user.id, formData, values);
+  const parsed = await parseTransaction(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
   let created: TransactionView;
   try {
-    created = createTransaction(user.id, parsed.input);
+    created = await createTransaction(user.id, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -201,11 +209,11 @@ export async function updateTransactionAction(
   const user = await requireUser();
   transactionId = assertBoundId(transactionId);
   const values = formValues(formData);
-  const parsed = parseTransaction(user.id, formData, values);
+  const parsed = await parseTransaction(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
-  const previous = getTransaction(user.id, transactionId);
+  const previous = await getTransaction(user.id, transactionId);
   try {
-    updateTransaction(user.id, transactionId, parsed.input);
+    await updateTransaction(user.id, transactionId, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -225,11 +233,11 @@ export async function updateTransactionInlineAction(
   const user = await requireUser();
   transactionId = assertBoundId(transactionId);
   const values = formValues(formData);
-  const parsed = parseTransaction(user.id, formData, values);
+  const parsed = await parseTransaction(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
   let updated: TransactionView;
   try {
-    updated = updateTransaction(user.id, transactionId, parsed.input);
+    updated = await updateTransaction(user.id, transactionId, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -241,10 +249,10 @@ export async function updateTransactionInlineAction(
 export async function deleteTransactionAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const transactionId = Number(formData.get("id"));
-  const existing = Number.isSafeInteger(transactionId) && transactionId > 0 ? getTransaction(user.id, transactionId) : null;
+  const existing = Number.isSafeInteger(transactionId) && transactionId > 0 ? await getTransaction(user.id, transactionId) : null;
   if (existing) {
     try {
-      deleteTransaction(user.id, transactionId);
+      await deleteTransaction(user.id, transactionId);
     } catch (err) {
       if (!isServiceError(err) || err.code !== "NOT_FOUND") throw err;
     }
@@ -259,11 +267,11 @@ export async function deleteTransactionAction(formData: FormData): Promise<void>
 export async function createTransferAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const values = formValues(formData);
-  const parsed = parseTransfer(user.id, formData, values);
+  const parsed = await parseTransfer(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
   let created: TransferView;
   try {
-    created = createTransfer(user.id, parsed.input);
+    created = await createTransfer(user.id, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -283,11 +291,11 @@ export async function updateTransferAction(
   const user = await requireUser();
   transferId = assertBoundId(transferId);
   const values = formValues(formData);
-  const parsed = parseTransfer(user.id, formData, values);
+  const parsed = await parseTransfer(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
-  const previous = getTransfer(user.id, transferId);
+  const previous = await getTransfer(user.id, transferId);
   try {
-    updateTransfer(user.id, transferId, parsed.input);
+    await updateTransfer(user.id, transferId, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -308,11 +316,11 @@ export async function updateTransferInlineAction(
   const user = await requireUser();
   transferId = assertBoundId(transferId);
   const values = formValues(formData);
-  const parsed = parseTransfer(user.id, formData, values);
+  const parsed = await parseTransfer(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
   let updated: TransferView;
   try {
-    updated = updateTransfer(user.id, transferId, parsed.input);
+    updated = await updateTransfer(user.id, transferId, parsed.input);
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -324,10 +332,10 @@ export async function updateTransferInlineAction(
 export async function deleteTransferAction(formData: FormData): Promise<void> {
   const user = await requireUser();
   const transferId = Number(formData.get("id"));
-  const existing = Number.isSafeInteger(transferId) && transferId > 0 ? getTransfer(user.id, transferId) : null;
+  const existing = Number.isSafeInteger(transferId) && transferId > 0 ? await getTransfer(user.id, transferId) : null;
   if (existing) {
     try {
-      deleteTransfer(user.id, transferId);
+      await deleteTransfer(user.id, transferId);
     } catch (err) {
       if (!isServiceError(err) || err.code !== "NOT_FOUND") throw err;
     }
