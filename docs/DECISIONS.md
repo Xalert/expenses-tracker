@@ -187,6 +187,7 @@ Added 2026-11-08.
 | ~~The mobile bottom bar stops at five entries; "Import & export" lives in the top bar~~ (superseded, as above) | Five entries are already tight at 375px | built |
 | Archive and delete are on each wallet's own page, not in the wallet list | Keeps destructive actions one step away from a casual tap | built |
 | The currency picker is a native `<select>` with common currencies first | Works everywhere with no dependency; typing a code jumps to it | built |
+| Transactions: ‹ › beside the Month chip, month links under the list, `[` / `]` keys; next is not capped; "This month" link + `T` key back to the present | The popover hid the stepper. `T` as in calendar apps ("today"); the link shows only away from the current month, as on the Overview. Keys `[` / `]` rather than arrows: arrow keys move focus in listboxes and grids and scroll the page. Next is not capped because future-dated entries exist | owner |
 | Deleting uses the browser's native confirmation dialog | No modal library | built |
 | Date and month pickers are hand-built (`DatePicker`, `MonthGrid`, `Popover` in `components/ui`, pure helpers in `lib/calendar.ts`) instead of a picker library | The native `<input type="date">` looks different in every browser and clashes with the theme; the project has no UI dependencies, and the pickers need little: one popover, two grids, the theme tokens | planner |
 | `DatePicker` is a button plus a hidden `YYYY-MM-DD` input, not a typed text field | Forms post exactly what the native input posted, so no action, schema or service changed, and there is no date-parsing of typed text. The cost is that a date cannot be typed, so the grid is fully keyboard-operable instead (arrows, Home/End, PageUp/PageDown, Shift+PageUp/PageDown, Enter/Space, Escape) | planner |
@@ -436,6 +437,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   when it does).
 
 ### Not verified
+
+- **Month stepper on /transactions** (arrows joined to the Month chip, the end-of-list month row, "This month", `[` / `]` / `T`) was
+  covered by tests (static markup, the key predicate) and typecheck / lint only; not checked in a browser: the look
+  at 375px (chip wrapping, the 44px arrows), the hover tint in dark mode, and the keys against a real open dialog
+  or edit row.
 
 - **Wallet groups interface (step 2)** was covered by tests (render to static markup, actions with mocked Next APIs)
   and typecheck / lint only; it was not exercised in a browser. Unchecked there: the switcher's submit on change and

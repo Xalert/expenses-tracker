@@ -27,7 +27,20 @@ const BLOCKING_ANCESTOR = 'input, textarea, select, [contenteditable]:not([conte
  * not typed into an input, textarea, select or contenteditable, nor inside an open modal dialog.
  */
 export function isNewEntryShortcut(e: ShortcutEvent): boolean {
-  if (e.key !== "n" && e.key !== "N") return false;
+  return plainKey(e, (k) => k === "n" || k === "N");
+}
+
+/**
+ * "[" = the previous month, "]" = the next one, "t" / "T" = back to this month (Shift is not a modifier here: some
+ * layouts need it for the brackets, and Caps Lock gives "T"). Same guards as N.
+ */
+export function monthStepShortcut(e: ShortcutEvent): "prev" | "next" | "current" | null {
+  if (!plainKey(e, (k) => k === "[" || k === "]" || k === "t" || k === "T")) return null;
+  return e.key === "[" ? "prev" : e.key === "]" ? "next" : "current";
+}
+
+function plainKey(e: ShortcutEvent, matches: (key: string) => boolean): boolean {
+  if (!matches(e.key)) return false;
   if (e.altKey || e.ctrlKey || e.metaKey || e.repeat || e.isComposing || e.defaultPrevented) return false;
   const target = e.target as ElementLike | null;
   if (!target) return true;

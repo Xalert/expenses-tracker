@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { DayList } from "@/components/transactions/day-list";
 import { DayStrip } from "@/components/transactions/day-strip";
 import { FilterChips } from "@/components/transactions/filter-chips";
+import { MonthLinks } from "@/components/transactions/month-links";
+import { MonthStepShortcut } from "@/components/transactions/month-step-shortcut";
 import { InlineEditProvider } from "@/components/transactions/inline-edit";
 import {
   dayHref,
@@ -131,6 +133,18 @@ export default async function TransactionsPage({
   );
   const categoryOptions = categories.map(({ id, name, kind }) => ({ id, name, kind }));
 
+  // Single-month view: the neighbouring months, for the end-of-list row and the [ / ] keys (not for a day or range).
+  const months =
+    view.type === "month"
+      ? {
+          prev: { label: formatMonth(shiftMonth(view.month, -1)), href: monthHref(params, shiftMonth(view.month, -1), thisMonth) },
+          next: { label: formatMonth(shiftMonth(view.month, 1)), href: monthHref(params, shiftMonth(view.month, 1), thisMonth) },
+        }
+      : null;
+  // Back to this month (the chip row's link, the end-of-list row and the T key); null when it is already shown.
+  const currentMonthHref =
+    view.type === "month" && view.month === thisMonth ? null : monthHref(params, thisMonth, thisMonth);
+
   let empty: React.ReactNode = null;
   if (total === 0) {
     if (!anyAtAll) {
@@ -150,6 +164,7 @@ export default async function TransactionsPage({
         );
     } else if (view.type === "month" && !hasNonDateFilters(params)) {
       const previous = shiftMonth(view.month, -1);
+      const following = shiftMonth(view.month, 1);
       empty = (
         <EmptyState
           title={`Nothing in ${formatMonth(view.month)}.`}
@@ -161,6 +176,9 @@ export default async function TransactionsPage({
               </LinkButton>
               <LinkButton href={monthHref(params, "all", thisMonth)} variant="secondary">
                 All time
+              </LinkButton>
+              <LinkButton href={monthHref(params, following, thisMonth)} variant="secondary">
+                {formatMonth(following)} ›
               </LinkButton>
             </div>
           }
@@ -196,6 +214,12 @@ export default async function TransactionsPage({
         />
       )}
 
+      <MonthStepShortcut
+        prevHref={months?.prev.href ?? null}
+        nextHref={months?.next.href ?? null}
+        currentHref={currentMonthHref}
+      />
+
       {stripNode}
 
       {empty ? (
@@ -229,6 +253,8 @@ export default async function TransactionsPage({
           )}
         </nav>
       )}
+
+      <MonthLinks months={months} page={params.page} lastPage={lastPage} total={total} currentHref={currentMonthHref} />
     </>
   );
 }

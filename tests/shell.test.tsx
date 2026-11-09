@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AddButton } from "@/components/shell/add-button";
 import { activeNavHref, NAV_ITEMS } from "@/components/shell/nav";
 import { PillPicker, Segmented } from "@/components/ui";
-import { isNewEntryShortcut, type ShortcutEvent } from "@/lib/shortcuts";
+import { isNewEntryShortcut, monthStepShortcut, type ShortcutEvent } from "@/lib/shortcuts";
 import { initials } from "@/lib/user-id";
 
 /** A stand-in for a DOM element: `closest` matches when the element sits inside one of `ancestors`. */
@@ -165,5 +165,33 @@ describe("@modal slot", () => {
       (r) => !existsSync(path.join(modalDir, r, "page.tsx")) && !existsSync(path.join(modalDir, `(.)${r}`, "page.tsx")),
     );
     expect(missing).toEqual([]);
+  });
+});
+
+describe("monthStepShortcut", () => {
+  it("maps [ and ] to prev and next", () => {
+    expect(monthStepShortcut(key("["))).toBe("prev");
+    expect(monthStepShortcut(key("]"))).toBe("next");
+    expect(monthStepShortcut(key("]", { target: el("A") }))).toBe("next");
+  });
+
+  it("maps t and T to this month, with the same guards", () => {
+    expect(monthStepShortcut(key("t"))).toBe("current");
+    expect(monthStepShortcut(key("T"))).toBe("current");
+    expect(monthStepShortcut(key("t", { metaKey: true }))).toBeNull();
+    expect(monthStepShortcut(key("t", { target: el("INPUT") }))).toBeNull();
+  });
+
+  it("ignores other keys, modified presses, fields and modal dialogs", () => {
+    expect(monthStepShortcut(key("n"))).toBeNull();
+    expect(monthStepShortcut(key("ArrowLeft"))).toBeNull();
+    expect(monthStepShortcut(key("[", { metaKey: true }))).toBeNull();
+    expect(monthStepShortcut(key("[", { ctrlKey: true }))).toBeNull();
+    expect(monthStepShortcut(key("]", { altKey: true }))).toBeNull();
+    expect(monthStepShortcut(key("]", { repeat: true }))).toBeNull();
+    expect(monthStepShortcut(key("[", { target: el("INPUT") }))).toBeNull();
+    expect(monthStepShortcut(key("[", { target: el("DIV", { isContentEditable: true }) }))).toBeNull();
+    const inDialog = el("BUTTON", { ancestors: ['[role="dialog"][aria-modal="true"]'] });
+    expect(monthStepShortcut(key("[", { target: inDialog }))).toBeNull();
   });
 });

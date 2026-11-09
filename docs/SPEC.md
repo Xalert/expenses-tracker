@@ -778,6 +778,21 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       search is a GET `<form role="search" action="/transactions">` with hidden inputs for the other params (no-JS)
       and `onSubmit` pushing a clean URL (an empty search drops `q`); then the Export CSV pill (hidden when the list
       is empty). At 375px the chips wrap and the search + export share a full-width line.
+      **Month stepper**: when the view is a single month (not all time, a range or a single day), the Month chip is
+      one bordered control with a ‹ link before and a › link after it (plain `next/link`s, `scroll={false}`,
+      `aria-label` "Previous month, October 2026 ([)" / "Next month, December 2026 (])", also the `title`), all
+      through `monthHref` (other filters and currency kept, page dropped). Next is not capped at the current month.
+      The label still opens the popover.
+      **This month**: whenever the view is not the current month (another month, all time, a range or a day), an
+      accent text link "This month" (`title` "This month (T)") follows the Month chip: `monthHref(params, thisMonth)`,
+      so the other filters stay and the date range, day and page go.
+    - **Month links at the end of the list** (`MonthLinks`): in a single-month view, on the last page (or the only
+      page) of a non-empty list, `<nav aria-label="Months">` with secondary buttons "‹ October 2026" and "December
+      2026 ›", and between them a ghost "This month" when the month shown is not the current one. An empty month's empty state offers "‹ previous", "All time" and "next ›".
+    - **Keyboard** (`MonthStepShortcut`, client, renders nothing): `[` = previous, `]` = next month, `T` = back to
+      this month, through `monthStepShortcut(event)` (`lib/shortcuts.ts`; same guards as `isNewEntryShortcut`) and
+      `router.push(href, { scroll: false })`. `[` / `]` are off when the view is not a single month, `T` when it is
+      already the current month; all are off while a modal dialog is open or a row is open for editing.
     - **Day strip** (`DayStrip`, server): shown when `stripMonth(view)` is a month — the month in view, or the month
       of a single selected day (`from = to`) — and the list is not empty or a day is selected (no strip for all
       time, other ranges or a month with no entries). Currency: the filtered wallet's (no switch then), else

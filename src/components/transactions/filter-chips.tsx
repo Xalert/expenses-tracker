@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { DownloadIcon } from "@/components/shell/icons";
 import { buttonClasses, pillClasses } from "@/components/ui";
 import { MonthGrid } from "@/components/ui/month-grid";
+import { ChevronIcon } from "@/components/ui/picker-icons";
 import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
 import { formatMonth, shiftMonth } from "@/lib/dates";
@@ -38,6 +39,8 @@ function Chip({
   active,
   popup,
   panelClassName,
+  before,
+  after,
   children,
 }: {
   name: string;
@@ -46,6 +49,9 @@ function Chip({
   active: boolean;
   popup: "listbox" | "dialog";
   panelClassName?: string;
+  /** Links joined to the chip's left / right edge as one bordered control (the month stepper). */
+  before?: ReactNode;
+  after?: ReactNode;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -53,7 +59,8 @@ function Chip({
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const close = () => setOpen(false);
-  return (
+  const grouped = Boolean(before || after);
+  const chip = (
     <div ref={anchor} className="relative">
       <button
         ref={trigger}
@@ -62,7 +69,13 @@ function Chip({
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((o) => !o)}
-        className={cn(pillClasses({ selected: active }), "max-w-[16rem] gap-1 pr-3", focusRing)}
+        className={cn(
+          grouped
+            ? "inline-flex min-h-11 cursor-pointer items-center gap-1 px-2 text-sm font-semibold transition-colors hover:bg-surface-muted sm:min-h-10"
+            : cn(pillClasses({ selected: active }), "gap-1 pr-3"),
+          "max-w-[16rem]",
+          focusRing,
+        )}
       >
         {value ? (
           <>
@@ -87,6 +100,32 @@ function Chip({
         {children(close)}
       </Popover>
     </div>
+  );
+  if (!grouped) return chip;
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center rounded-full border",
+        active ? "border-accent bg-accent-soft text-accent-soft-foreground" : "border-border bg-field text-foreground",
+      )}
+    >
+      {before}
+      {chip}
+      {after}
+    </div>
+  );
+}
+
+const stepLink =
+  "inline-flex size-11 items-center justify-center rounded-full text-current opacity-70 transition-opacity hover:opacity-100 sm:size-10 " +
+  focusRing;
+
+/** The month stepper's arrow: a plain link, so it works without JS. */
+function StepLink({ href, dir, label }: { href: string; dir: "left" | "right"; label: string }) {
+  return (
+    <Link href={href} scroll={false} className={stepLink} aria-label={label} title={label}>
+      <ChevronIcon dir={dir} />
+    </Link>
   );
 }
 
@@ -286,6 +325,9 @@ export function FilterChips({
       .filter((g) => g.options.length > 0),
   ];
 
+  // A single month: ‹ › step through the months (the key hints match MonthStepShortcut). Not capped at this month.
+  const prevMonth = view.type === "month" ? shiftMonth(view.month, -1) : null;
+  const nextMonth = view.type === "month" ? shiftMonth(view.month, 1) : null;
   const listPanel = "w-64 max-w-[calc(100vw-16px)] max-h-80 overflow-y-auto p-1.5";
 
   return (
@@ -296,9 +338,40 @@ export function FilterChips({
         active={view.type !== "month" || view.month !== thisMonth}
         popup="dialog"
         panelClassName="w-72 max-w-[calc(100vw-16px)]"
+        before={
+          prevMonth && (
+            <StepLink
+              href={monthHref(params, prevMonth, thisMonth)}
+              dir="left"
+              label={`Previous month, ${formatMonth(prevMonth)} ([)`}
+            />
+          )
+        }
+        after={
+          nextMonth && (
+            <StepLink
+              href={monthHref(params, nextMonth, thisMonth)}
+              dir="right"
+              label={`Next month, ${formatMonth(nextMonth)} (])`}
+            />
+          )
+        }
       >
         {(close) => <MonthPanel params={params} thisMonth={thisMonth} onDone={close} />}
       </Chip>
+      {!(view.type === "month" && view.month === thisMonth) && (
+        <Link
+          href={monthHref(params, thisMonth, thisMonth)}
+          scroll={false}
+          title="This month (T)"
+          className={cn(
+            "inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-accent hover:underline sm:min-h-10",
+            focusRing,
+          )}
+        >
+          This month
+        </Link>
+      )}
       {wallets.length > 0 && (
         <Chip name="Wallet" value={wallet?.name} active={Boolean(wallet)} popup="listbox" panelClassName={listPanel}>
           {(close) => <OptionList groups={walletGroups} onPick={close} />}
