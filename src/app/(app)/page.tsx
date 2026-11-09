@@ -6,7 +6,7 @@ import { TransactionList } from "@/components/transaction-list";
 import { Card, CardHeader, CurrencySwitch, EmptyState, InsightCard, LinkButton, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
-import { currentMonth, formatMonth, isValidMonth, shiftMonth, todayISO } from "@/lib/dates";
+import { currentMonth, formatMonth, isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { convertedTotal } from "@/lib/fx";
 import { formatMoney } from "@/lib/money";
 import {
@@ -19,7 +19,7 @@ import {
   walletsTotalNotes,
 } from "@/lib/overview";
 import { getDashboard } from "@/server/dashboard";
-import { getExchangeRates, RATES_SOURCE } from "@/server/exchange-rates";
+import { getDailyRates, getExchangeRates, RATES_SOURCE } from "@/server/exchange-rates";
 import {
   getMonthInsights,
   getMonthTimeline,
@@ -82,34 +82,52 @@ export default async function OverviewPage({ searchParams }: Props) {
   const isCurrentMonth = month === maxMonth;
   const previousMonth = shiftMonth(month, -1);
   const dayN = monthDayN(month);
-  const timeline = getMonthTimeline(user.id, { month, currency });
-  const insights = getMonthInsights(user.id, { month, currency });
-  const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
-
-  // The Wallets card: every active wallet with the total converted into `currency` (view "all"), or only the
-  // wallets in `currency` ("only"). With wallets in one currency there is nothing to choose and nothing to convert.
-  const walletCurrencies = [...new Set(data.wallets.map((w) => w.currency))];
-  const canSwitchView = walletCurrencies.length > 1 || !walletCurrencies.includes(currency);
+  // One view for the whole page. "all" (default): the month figures cover every wallet, converted into `currency`
+  // at each day's rate, and the Wallets card shows every active wallet with a converted total. "only": just
+  // `currency`, nothing converted. When every wallet (archived included) is in `currency` there is nothing to choose.
+  const canSwitchView = held.some((c) => c !== currency);
   const view = canSwitchView ? resolveOverviewView(params.view) : "all";
+  const ratesOn = exchangeRatesEnabled();
+  const ratesState = (loaded: boolean, quotesTarget: boolean) =>
+    !ratesOn ? "off" : !loaded ? "unavailable" : quotesTarget ? "loaded" : "no-target";
+
+  const convertMonth = view === "all" && canSwitchView;
+  const dailyRates = convertMonth ? await getDailyRates(monthRange(previousMonth).from, monthRange(month).to) : null;
+  const convert = convertMonth ? { rates: dailyRates } : undefined;
+  const timeline = getMonthTimeline(user.id, { month, currency, convert });
+  const insights = getMonthInsights(user.id, { month, currency, convert });
+  const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
+  const monthMissing = [
+    ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
+  ].sort();
+  const lastDay = dailyRates?.days.at(-1);
+  const monthNotes = convertMonth
+    ? [
+        ...(dailyRates ? [`All wallets, converted at each day's rate · ${RATES_SOURCE}`] : []),
+        ...walletsTotalNotes({
+          currency,
+          missing: monthMissing,
+          ratesDate: null,
+          source: RATES_SOURCE,
+          ratesState: ratesState(
+            dailyRates !== null,
+            currency === dailyRates?.base || lastDay?.rates[currency] !== undefined,
+          ),
+        }),
+      ]
+    : [];
+
+  // The Wallets card follows the same view.
   const shownWallets = view === "all" ? data.wallets : data.wallets.filter((w) => w.currency === currency);
   const needsRates = shownWallets.some((w) => w.currency !== currency);
   const rates = needsRates ? await getExchangeRates() : null;
   const total = convertedTotal(shownWallets, currency, rates);
-  const ratesState = !needsRates
-    ? "loaded"
-    : !exchangeRatesEnabled()
-      ? "off"
-      : !rates
-        ? "unavailable"
-        : currency !== rates.base && rates.rates[currency] === undefined
-          ? "no-target"
-          : "loaded";
   const totalNotes = walletsTotalNotes({
     currency,
     missing: total.missing,
     ratesDate: total.usedRates && rates ? rates.date : null,
     source: RATES_SOURCE,
-    ratesState,
+    ratesState: ratesState(rates !== null, currency === rates?.base || rates?.rates[currency] !== undefined),
   });
   const viewParam: Record<string, string> = view === "only" ? { view } : {};
   const href = (code: string) => overviewHref(month, code, maxMonth, "/", view);
@@ -156,8 +174,27 @@ export default async function OverviewPage({ searchParams }: Props) {
                 hrefFor={href}
               />
             )}
+            {canSwitchView && (
+              <WalletsViewSwitch
+                options={[
+                  { label: `All in ${currency}`, href: overviewHref(month, currency, maxMonth), current: view === "all" },
+                  {
+                    label: `${currency} only`,
+                    href: overviewHref(month, currency, maxMonth, "/", "only"),
+                    current: view === "only",
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
+        {monthNotes.length > 0 && (
+          <div className="-mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">
+            {monthNotes.map((n) => (
+              <p key={n}>{n}</p>
+            ))}
+          </div>
+        )}
 
         <MonthChart
           month={month}
@@ -209,20 +246,6 @@ export default async function OverviewPage({ searchParams }: Props) {
             approximate: total.usedRates,
           }}
           converted={total.converted}
-          viewSwitch={
-            canSwitchView && (
-              <WalletsViewSwitch
-                options={[
-                  { label: `All in ${currency}`, href: overviewHref(month, currency, maxMonth), current: view === "all" },
-                  {
-                    label: `${currency} only`,
-                    href: overviewHref(month, currency, maxMonth, "/", "only"),
-                    current: view === "only",
-                  },
-                ]}
-              />
-            )
-          }
           changeLabel={isCurrentMonth ? "this month" : `in ${monthName(month)}`}
           hrefFor={(id) => (isCurrentMonth ? `/wallets/${id}` : `/wallets/${id}?month=${month}`)}
         />

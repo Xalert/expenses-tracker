@@ -60,3 +60,26 @@ export function convertedTotal(
   }
   return { currency, totalMinor, converted, missing: [...missing].sort(), usedRates: converted.size > 0 };
 }
+
+/** One rate table per business day, sorted by date (the provider publishes none on weekends and holidays). */
+export type DailyRates = { base: string; days: { date: string; rates: Record<string, number> }[] };
+
+/**
+ * The rate table that applies on `date`: the latest day on or before it (a Saturday uses Friday's rates); a date
+ * before the first day uses the first day. Null when there are no days.
+ */
+export function tableOn(daily: DailyRates | null, date: string): RateTable | null {
+  if (!daily || daily.days.length === 0) return null;
+  let lo = 0;
+  let hi = daily.days.length - 1;
+  let found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (daily.days[mid].date <= date) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  const day = daily.days[found];
+  return { base: daily.base, date: day.date, rates: day.rates };
+}

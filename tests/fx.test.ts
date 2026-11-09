@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exchangeRatesEnabled } from "@/lib/config";
-import { convertMinor, convertedTotal, type RateTable } from "@/lib/fx";
+import { convertMinor, convertedTotal, tableOn, type DailyRates, type RateTable } from "@/lib/fx";
 import { overviewHref, resolveOverviewView, walletsTotalNotes } from "@/lib/overview";
 import {
   RATES_URL,
+  getDailyRates,
   getExchangeRates,
   parseRatesResponse,
   resetExchangeRatesCache,
@@ -154,5 +155,88 @@ describe("Overview view and total notes", () => {
     expect(walletsTotalNotes({ ...base, missing: ["RON"], ratesState: "off" })).toEqual([
       "Exchange rates are switched off. Not included: wallets in RON.",
     ]);
+  });
+});
+
+describe("tableOn", () => {
+  const daily: DailyRates = {
+    base: "EUR",
+    days: [
+      { date: "2026-11-05", rates: { USD: 1 } },
+      { date: "2026-11-06", rates: { USD: 2 } },
+      { date: "2026-11-09", rates: { USD: 3 } },
+    ],
+  };
+  it("uses the latest day on or before the date, else the first day", () => {
+    expect(tableOn(daily, "2026-11-06")?.rates.USD).toBe(2);
+    expect(tableOn(daily, "2026-11-08")).toEqual({ base: "EUR", date: "2026-11-06", rates: { USD: 2 } });
+    expect(tableOn(daily, "2026-12-01")?.rates.USD).toBe(3);
+    expect(tableOn(daily, "2026-01-01")?.rates.USD).toBe(1);
+    expect(tableOn(null, "2026-11-06")).toBeNull();
+    expect(tableOn({ base: "EUR", days: [] }, "2026-11-06")).toBeNull();
+  });
+});
+
+describe("getDailyRates", () => {
+  const series = () =>
+    new Response(
+      JSON.stringify({
+        amount: 1,
+        base: "EUR",
+        start_date: "2026-09-24",
+        end_date: "2026-10-30",
+        rates: { "2026-10-02": { USD: 1.2 }, "2026-09-25": { USD: 1.1, bad: 1 } },
+      }),
+      { status: 200 },
+    );
+  beforeEach(() => {
+    resetExchangeRatesCache();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("asks for the range plus a week before, sorts the days, and keeps a past range", async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => series());
+    vi.stubGlobal("fetch", fetchMock);
+    const now = new Date(2026, 10, 9, 12).getTime();
+    const d = await getDailyRates("2026-10-01", "2026-10-31", now);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.frankfurter.dev/v1/2026-09-24..2026-10-31?base=EUR");
+    expect(d?.days.map((x) => x.date)).toEqual(["2026-09-25", "2026-10-02"]);
+    expect(d?.days[0].rates).toEqual({ USD: 1.1 });
+    await getDailyRates("2026-10-01", "2026-10-31", now + 30 * 24 * 60 * 60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps the end at today and refreshes a range that includes today", async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => series());
+    vi.stubGlobal("fetch", fetchMock);
+    const now = new Date(2026, 10, 9, 12).getTime();
+    await getDailyRates("2026-10-01", "2026-11-30", now);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.frankfurter.dev/v1/2026-09-24..2026-11-09?base=EUR");
+    await getDailyRates("2026-10-01", "2026-11-30", now + 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await getDailyRates("2026-10-01", "2026-11-30", now + 7 * 60 * 60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null when the provider fails and nothing is cached, then waits before trying again", async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => new Response("x", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const now = new Date(2026, 10, 9, 12).getTime();
+    expect(await getDailyRates("2026-10-01", "2026-10-31", now)).toBeNull();
+    expect(await getDailyRates("2026-10-01", "2026-10-31", now + 1000)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call out when EXCHANGE_RATES=false", async () => {
+    vi.stubEnv("EXCHANGE_RATES", "false");
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => series());
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getDailyRates("2026-10-01", "2026-10-31")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

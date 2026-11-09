@@ -119,7 +119,7 @@ Open `http://<your-server>:3000`, create your account(s), then consider closing 
 | `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
-| `EXCHANGE_RATES` | `true` | `true` | `false` stops the daily request to `api.frankfurter.dev` for the Overview's converted wallet total |
+| `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
 | `PORT` | `3000` | `3000` | listen port inside the container |
 | `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |

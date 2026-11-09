@@ -36,9 +36,11 @@ All entries below date from the initial build, 2026-11-05.
 |---|---|---|
 | Amounts are integer minor units; decimals come from the currency (JPY 0, EUR 2, KWD 3) | No floating-point drift; correct for every ISO currency | planner |
 | Stored amounts are always positive; the kind gives the sign | One representation, no sign bugs | planner |
-| No currency conversion, except the Overview Wallets total; other totals are grouped per currency | Converting only a current balance needs one daily rate table; converting history (charts, months) would need a rate per day and would invent numbers | owner |
+| No currency conversion, except the Overview "All in <currency>" view; other pages group totals per currency | The owner asked for one figure over all wallets, on the Overview; the other pages stay exact | owner |
+| The Overview month figures convert each day at that day's ECB rate; the Wallets total converts today's balances at the latest rate | A past expense is worth what it was worth that day; a balance is worth what it is worth now | planner |
+| One `?view=` for the whole Overview, its switch next to the currency switch | The chart, the cards and the Wallets total then always agree on what they include | planner |
 | The converted total uses ECB reference rates from Frankfurter (`api.frankfurter.dev`), cached in memory, with `EXCHANGE_RATES=false` to turn it off | Free, no API key, no account for self-hosters; one request per 6 h for the whole instance; a self-hoster can keep the server offline | planner |
-| "All in EUR" (converted, default) and "EUR only" are a `?view=` link switch on the Wallets card | The owner asked for both; links keep it working without JavaScript and in the URL like `?currency=` | planner |
+| "All in EUR" (converted, default) and "EUR only" are a `?view=` link switch | The owner asked for both; links keep it working without JavaScript and in the URL like `?currency=` | planner |
 | A transfer is one `transfers` row plus two transaction legs, written atomically | Each wallet's history shows its own side; legs can never drift apart | planner |
 | Cross-currency transfers ask for both the amount sent and the amount received | Records what actually happened without needing a rate | planner |
 | A wallet's currency cannot change after creation | Its existing amounts would silently change meaning | planner |
@@ -324,10 +326,12 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 
 ### Features not built
 
-- **Converted totals are only on the Overview Wallets card.** No converted chart, month figures or wallet pages;
-  past months use today's balances and the latest rates.
+- **Conversion is only on Overview.** The Transactions strip, Categories and wallet pages stay per currency. The
+  Overview Wallets card uses today's balances and the latest rates also for a past month.
+- **"Top category" in the converted view breaks ties by lower-cased name in JavaScript**, not SQLite's `nocase`;
+  the two can differ for non-ASCII names.
 - **Frankfurter quotes about 30 currencies (the ECB list).** Wallets in other currencies (e.g. KWD) are left out of
-  the converted total with a note. There is no second provider and no way to enter a rate by hand.
+  the converted figures with a note. There is no second provider and no way to enter a rate by hand.
 - **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
   provider is down then, the total leaves the foreign wallets out until it is back.
 - **No bank-statement import or column-mapping screen in the app.** Only the app's own formats and Spendee are

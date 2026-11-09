@@ -81,9 +81,10 @@ this file in the same change and call the deviation out in your final report.
   DB transaction. Same currency → both legs carry the same amount. Different currencies → the user enters both
   the amount sent and the amount received (no exchange-rate service). Legs are only ever edited/deleted through
   the transfer, never individually.
-- **No currency conversion, with one exception.** Totals are grouped per currency everywhere except the Overview
-  Wallets card, which can show the total of all active wallets converted into the selected currency at the day's
-  reference rates (see Overview → "Converted total"). Nothing converted is ever stored.
+- **No currency conversion, with one exception: Overview.** Totals are grouped per currency everywhere except the
+  Overview in its default "All in <currency>" view, which converts every wallet into the selected currency (the
+  month figures at each day's rate, the Wallets total at today's; see Overview → "Converted view"). Nothing
+  converted is ever stored.
 - Every query and mutation is scoped by `userId`; a user can never read or touch another user's rows.
 
 ## Data model (Drizzle, `src/db/schema.ts`)
@@ -352,7 +353,9 @@ getDashboard(userId, opts?: { month?: string /* YYYY-MM, default current; invali
   recent: TransactionView[];                                                 // latest 8, all wallets (archived included)
 }
 
-// insights.ts (redesign) — every figure is for ONE currency; nothing is converted. "Expense" / "income" mean
+// insights.ts (redesign) — every figure is for ONE currency; nothing is converted, except with the optional
+// `convert: { rates: DailyRates | null }` of getMonthTimeline / getMonthInsights (Overview "All in"; see Overview).
+// "Expense" / "income" mean
 // transactions of those kinds (transfers excluded) on all wallets of that currency, archived included, unless a
 // walletId narrows it. Day N = today's day for the current month (server local time), the month's last day for a
 // past month, 0 for a future month (empty arrays / zeros, no error). An invalid `month` → VALIDATION (field `month`);
@@ -592,8 +595,8 @@ values (Sand light, Graphite dark) are in "UI direction".
 ## Screens
 
 The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
-listed there. Every amount is shown in its own currency; nothing is converted (the one exception is the Overview
-Wallets card total, below). Where a screen shows one currency
+listed there. Every amount is shown in its own currency; nothing is converted (the one exception is the Overview's
+"All in <currency>" view, below). Where a screen shows one currency
 at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 
 - **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
@@ -662,25 +665,33 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      plus the previous month's figure).
   3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
      with a link to Transactions), side by side from `lg` up.
-  - **Converted total** (Wallets card; `src/lib/fx.ts`, `src/server/exchange-rates.ts`): the card starts with
-    "Total in <currency>" for the currency selected on the page. `?view=` picks what the card shows:
-    - `all` (default, left out of the URL): every active wallet; the total is converted into the selected currency
-      (`convertedTotal`: each wallet converted once, rounded half away from zero to the target's decimals, then
-      added) and shown with "≈"; a wallet in another currency shows "≈ <converted balance>" under its own balance.
-      Under the total: "Rates of 6 Nov 2026 · European Central Bank, via Frankfurter".
-    - `only`: just the wallets in the selected currency, their plain sum, nothing converted (the card as before,
-      limited to that currency).
-    The switch ("All in EUR · EUR only", links, `WalletsViewSwitch`) is shown when the active wallets are not all
-    in the selected currency; otherwise the view is `all` and nothing is converted. The month switcher and the
-    currency switch keep `view=only`. A currency with no rate (not quoted by the provider, rates switched off, or
-    the provider unreachable with nothing cached) is left out of the total, with a note naming it
-    (`walletsTotalNotes`). Balances are today's balances and the rates are the latest ones, also for a past month;
-    the chart and the insight cards stay in one currency, unconverted.
-    - Rates: `getExchangeRates()` fetches `https://api.frankfurter.dev/v1/latest?base=EUR` (ECB reference rates,
-      no API key; cross rates through EUR), only when a wallet needs converting. One table in memory serves every
-      user, refreshed after 6 h; a failed fetch keeps the last table and waits 10 min before trying again; 4 s
-      timeout; it never throws. Nothing goes in the database. `EXCHANGE_RATES=false` turns it off (no request is
-      made).
+  - **Converted view** (`src/lib/fx.ts`, `src/server/exchange-rates.ts`). `?view=` applies to the whole page:
+    - `all` (default, left out of the URL): every wallet counts, converted into the selected currency.
+      - **Month chart card, big number and the four insight cards**: `getMonthTimeline` / `getMonthInsights` with
+        `convert: { rates }` — expenses and income of every wallet (archived included, as before), summed per
+        date, kind and currency, each sum converted at **that date's** rate (`tableOn`: the latest business day on
+        or before it, so a Saturday uses Friday's), then added. The largest day's label and the top category
+        compare converted amounts. A line under the heading: "All wallets, converted at each day's rate · European
+        Central Bank, via Frankfurter".
+      - **Wallets card**: starts with "Total in <currency>": every active wallet, converted at the **latest** rate
+        (`convertedTotal`: each wallet converted once, rounded half away from zero to the target's decimals, then
+        added), shown with "≈"; a wallet in another currency shows "≈ <converted balance>" under its own balance.
+        Under the total: "Rates of 6 Nov 2026 · European Central Bank, via Frankfurter".
+    - `only`: the page as before the converted view — the month figures for the selected currency only, and the
+      Wallets card limited to the wallets in that currency with their plain sum.
+    The switch ("All in EUR · EUR only", links, `WalletsViewSwitch`) sits next to the currency switch and is shown
+    when the user holds a wallet (archived included) in another currency; otherwise the view is `all` and nothing
+    is converted. The month switcher and the currency switch keep `view=only`. A currency with no rate (not quoted
+    by the provider, rates switched off, or the provider unreachable with nothing cached) is left out, with a note
+    naming it (`walletsTotalNotes`; `missingCurrencies` from the month services). The Wallets balances are today's,
+    also for a past month. Other pages (Transactions strip, Categories, wallet pages) never convert.
+    - Rates: `getExchangeRates()` fetches `https://api.frankfurter.dev/v1/latest?base=EUR`; `getDailyRates(from,
+      to)` fetches the time series `https://api.frankfurter.dev/v1/<from − 7 days>..<min(to, today)>?base=EUR`
+      (the previous and the shown month). ECB reference rates, no API key, cross rates through EUR. Requests are
+      made only when something needs converting. Tables are kept in memory for every user: the latest one and a
+      range reaching today are refreshed after 6 h, a range that ended before today is kept (at most 24 ranges); a
+      failed fetch keeps the last table and waits 10 min before trying again; 4 s timeout; never throws. Nothing
+      goes in the database. `EXCHANGE_RATES=false` turns it off (no request is made).
   - As built (step 3; `page.tsx`, `components/dashboard/month-chart.tsx`, `overview-lists.tsx`):
     - **Currency**: `?currency=` is used when it is a valid code (`isValidCurrency`, uppercase only) of a wallet the
       user holds, archived included; anything else falls back to `pickDefaultCurrency(userId, month)`

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
 import { addDays, currentMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
+import type { DailyRates } from "@/lib/fx";
 import {
   getMonthInsights,
   getMonthTimeline,
@@ -435,5 +436,77 @@ describe("getWalletMonth", () => {
     expect(getWalletMonth(alice.id, bobs, "2026-03")).toBeNull();
     expect(getWalletMonth(alice.id, 999999, "2026-03")).toBeNull();
     expectServiceError(() => getWalletMonth(bob.id, bobs, "2026-00"), "VALIDATION", "month");
+  });
+});
+
+describe("convert (Overview 'All in <currency>')", () => {
+  // Synthetic rates per 1 EUR. Friday 6 March has USD 2; Monday 9 March has USD 4; no row for the weekend.
+  const rates: DailyRates = {
+    base: "EUR",
+    days: [
+      { date: "2026-02-27", rates: { USD: 2, RON: 5 } },
+      { date: "2026-03-06", rates: { USD: 2, RON: 5 } },
+      { date: "2026-03-09", rates: { USD: 4, RON: 5 } },
+    ],
+  };
+
+  it("converts each day at that day's rate (a weekend uses the Friday before)", () => {
+    const eur = wallet(alice, "EUR");
+    const usd = wallet(alice, "USD");
+    spend(alice, eur, 100, "2026-03-07");
+    spend(alice, usd, 1000, "2026-03-07"); // Saturday: Friday's 2 → 500
+    spend(alice, usd, 1000, "2026-03-09"); // Monday: 4 → 250
+    earn(alice, usd, 2000, "2026-03-09"); // → 500
+    spend(alice, usd, 400, "2026-02-27"); // previous month → 200
+    const t = getMonthTimeline(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect(expensesByDay(t.days)).toEqual({ "2026-03-07": 600, "2026-03-09": 250 });
+    expect(t.days[8].incomeMinor).toBe(500);
+    expect(t.previousCumulativeMinor.at(-1)).toBe(200);
+    expect(t.largestDay).toMatchObject({ date: "2026-03-07", amountMinor: 600 });
+    expect(t.missingCurrencies).toEqual([]);
+
+    const i = getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect([i.incomeMinor, i.expenseMinor, i.netMinor]).toEqual([500, 850, -350]);
+    // Without convert, nothing changes.
+    expect(getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" }).expenseMinor).toBe(100);
+    expect(getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" }).missingCurrencies).toBeUndefined();
+  });
+
+  it("labels the largest day with the largest entry after conversion", () => {
+    const eur = wallet(alice, "EUR");
+    const usd = wallet(alice, "USD");
+    spend(alice, eur, 300, "2026-03-09", "Food", "Lunch");
+    spend(alice, usd, 1000, "2026-03-09", "Bills", "Phone"); // 250 EUR: smaller once converted
+    const t = getMonthTimeline(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect(t.largestDay).toEqual({ date: "2026-03-09", amountMinor: 550, label: "Lunch" });
+  });
+
+  it("picks the top category from converted amounts", () => {
+    const eur = wallet(alice, "EUR");
+    const usd = wallet(alice, "USD");
+    spend(alice, eur, 300, "2026-03-09", "Food");
+    spend(alice, usd, 1000, "2026-03-06", "Bills"); // 500 EUR
+    const i = getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect(i.topCategory).toMatchObject({ categoryName: "Bills", amountMinor: 500, sharePercent: 63 });
+  });
+
+  it("leaves out and lists a currency without a rate, or every other one without rates", () => {
+    const eur = wallet(alice, "EUR");
+    spend(alice, eur, 100, "2026-03-09");
+    spend(alice, wallet(alice, "CHF"), 5000, "2026-03-09");
+    spend(alice, wallet(alice, "RON"), 500, "2026-03-09"); // → 100
+    const t = getMonthTimeline(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect(t.days[8].expenseMinor).toBe(200);
+    expect(t.missingCurrencies).toEqual(["CHF"]);
+    const none = getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates: null } });
+    expect(none.expenseMinor).toBe(100);
+    expect(none.missingCurrencies).toEqual(["CHF", "RON"]);
+  });
+
+  it("never counts another user's wallets", () => {
+    wallet(alice, "EUR");
+    spend(bob, wallet(bob, "USD"), 1000, "2026-03-09");
+    const i = getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    expect(i.expenseMinor).toBe(0);
   });
 });
