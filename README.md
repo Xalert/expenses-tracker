@@ -105,14 +105,23 @@ The Statement Importer page can be tried locally: the `statement-importer-harnes
 
 ## Self-hosting
 
-Clone the repository, then build the image, create the data volume and start on port 3000 with:
+A prebuilt image for `linux/amd64` and `linux/arm64` is published to `ghcr.io/xalert/expenses-tracker`. Nothing
+needs cloning or building — download one Compose file and start it on port 3000:
 
 ```bash
+mkdir expenses-tracker && cd expenses-tracker
+curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/compose.yaml
 docker compose up -d
 ```
 
-Open `http://<your-server>:3000`, create your account(s), then consider closing registration. Settings live in the
-`environment:` block of [`docker-compose.yml`](docker-compose.yml); run `docker compose up -d` again after a change.
+Open `http://<your-server>:3000`, create your account(s), then consider closing registration. Settings go in a
+`.env` file next to `compose.yaml` (`ALLOW_REGISTRATION=false`, `EXPENSES_TRACKER_PORT=8080`,
+`EXPENSES_TRACKER_VERSION=1.2.3` to pin a release); run `docker compose up -d` again after a change. Upgrading is
+`docker compose pull && docker compose up -d`.
+
+To build from source instead, clone the repository and run `docker compose up -d` in it
+([`docker-compose.yml`](docker-compose.yml) builds the image; upgrade with `git pull`, `docker compose build --pull`,
+`docker compose up -d`). Both use the same data volume.
 
 | variable | default (image) | default (dev) | meaning |
 |---|---|---|---|
@@ -126,8 +135,8 @@ Open `http://<your-server>:3000`, create your account(s), then consider closing 
 | `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
 
 All data is in the `/data` volume (`app.db` with its `-wal` and `-shm` files); back it up with SQLite's backup API,
-not by copying `app.db` alone while the app runs. Upgrading is `git pull`, `docker compose build --pull`,
-`docker compose up -d`: migrations run on start, after an automatic copy of the database.
+not by copying `app.db` alone while the app runs. Migrations run on start of a new version, after an automatic copy
+of the database.
 Reverse proxies, backup and restore, bind mounts, upgrading and running without Docker are in
 [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 

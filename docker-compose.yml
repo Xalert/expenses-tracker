@@ -1,8 +1,9 @@
-# Expenses Tracker — `docker compose up -d` is the whole install. Then open http://<host>:3000.
+# Expenses Tracker, built from this source folder — `docker compose up -d` is the whole install. Then open
+# http://<host>:3000. To run the published image without cloning or building, use deploy/compose.yaml instead.
 services:
   expenses-tracker:
     build: .
-    # Built locally from this folder; point this at a registry image later and drop `build:` if you prefer.
+    # Built locally from this folder (deploy/compose.yaml runs the prebuilt ghcr.io image instead).
     image: expenses-tracker:latest
     restart: unless-stopped
     ports:

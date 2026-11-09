@@ -161,6 +161,10 @@ All entries below date from the initial build, 2026-11-05.
 | `npm ci --ignore-scripts` in the image | The slim image has no compiler toolchain, and the native module ships prebuilt Linux binaries | built |
 | Health check uses Node's `fetch` against `/api/health` | No curl or wget needed in the image | built |
 | All runtime configuration is environment variables | Standard for containers; nothing to bake into the image | planner |
+| A prebuilt multi-arch image on GitHub Container Registry, published by GitHub Actions, is the default way to deploy; building from source stays supported | "It should be easy to deploy with docker": downloading one Compose file beats cloning and a several-minute build, and arm64 users (Raspberry Pi) get an image without building on the device. GHCR needs no extra account or secret (`GITHUB_TOKEN`) | owner asked for an easier Docker deploy; registry chosen by planner |
+| `latest` follows `main`; releases come from `vX.Y.Z` tags | The owner deploys `main` and has no release process yet; self-hosters who want control pin `EXPENSES_TRACKER_VERSION` | planner |
+| arm64 is built under QEMU on one runner, not on a native arm64 runner | Works for private and public repositories alike; slower (the `next build` under emulation), but only CI time | planner |
+| `deploy/compose.yaml` is configured from `.env`, not edited, and shares the project name `expenses-tracker` | Upgrading can re-download the file without losing settings; moving between source build and prebuilt keeps the same volume | planner |
 | In development, the machine's own LAN addresses (plus `ALLOWED_DEV_ORIGINS`) may load the dev server's scripts | Next.js allows only `localhost` by default; opened at a LAN address the app rendered but nothing client-side worked (the owner hit this: "Preview import" could not be pressed). Development only — production builds are unaffected | planner |
 
 ### Development tools and documentation
@@ -341,7 +345,10 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - **A reverse proxy's upload limit must allow 6 MB** for imports (nginx defaults to 1 MB).
 - **`db:reset` is development-only.** It refuses with `NODE_ENV=production` and is not shipped in the Docker image;
   Docker users start over by taking a backup and removing the volume (`docker compose down -v`).
-- **No prebuilt image and no CI.** Self-hosters build from source; nothing runs the tests automatically.
+- **CI only on GitHub.** Tests and the image run in GitHub Actions; there is no other CI, and the image is only on
+  GHCR (no Docker Hub mirror). Images are not signed and no SBOM or provenance policy is documented.
+- **No release process yet.** Until the first `vX.Y.Z` tag there are no version tags to pin, only `latest`/`main`
+  and `sha-<commit>`.
 - **`build` / `start` scripts do not work in Windows `cmd`** because of the inline `NODE_ENV`. Docker users are
   unaffected.
 
@@ -453,6 +460,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   simulated on Docker Desktop.
 - **`COOKIE_SECURE=true` over plain HTTP** was checked with curl, not a browser.
 - **The amd64 image** was built and run under emulation only.
+- **The GitHub Actions workflow has never run.** The repository had no GitHub remote when it was written
+  (2026-11-09); the workflow YAML was only parsed, not linted with actionlint or executed. The image name
+  `ghcr.io/xalert/expenses-tracker` in `deploy/compose.yaml` and the docs assumes the repository is pushed as
+  `xalert/expenses-tracker` and the package made public. Verified locally: the image built from the Dockerfile
+  runs healthy through `deploy/compose.yaml` (`/api/health` 200, `/login` 200).
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
   headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not

@@ -108,6 +108,9 @@ share one path, and
 **Deployment.** `output: "standalone"`; the Docker image runs `node server.js` as the non-root `node` user with
 the DB on the `/data` volume. All runtime configuration is environment variables (`.env.example`). The image
 must be built on Linux for its target platform because better-sqlite3 is a native module.
+`.github/workflows/docker-image.yml` tests and publishes the multi-arch image to `ghcr.io` (`latest` from `main`,
+versions from `vX.Y.Z` tags); `deploy/compose.yaml` runs that image without a clone, `docker-compose.yml` builds
+from source. Keep the two Compose files' environment blocks in step.
 
 ## Conventions and gotchas
 

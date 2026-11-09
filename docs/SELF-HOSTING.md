@@ -8,6 +8,7 @@ The [README](../README.md#self-hosting) has the Compose quick start and the tabl
 page is everything else: running without Compose, HTTPS behind a reverse proxy, closing registration, where the
 data lives, backup and restore, upgrading, and running without Docker.
 
+- [Prebuilt image](#prebuilt-image) (tags, pinning a version, publishing it from a fork)
 - [Plain `docker run`](#plain-docker-run)
 - [Health check and container user](#health-check-and-container-user)
 - [Behind a reverse proxy (HTTPS)](#behind-a-reverse-proxy-https)
@@ -19,16 +20,49 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Running without Docker (standalone build)](#running-without-docker-standalone-build)
 - [Database notes](#database-notes)
 
+## Prebuilt image
+
+The GitHub Actions workflow [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) runs
+typecheck, lint and the tests, then builds the image for `linux/amd64` and `linux/arm64` and pushes it to
+`ghcr.io/xalert/expenses-tracker`:
+
+| tag | follows |
+|---|---|
+| `latest`, `main` | the newest commit on `main` |
+| `1.2.3`, `1.2`, `1` | the release tag `v1.2.3` (and the newest release in that minor / major line) |
+| `sha-<commit>` | one exact commit on `main` |
+
+[`deploy/compose.yaml`](../deploy/compose.yaml) runs it; everything in it can be set from a `.env` file next to
+it, so the file itself never needs editing and can simply be downloaded again:
+
+| variable | default | meaning |
+|---|---|---|
+| `EXPENSES_TRACKER_VERSION` | `latest` | image tag; pin a release (`1.2.3`, or `1.2` for its fixes) to upgrade only when you choose |
+| `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
+| `EXPENSES_TRACKER_PORT` | `3000` | host port |
+| `COOKIE_SECURE`, `ALLOW_REGISTRATION`, `EXCHANGE_RATES` | as in the README | passed to the app |
+
+The file sets the Compose project name to `expenses-tracker`, the same as a clone of the repository, so both
+use the volume `expenses-tracker_expenses-data`: switching between the prebuilt image and a source build keeps
+the data. (Running a second instance on the same machine needs `-p <other-name>`.)
+
+**Publishing from a fork.** Push the repository to GitHub; the workflow publishes `ghcr.io/<owner>/<repo>`
+(lowercased) on every push to `main` and every `v*.*.*` tag. The first push creates the package as **private**:
+open it under your profile's *Packages*, *Package settings* → *Change visibility* → *Public*, or every pull needs
+a `docker login ghcr.io`. Then set `EXPENSES_TRACKER_IMAGE` (or edit the image line). A release is `git tag v1.2.3
+&& git push --tags`. Pull requests run the tests and build the image but push nothing.
+
 ## Plain `docker run`
 
 ```bash
-docker build -t expenses-tracker .
 docker run -d --name expenses-tracker --restart unless-stopped \
   -p 3000:3000 \
   -v expenses-data:/data \
   -e COOKIE_SECURE=auto -e ALLOW_REGISTRATION=true \
-  expenses-tracker
+  ghcr.io/xalert/expenses-tracker:latest
 ```
+
+To build it yourself, `docker build -t expenses-tracker .` and use `expenses-tracker` as the image.
 
 Build the image on (or for) the architecture it runs on: `better-sqlite3` is a native module.
 `docker buildx build --platform linux/amd64,linux/arm64 …` builds both if you publish to a registry.
@@ -156,6 +190,15 @@ instead. It works on an empty volume too (e.g. moving to a new server).
 
 ## Upgrading
 
+With the prebuilt image ([`deploy/compose.yaml`](../deploy/compose.yaml)):
+
+```bash
+docker compose pull             # the newest image for your EXPENSES_TRACKER_VERSION
+docker compose up -d            # recreates the container; the data volume is kept
+```
+
+Built from source:
+
 ```bash
 git pull
 docker compose build --pull     # rebuild on the latest node:24-bookworm-slim
@@ -179,7 +222,8 @@ start (the error names the copy) if one does.
 
 ### Rolling back
 
-To go back to the state before the upgrade, run the **previous** version of the image and restore the copy into
+To go back to the state before the upgrade, run the **previous** version of the image (with the prebuilt image:
+set `EXPENSES_TRACKER_VERSION` to the release or `sha-<commit>` you ran before) and restore the copy into
 `/data/app.db` (the same procedure as [Restore](#restore), reading the file that is already in the volume):
 
 ```bash

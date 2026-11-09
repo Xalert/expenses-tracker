@@ -1573,8 +1573,17 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   healthcheck is a `node -e` fetch (no curl/wget in the image).
 - `docker-compose.yml`: one service, named volume mounted at `/data`, port mapping, the env vars above with
   their defaults, `restart: unless-stopped`. `docker compose up -d` must be all a user needs.
-- `.dockerignore` keeps `node_modules`, `.next`, `data`, `.env*`, `.git` out of the build context.
-- The README has the compose quick start and the env vars; `docs/SELF-HOSTING.md` documents running behind a
+- `.dockerignore` keeps `node_modules`, `.next`, `data`, `.env*`, `.git`, `.github`, `deploy` out of the build context.
+- **Prebuilt image.** `.github/workflows/docker-image.yml`: job `test` (Node 24: `npm ci`, typecheck, lint,
+  `npm test`), then job `image` builds `linux/amd64,linux/arm64` with Buildx (QEMU for arm64, GHA layer cache) and
+  pushes `ghcr.io/<owner>/<repo>` with `GITHUB_TOKEN`. Tags: `latest` + `main` + `sha-<short>` on pushes to `main`;
+  `X.Y.Z`, `X.Y`, `X` on a `vX.Y.Z` tag; pull requests build without pushing.
+- `deploy/compose.yaml`: the download-and-run file for the prebuilt image (no `build:`). Project `name:
+  expenses-tracker` so its volume is the same as the source `docker-compose.yml` in a clone named
+  `expenses-tracker`. Image `${EXPENSES_TRACKER_IMAGE:-ghcr.io/xalert/expenses-tracker}:${EXPENSES_TRACKER_VERSION:-latest}`,
+  host port `EXPENSES_TRACKER_PORT` (3000), and `COOKIE_SECURE` / `ALLOW_REGISTRATION` / `EXCHANGE_RATES` taken
+  from the environment or a `.env` file with the app's defaults.
+- The README has the prebuilt-image quick start, the build-from-source alternative and the env vars; `docs/SELF-HOSTING.md` documents running behind a
   reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore of the SQLite file, and upgrading.
 
 ## UI direction

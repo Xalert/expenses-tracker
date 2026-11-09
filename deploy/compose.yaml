@@ -1,0 +1,32 @@
+# Expenses Tracker — run the published image; no clone and no build needed.
+#
+#   mkdir expenses-tracker && cd expenses-tracker
+#   curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/compose.yaml
+#   docker compose up -d
+#
+# Then open http://<host>:3000. Upgrade with `docker compose pull && docker compose up -d`.
+# Settings can stay in this file or go in a `.env` file next to it (Compose reads it automatically).
+# Same project name as a clone of the repository, so both use the volume `expenses-tracker_expenses-data`.
+name: expenses-tracker
+
+services:
+  expenses-tracker:
+    # EXPENSES_TRACKER_VERSION pins a release (e.g. 1.2.3 or 1.2); `latest` follows the main branch.
+    image: ${EXPENSES_TRACKER_IMAGE:-ghcr.io/xalert/expenses-tracker}:${EXPENSES_TRACKER_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${EXPENSES_TRACKER_PORT:-3000}:3000"   # host:container — set EXPENSES_TRACKER_PORT for another host port
+    environment:
+      # SQLite file inside the /data volume (created and migrated on first start).
+      DATABASE_URL: /data/app.db
+      # Session cookie `Secure` flag: auto = only when the request came in over HTTPS (X-Forwarded-Proto: https).
+      COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      # Set to "false" once your accounts exist to close sign-ups.
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      # "false" stops the requests to api.frankfurter.dev for the converted "All in" view on Overview.
+      EXCHANGE_RATES: ${EXCHANGE_RATES:-true}
+    volumes:
+      - expenses-data:/data   # all app data lives here (app.db + its -wal/-shm files)
+
+volumes:
+  expenses-data:
