@@ -2,7 +2,8 @@
 
 A self-hosted, multi-user expenses tracker: income, expenses and transfers across wallets in different currencies,
 filed under categories you manage, with totals grouped per currency (the Overview can also show all wallets
-converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a Docker image.
+converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a
+prebuilt Docker image (amd64 and arm64) that runs from a single Compose file.
 
 ## Run it
 
@@ -123,6 +124,10 @@ To build from source instead, clone the repository and run `docker compose up -d
 ([`docker-compose.yml`](docker-compose.yml) builds the image; upgrade with `git pull`, `docker compose build --pull`,
 `docker compose up -d`). Both use the same data volume.
 
+Images are built and published by GitHub Actions ([`.github/workflows/docker-image.yml`](.github/workflows/docker-image.yml))
+after the tests pass: `latest` follows `main`, a `v1.2.3` tag publishes `1.2.3`, `1.2` and `1`, and `sha-<commit>`
+pins one commit.
+
 | variable | default (image) | default (dev) | meaning |
 |---|---|---|---|
 | `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
@@ -133,11 +138,15 @@ To build from source instead, clone the repository and run `docker compose up -d
 | `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |
 | `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
+| `EXPENSES_TRACKER_VERSION` | `latest` | — | `deploy/compose.yaml` only: image tag to run (`1.2.3`, `1.2`, `sha-<commit>`) |
+| `EXPENSES_TRACKER_PORT` | `3000` | — | `deploy/compose.yaml` only: host port |
+| `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | — | `deploy/compose.yaml` only: image repository, for a fork or mirror |
 
 All data is in the `/data` volume (`app.db` with its `-wal` and `-shm` files); back it up with SQLite's backup API,
 not by copying `app.db` alone while the app runs. Migrations run on start of a new version, after an automatic copy
 of the database.
-Reverse proxies, backup and restore, bind mounts, upgrading and running without Docker are in
+Reverse proxies, backup and restore, bind mounts, upgrading, publishing the image from a fork and running without
+Docker are in
 [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 
 ## Import & export
@@ -175,6 +184,7 @@ src/db/  drizzle/          Drizzle schema + connection (auto-migrate); SQL migra
 src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell (top menu, account menu, Add button)
 scripts/                   db:seed and db:reset
 tools/statement-importer/  the claude.ai Statement Importer page
+deploy/  .github/          Compose file for the prebuilt image; CI workflow that tests and publishes it
 tests/  docs/              vitest suites; spec, decisions, self-hosting, statement importer
 ```
 
