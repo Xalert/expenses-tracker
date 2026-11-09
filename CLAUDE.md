@@ -16,7 +16,7 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — user-facing and short: run it (demo login, reset), debugging, scripts, the Compose quick start (its
-  first lines), env vars only as a pointer to `docs/SELF-HOSTING.md` → Settings, a pointer for each larger topic. Keep it under ~120 lines; long-form material goes in a `docs/` file.
+  first lines), env vars only as a pointer to `docs/SELF-HOSTING.md` → Settings, a pointer for each larger topic. Long-form material goes in a `docs/` file.
 - `docs/SELF-HOSTING.md` — long-form operations: settings, reverse proxy and `COOKIE_SECURE`, closing registration,
   where the data lives (the Postgres volume), `pg_dump` / `pg_restore` backup and restore, upgrading (and Postgres
   major upgrades), moving from the old SQLite versions via JSON backups, the standalone build without Docker.
