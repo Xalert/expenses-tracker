@@ -203,6 +203,20 @@ Added 2026-11-08.
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
 
+### Statement importer: built-in bank readers
+
+Added 2026-11-09, after reconciling the owner's real ING, Wise and Revolut exports against a Spendee history.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| ING Romania CSV, ING Business CSV, Wise CSV and the Revolut statement PDF are read by pure functions in the page's core, not by Claude; Claude stays the reader for everything else | A full Revolut history is 1 348 pages (the Claude path stops at 60) and an ING history about 2 600 multi-line records; read line by line they come out exact (every account adds up to the bank's closing balance) in seconds, and without a Claude call | owner (request), built |
+| A row's date is the day it was made (ING's "Data autorizarii", ING Business's card "Date:"), with the bank's booking date kept and shown | ING books card payments 1–3 days later; the owner's own entries use the day of the payment | owner |
+| Revolut's Pending and Reverted sections, its sub-account sections (pockets, deposit, investment) and its e-money pass-through statement are not offered; moves into pockets and vaults are offered unticked | Pending rows are not final and reverted ones were undone; the pass-through statement repeats the bank account's payments (the owner's file had 1 570 such lines); a pocket move only moves money inside the account unless the pocket is tracked as its own wallet | built |
+| Cross-currency transfers pair only on the amount the statement printed for the other side (exchange / conversion rows), never on a rate | Exact, and needs no exchange rates; other cross-currency pairs stay a manual choice | built |
+| Card payments are never paired automatically (card top-ups into Revolut / Wise excepted) | On the owner's data a card payment matched an unrelated equal amount arriving in another wallet | built |
+| Overlapping exports of the same account offer a repeated row once (same dates, amount, balance and text) | The owner's ING history came in five overlapping files | built |
+| "Only from" date, and 250 rows per statement in the review with "Show more" | A full history is tens of thousands of rows; most of it is usually in the tracker already | built |
+
 ### Interface
 
 | Decision | Why | Decided by |
@@ -461,18 +475,27 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   same digits at different banks share a remembered wallet).
 - **Merchant keys are coarse**: a generic merchant such as "Transfer intern" shares one rule for every internal
   transfer, so its remembered wallet can be wrong for some rows.
-- **Cross-currency transfers between two statements are not paired**; mark one side as a transfer (entering the
-  other amount) and untick the other.
+- **Cross-currency transfers are paired only for exchanges a known format prints both amounts for** (Revolut,
+  Wise); any other one is marked by hand (entering the other amount) with the other side unticked.
+- **Known formats are matched on exact layouts.** A bank that changes its export (column names, the Revolut PDF
+  layout) falls back to Claude, which then hits its own limits on long histories.
 - **The CSV is only as good as the extraction.** Haiku can misread amounts or dates; the page validates the shape,
   not the truth. Totals per wallet are shown for a check against the statement.
 - A PDF page with little text is treated as a scan, so a mostly-blank text page is sent as an image.
-- The review table is not virtualised; a few thousand rows re-render slowly on every change.
+- The review table is not virtualised; it shows 250 rows per statement at a time, but every change still
+  re-renders the rows on screen and the per-wallet totals over all rows.
 - Memory's "last used" is only written on export, and "Forget everything" deletes documents one write at a time.
 - Loading a context file **replaces** the lists; there is no merge option (typed-in entries the file lacks are
   named in the preview, then removed). The app itself cannot import a context file (the zod schema exists for
   when it does).
 
 ### Not verified
+
+- **The known-format readers on real files** were run on the owner's exports outside the repository (5 ING Romania
+  files, 1 ING Business, 9 Wise balances and jars, a 1 348-page Revolut PDF): every account added up to the bank's
+  closing balance, and the page, run in jsdom with the harness's mock runtime and pdf.js 3.11 for Node, read all 15
+  files in about 16 s and produced a CSV the app imported with no problems. Not checked in a real browser or inside
+  claude.ai (memory of 20 000+ rows, the time pdf.js takes on the main thread there).
 
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7

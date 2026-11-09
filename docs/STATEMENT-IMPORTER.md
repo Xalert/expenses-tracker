@@ -4,8 +4,9 @@ A companion tool to the expenses tracker, not part of the app. It is a single pu
 page (source in `tools/statement-importer/index.html`) that:
 
 1. takes one or many bank statements (CSV / TSV / TXT, text-based PDF, scanned PDF or photo),
-2. asks Claude **Haiku** (`claude-haiku-5-5`, through the Artifact `sample` capability, on the viewer's own
-   account) to extract the transactions,
+2. reads the formats it knows itself — **ING Romania CSV, ING Business CSV, Wise CSV and the Revolut statement PDF**
+   (see "Known formats") — and asks Claude **Haiku** (`claude-haiku-5-5`, through the Artifact `sample` capability,
+   on the viewer's own account) to extract the transactions from anything else,
 3. lets the user say which wallet each statement belongs to and which category each transaction gets — asking
    at first, then **remembering** those choices so the next statements need fewer answers,
 4. produces the app's own **transactions CSV** (`date,type,wallet,currency,amount,category,note,to_wallet,
@@ -85,7 +86,14 @@ edits.
 **2. Statements.** Multi-file picker + drag-and-drop, at most 50 files per page visit; a file already added (same
 name, size and date) is skipped. Each file becomes a card with a status chip (waiting → reading → extracting →
 N transactions / needs wallet / failed / stopped), a progress line, and Stop / Try again / Remove. Two files are
-extracted at a time.
+extracted at a time. Every file is first offered to the known-format readers (below); only the others go to Claude,
+so known formats are read even when Claude is unavailable (the others then fail with a message naming the formats
+that work without it). A file that holds several accounts (a Revolut PDF: one per currency) becomes one card per
+account, named `<file> · <CUR>`; Try again and Remove on the first card also clear the others.
+
+"Only from" (a date next to the Statements heading) leaves out rows dated earlier — for a history that is already
+in the tracker. Such rows are unticked with "Left out: before <date>", hidden from the review (the group header
+counts them) and come back when the date moves; a row ticked or unticked by hand keeps the user's choice.
 
 - `.csv .tsv .txt`: decoded as UTF-8, or Windows-1250 when the bytes are not valid UTF-8. Long text is split into
   pieces of at most 60 000 characters on line boundaries, preferring to cut just before a line that starts with a
@@ -100,6 +108,49 @@ extracted at a time.
 - Scanned pages are batched up to `limits().images.maxCount` per call.
 - A failed file shows why on its own card and can be retried alone (the answer cache makes a retried multi-part
   file cheap: unchanged parts replay).
+
+**Known formats (read without Claude).** Pure functions in the core (`parseKnownText`, `parseRevolut`, `pdfLines`,
+`isRevolutPdf`), each returning `{ format, label, statements: [{ account, rows, skipped }], notes? }`. Rows have the
+shape `readRow` gives plus `booked` (the bank's booking date when `date` is the day of the payment), `balance` (the
+printed running balance), `fx` (`{ currency, amount }`, the other side of a currency exchange), `card` (a card
+payment or its refund) and `leftOut` (a reason the row starts unticked). `skipped` rows are never offered; the card
+lists them by reason ("N rows not offered"). Every statement was checked against the real exports it was written
+from: the rows of each account add up to the bank's closing balance.
+
+- **ING Romania** (Home'Bank "Tranzactii_….csv"): detected by the header `Data,,,Detalii tranzactie,Debit,,Credit,Balanta`.
+  One record is a dated line (`02 noiembrie 2026`, Romanian month names, type, debit, credit, balance; decimal
+  commas) followed by `,,,Key:Value` lines. The row's date is **Data autorizarii** (the day the card was used) when
+  present, else the booking date, which is kept as `booked`. Merchant = `Tranzactie la` (the part before the padded
+  country and city), else `Beneficiar` / `Ordonator`; `Suma: 4,99 EUR` is a foreign amount (the RON amount becomes the
+  account amount). Account = bank ING + the holder from `Titular cont:` (the export has no account number), RON. The
+  footer (signatures) ends the list.
+- **ING Business** ("ING.Accounts.history(CSV)_…"): `;`-separated with decimal commas and signed amounts; the opening
+  and closing balance lines (no amount) are skipped; `Date: dd-mm-yyyy` in the details is the card payment's date and
+  `Amount: 66,50 EUR` its foreign amount; the account number column is the identifier.
+- **Wise** (`statement_<balance id>_<CUR>_….csv`): one balance or jar per file, identified by the id in the file
+  name; signed amounts with fees included. `Converted A X to B Y` rows are exchanges (`fx` = the other side);
+  `Moved … to/from <jar>` rows are jar moves (merchant "Wise jar move"); a card payment in another currency gets the
+  foreign amount from `Exchange To` / `Exchange To Amount`; the card holder's name is added to the description
+  (joint accounts).
+- **Revolut statement PDF**: detected on page 1 (`<CUR> Statement`, "Revolut", "Balance summary"), then every page
+  is read through pdf.js text items with positions (`pdfLines`, no page limit up to 5 000 pages; no Claude). Columns
+  come from each page's `Date … Money out … Money in … Balance` header; a transaction line starts with
+  `Mon D, YYYY` in the date column, detail lines (`To:`, `From:`, `Reference:`, `Card:`, `Transaction Id:`) sit in the
+  description column, and an amount alone on a line is the other currency's amount (an exchange's other side, or
+  the original amount of a foreign card payment). One PDF holds a statement per currency and per Revolut entity,
+  each with a balance summary and sections: **Account transactions** are read; **Pending** and **Reverted** are
+  skipped; **Personal and Group Pockets**, **Deposit** and **Investment** (sub-accounts) are skipped, while the moves
+  into them in the account section (`To pocket …`, `Pocket Withdrawal`, `To RON <vault>`, `From RON Savings
+  account`, …) are offered unticked. A statement whose account opens and closes at 0 with money in = money out,
+  next to another statement of the same currency covering the same days, is Revolut's e-money pass-through copy of
+  the bank account (the same payments twice) and is skipped with a note on the card. A row listed twice with the
+  same transaction id, direction, amount and date is kept once (a refund keeps its payment's id, so the id alone is
+  not enough). For "Revolut Bank UAB", "Revolut Payments UAB", "Transfer to …" rows the merchant is the other party
+  (`To:` / `From:`) or the reference. The identifier is the first IBAN on page 1 plus the currency, so each currency
+  is its own remembered account.
+- **Overlapping exports**: a row with the same account, dates, direction, amount, balance and text as a row of
+  another file of the same account (two exports covering the same days) starts unticked with "Left out: also in
+  <file>".
 
 **3. Extraction prompt (Haiku, one call per text piece or image batch).** In order: one instruction line ("Extract
 the transactions from this bank or card statement text." / "The attached images are pages of one bank or card
@@ -178,10 +229,19 @@ statement order; a row whose kind is already transfer only pairs with a row in i
 the transfer (from its wallet to the in row's wallet, dated on the out row) and the in row is excluded; both show
 "paired transfer". "Not a transfer" (or any edit to either row, or re-including the mirror) restores both rows as they
 were and stops that pair from forming again — until the user picks the transfer wallet on one of them themselves.
-Pairing re-runs when wallets or rows change. Cross-currency pairs are not guessed. A transfer the user sets to a
+Pairing re-runs when wallets or rows change. Cross-currency pairs are not guessed: they pair only when a known-format
+statement printed the other side's amount (`fx`: Revolut "Exchanged to …", Wise "Converted …"), the other row has
+exactly that amount in that currency, and the dates are at most 1 day apart; the transfer then carries the received
+amount. **Card payments** (`card`) are never paired automatically — a card payment that happens to equal an incoming
+amount in another wallet is spending — except card top-ups into Revolut or Wise, which are not marked as card
+payments. **Wise jar moves** whose two sides are both in the same wallet (a jar kept in its balance's wallet) start
+unticked: nothing left the wallet. A transfer the user sets to a
 wallet in another currency asks for the amount received (or sent, for an in row) in that currency.
 
 **7. Review table.** One table, a group per statement (name, wallet, row count); it scrolls inside its own frame.
+A group shows its first 250 rows and a "Show 250 more of N" row (large exports run to tens of thousands of rows).
+An unticked row says why ("Left out: …"); a row whose bank booked it on another day shows "booked MM-DD" under the
+date.
 Columns: include, date, description (merchant in bold, the full text expands on click; foreign amount below),
 amount (signed and coloured: expense rose, income emerald, transfer sky), type (select), category or other wallet
 (one column: the category select, or for a transfer the "→ wallet" / "← wallet" select), note (defaults to the
@@ -272,6 +332,11 @@ markup, the two pdf.js scripts, `<script id="importer-core">` (pure functions, n
   with the path grammar and the per-user write rule (persisted in `localStorage` so a reload keeps memory), a
   `user` with a fixed id, and `downloads.save` that triggers a normal browser download and keeps the last file in
   `window.__lastDownload`.
+- `fixtures/banks/`: synthetic files in each known format's layout — `ing-ro.csv`, `ing-business.csv`, two Wise
+  statements (`statement_12345678_EUR_…` with a foreign card payment, a jar move and a conversion; `statement_12345679_EUR_…`
+  the jar), and `revolut-pages.json` (pages as `pdfLines` returns them: a pass-through RON statement, the RON bank
+  statement with a card payment, a top-up, an exchange, a vault move and a reverted row, and the EUR statement with a
+  pending row and the exchange's other side).
 - `fixtures/`: all synthetic — `ro-bank.csv` (`;` and decimal commas, a quoted two-line description, a description
   starting with `-`), `savings.txt` (fixed-width text, the other side of a 1 000 RON transfer, a wrapped line),
   `uk-bank.csv`, `wise.csv` (USD/GBP card payments with account-currency amounts; its canned answer also has two
@@ -284,6 +349,10 @@ markup, the two pdf.js scripts, `<script id="importer-core">` (pure functions, n
 Run it: start the `statement-importer-harness` entry of `.claude/launch.json` (or
 `python3 -m http.server 8765 --directory tools/statement-importer`) and open
 `http://127.0.0.1:8765/dev/index.html`.
+
+`tests/statement-importer-banks.test.ts` runs the known-format readers over `fixtures/banks/` (payment vs booking
+dates, foreign amounts, card flags, conversions and jar moves, the Revolut sections and pass-through statement, the
+overlap key, cross-currency pairing) and imports what they build into the app with no problems.
 
 `tests/statement-importer-csv.test.ts` evaluates the `importer-core` block from `index.html` in a Node VM and checks
 the merchant keys, that its CSV writer matches `src/lib/csv.ts` byte for byte, the pairing and dropped rows on the

@@ -1,0 +1,6 @@
+Initial balance;End balance;account number;book date;amount;currency;transaction type;counterparty's name;counterparty's address;counterparty's account;counterparty's bank;transaction details;balance after transaction;CUI Counterparty
+0,00;;;01.10.2026;;;;;;;;;;
+;;RO00INGB0000000000000003;02.10.2026;5000,00;RON;Incoming funds;EXAMPLE CLIENT SRL;    ;RO00INGB0000000000000004;N; FACTURA NR. 1;5000,00;
+;;RO00INGB0000000000000003;05.10.2026;-338,92;RON;POS purchase;EXAMPLE COURSES; ONLINE   US;;N; ION POPESCU Card No: xxxx xxxx xxxx 2222 Date: 03-10-2026 Auth. Code: 000002 Amount: 66,50 EUR Settlement Amount: 66,50 EUR Rate: 5.0965;4661,08;
+;;RO00INGB0000000000000003;06.10.2026;-5,00;RON;Service Fee;ING Bank Romania;    ;;N;;4656,08;
+;4656,08;;31.10.2026;;;;;;;;;;

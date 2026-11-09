@@ -136,8 +136,9 @@ rules are in [`docs/SPEC.md` → Import / export](docs/SPEC.md#import--export).
 ## Importing bank statements
 
 Bank statements (CSV, text, PDF or a photo) are turned into this app's CSV by a companion page on claude.ai,
-the [Statement Importer](https://claude.ai/artifact/1w1vJNQk41mmcG9ActCEsH): it reads them with Claude Haiku on
-your own Claude account, stores nothing from them, and remembers the wallet and category you chose for each bank
+the [Statement Importer](https://claude.ai/artifact/1w1vJNQk41mmcG9ActCEsH): it reads ING Romania and ING Business
+CSV, Wise CSV and Revolut statement PDFs directly, and anything else with Claude Haiku on your own Claude account,
+stores nothing from them, and remembers the wallet and category you chose for each bank
 account and merchant. Load your **Wallets & categories (JSON)** from `/data` into it, then import the CSV it gives
 you at `/data` as usual. How it works, and its source, are in [`docs/STATEMENT-IMPORTER.md`](docs/STATEMENT-IMPORTER.md).
 

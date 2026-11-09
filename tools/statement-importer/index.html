@@ -306,7 +306,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
 
   <ol class="steps" id="steps">
     <li id="step-1"><h3>Your wallets and categories</h3><p class="small muted">Load them once from your tracker (/data → Wallets &amp; categories: Download or Copy), or type them in. Only names, currencies and kinds are kept.</p></li>
-    <li id="step-2"><h3>Drop statements</h3><p class="small muted">CSV, text, PDF or a photo of a statement, several at once. Claude finds the transactions; you say which wallet each statement is.</p></li>
+    <li id="step-2"><h3>Drop statements</h3><p class="small muted">CSV, text, PDF or a photo of a statement, several at once. ING, Wise and Revolut exports are read directly; for other banks Claude finds the transactions. You say which wallet each statement is.</p></li>
     <li id="step-3"><h3>Review and download</h3><p class="small muted">Check categories and transfers between your own accounts, then import the CSV at /data in your tracker.</p></li>
   </ol>
 
@@ -386,6 +386,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     <div class="review-head">
       <h2 id="statements-title">Statements</h2>
       <div class="toolbar">
+        <label class="check" for="from-date">Only from <input type="date" id="from-date" aria-describedby="from-date-help"></label>
         <button type="button" id="stop-all" hidden>Stop all</button>
         <button type="button" id="clear-files" hidden>Clear statements</button>
       </div>
@@ -393,7 +394,8 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     <div class="drop" id="drop">
       <div class="drop-text">
         <strong id="drop-title">Drop statements here</strong>
-        <p class="privacy" id="drop-privacy">Statements are read in this page and sent to Claude on your account to find the transactions. Nothing from them is saved: only your choices (the wallet for each account, the category for each merchant) are remembered.</p>
+        <p class="privacy" id="drop-privacy">Statements are read in this page. ING Romania and ING Business CSV, Wise CSV and Revolut statement PDFs are read here line by line; other statements are sent to Claude on your account to find the transactions. Nothing from them is saved: only your choices (the wallet for each account, the category for each merchant) are remembered.</p>
+        <p class="small muted" id="from-date-help">“Only from” leaves out rows dated earlier, for example everything you already have in the tracker.</p>
       </div>
       <div class="drop-actions">
         <input type="file" id="file-input" class="visually-hidden" multiple accept=".csv,.tsv,.txt,.pdf,.png,.jpg,.jpeg,.webp,.gif,text/csv,text/plain,application/pdf,image/png,image/jpeg,image/webp,image/gif">
@@ -834,8 +836,10 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
 
   /**
    * Pair the two sides of transfers between the user's own statements. cands: [{ id, order, wallet, currency,
-   * minor, direction, date, forcedOther }]. Same currency and amount, opposite directions, different wallets,
-   * dates at most 3 days apart; closest dates first, then statement order. blocked: Set of "outId|inId".
+   * minor, direction, date, forcedOther, fx? }]. Same currency and amount, opposite directions, different wallets,
+   * dates at most 3 days apart; or, across currencies, an exchange whose printed other amount (fx: { currency,
+   * minor }) is the other row's amount, at most 1 day apart (the pair then carries otherMinor). Closest dates
+   * first, then statement order. blocked: Set of "outId|inId".
    */
   function pairTransfers(cands, blocked) {
     var buckets = new Map();
@@ -858,12 +862,31 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
         });
       });
     });
+    // Exchanges between currencies: the statement prints the other side's amount (fx), so both sides are known.
+    var fxIn = new Map();
+    cands.forEach(function (c) { if (c.direction === "in") { var k = c.currency + "|" + c.minor; if (!fxIn.has(k)) fxIn.set(k, []); fxIn.get(k).push(c); } });
+    cands.forEach(function (o) {
+      if (o.direction !== "out") return;
+      var seen = new Set();
+      var add = function (i) {
+        if (seen.has(i.id) || o.wallet === i.wallet || o.currency === i.currency) return;
+        if (o.forcedOther && o.forcedOther !== i.wallet) return;
+        if (i.forcedOther && i.forcedOther !== o.wallet) return;
+        if (blocked && blocked.has(o.id + "|" + i.id)) return;
+        var d = daysBetween(o.date, i.date);
+        if (d > 1) return;
+        seen.add(i.id);
+        options.push({ o: o, i: i, d: d, fx: true });
+      };
+      if (o.fx) (fxIn.get(o.fx.currency + "|" + o.fx.minor) || []).forEach(add);
+      cands.forEach(function (i) { if (i.direction === "in" && i.fx && i.fx.currency === o.currency && i.fx.minor === o.minor) add(i); });
+    });
     options.sort(function (a, b) { return a.d - b.d || a.o.order - b.o.order || a.i.order - b.i.order; });
     var used = new Set(), pairs = [];
     options.forEach(function (p) {
       if (used.has(p.o.id) || used.has(p.i.id)) return;
       used.add(p.o.id); used.add(p.i.id);
-      pairs.push({ outId: p.o.id, inId: p.i.id });
+      pairs.push(p.fx ? { outId: p.o.id, inId: p.i.id, otherMinor: p.i.minor } : { outId: p.o.id, inId: p.i.id });
     });
     return pairs;
   }
@@ -1027,6 +1050,353 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     return { wallets: cfg.wallets, categories: cfg.categories, accounts: accounts, rules: rules };
   }
 
+  // --- Known statement formats (read without Claude) ---------------------------------------------------------------
+  //
+  // ING Romania (Home'Bank CSV), ING Business (Accounts history CSV), Wise (statement CSV) and Revolut (account
+  // statement PDF) are read here, line by line, so large histories need no Claude call. Every parser returns
+  // { format, label, statements: [{ account, rows, skipped }] } where rows have the shape readRow gives plus:
+  //   booked   — the date the bank booked the row when `date` is the day it was made (ING card payments)
+  //   balance  — the running balance as printed (used to drop the same row exported twice in overlapping files)
+  //   fx       — { currency, amount } of the other side of a currency exchange (pairs transfers across currencies)
+  //   leftOut  — a reason the row starts unticked (moves to a savings pocket, …); the user can tick it again
+  //   card     — a card payment or its refund (never paired as a transfer automatically; top-ups into Revolut or
+  //              Wise paid by card are not marked)
+  // and skipped rows ({ summary, reason }) are never offered (reverted, pending, a duplicate statement).
+
+  /** RFC 4180 CSV with a chosen separator: quoted cells may hold separators, quotes ("") and newlines. */
+  function parseCsv(text, sep) {
+    var rows = [], row = [], cell = "", q = false, s = String(text).replace(/^﻿/, "");
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (q) {
+        if (c === '"') { if (s[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += c;
+      } else if (c === '"') q = true;
+      else if (c === sep) { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && s[i + 1] === "\n") i++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += c;
+    }
+    if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  /** "1.746,05" / "-14329,00" / "1,234.56" / "€1,234.56" / "AU$12.50" → "1746.05" (unsigned) or null. */
+  function plainAmount(v, decimalComma) {
+    var s = String(v == null ? "" : v).replace(/[^\d.,]/g, "");
+    if (!s) return null;
+    if (decimalComma) s = s.replace(/\./g, "").replace(",", ".");
+    else s = s.replace(/,/g, "");
+    var m = /^(\d+)(?:\.(\d+))?$/.exec(s);
+    if (!m) return null;
+    var out = m[1].replace(/^0+(?=\d)/, "") + (m[2] ? "." + m[2] : "");
+    return readAmount(out);
+  }
+  function rowSummary(date, text, amount) { return [date || "?", cleanText(text, 60) || "?", amount || "?"].join(" · "); }
+  function dmyToIso(s) {
+    var m = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(String(s || "").trim());
+    if (!m) return null;
+    var iso = m[3] + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
+    return isIsoDate(iso) ? iso : null;
+  }
+  /** Card terminals pad the merchant with a country and city: "APPLE.COM/BILL  IE  0800894847" → "APPLE.COM/BILL". */
+  function firstField(s) { return cleanText(String(s || "").split(/\s{2,}/)[0], LIMITS.merchant); }
+  function bankRow(o) {
+    var description = cleanText(o.description, LIMITS.description) || cleanText(o.merchant, LIMITS.description);
+    var merchant = cleanText(o.merchant, LIMITS.merchant) || description.split(" ").slice(0, 3).join(" ");
+    return { date: o.date, description: description, merchant: merchant, amount: o.amount, direction: o.direction,
+      currency: o.currency || null, accountAmount: o.accountAmount || null, counterparty: cleanText(o.counterparty, LIMITS.counterparty) || null,
+      booked: o.booked && o.booked !== o.date ? o.booked : null, balance: o.balance || null, fx: o.fx || null, leftOut: o.leftOut || null,
+      card: !!o.card && !/revo|revolut|transferwise|\bwise\b/i.test(o.merchant || "") };
+  }
+
+  // ING Romania — Home'Bank "Tranzactii_…csv": a header block (holder, address), then one record per transaction:
+  //   "02 noiembrie 2026,,,Cumparare POS,"49,99",,,"1.746,05""  (date, type, debit, credit, balance)
+  // followed by ",,,Key:Value" detail lines (Data autorizarii = the day the card was used, Tranzactie la = merchant,
+  // Beneficiar / Ordonator = the other party, Detalii = the reference, Suma = a foreign amount).
+  var RO_MONTHS = { ianuarie: 1, februarie: 2, martie: 3, aprilie: 4, mai: 5, iunie: 6, iulie: 7, august: 8, septembrie: 9, octombrie: 10, noiembrie: 11, decembrie: 12 };
+  function isIngRo(text) { return /(^|\n)Data,,,Detalii tranzactie,Debit,,Credit,Balanta/.test(String(text).slice(0, 4000)); }
+  function parseIngRo(text) {
+    var rows = parseCsv(text, ",");
+    var holder = null, out = [], skipped = [], cur = null;
+    rows.forEach(function (r) { var m = /^Titular cont:\s*(?:DL|DNA|D-?NA|D-?L)?\.?\s*(.+)$/i.exec((r[0] || "").trim()); if (m && !holder) holder = cleanText(m[1], 60); });
+    function flush() {
+      if (!cur) return;
+      var d = cur.details, merchant = d["Tranzactie la"] ? firstField(d["Tranzactie la"]) : (d["Beneficiar"] || d["Ordonator"] || "");
+      var amount = cur.debit || cur.credit;
+      if (!amount) { skipped.push({ summary: rowSummary(cur.booked, cur.type, ""), reason: "no amount" }); cur = null; return; }
+      var date = dmyToIso(d["Data autorizarii"]) || cur.booked;
+      var foreign = /^([\d.,]+)\s+([A-Z]{3})$/.exec((d["Suma"] || "").trim());
+      var desc = [cur.type, merchant, d["Detalii"]].filter(Boolean).join(" · ");
+      var row = { date: date, booked: cur.booked, description: desc, merchant: merchant || cur.type, amount: amount,
+        direction: cur.debit ? "out" : "in", counterparty: d["In contul"] || d["Din contul"] || null, balance: cur.balance,
+        card: !!d["Tranzactie la"] || /^Cumparare POS/i.test(cur.type || "") };
+      if (foreign && foreign[2] !== "RON") { var fa = plainAmount(foreign[1], true); if (fa) { row.currency = foreign[2]; row.accountAmount = amount; row.amount = fa; } }
+      out.push(bankRow(row));
+      cur = null;
+    }
+    rows.forEach(function (r) {
+      var first = (r[0] || "").trim();
+      var m = /^(\d{1,2}) ([a-zăâîșşțţ]+) (\d{4})$/i.exec(first);
+      if (m && RO_MONTHS[m[2].toLowerCase()]) {
+        flush();
+        var iso = m[3] + "-" + String(RO_MONTHS[m[2].toLowerCase()]).padStart(2, "0") + "-" + m[1].padStart(2, "0");
+        cur = { booked: isIsoDate(iso) ? iso : null, type: cleanText(r[3], 80), debit: plainAmount(r[4], true), credit: plainAmount(r[6], true),
+          balance: plainAmount(r[7], true), details: {} };
+        if (!cur.booked) { skipped.push({ summary: rowSummary(first, r[3], r[4] || r[6]), reason: "the date is not a real date" }); cur = null; }
+        return;
+      }
+      if (cur && !first && !(r[1] || "").trim() && (r[3] || "").trim()) {
+        var kv = /^([^:]{2,40}):\s*(.*)$/.exec(r[3].trim());
+        if (kv && !(kv[1] in cur.details)) cur.details[kv[1].trim()] = kv[2].trim();
+        return;
+      }
+      if (cur && (first || (r[1] || "").trim())) flush();   // the signature footer ends the list
+    });
+    flush();
+    return { format: "ing-ro", label: "ING Romania (CSV)", statements: [{ account: { name: holder, identifier: null, currency: "RON", bank: "ING",
+      periodFrom: null, periodTo: null }, rows: out, skipped: skipped }] };
+  }
+
+  // ING Business — "ING.Accounts.history(CSV)_…": ";"-separated, decimal commas, one row per transaction with the
+  // signed amount; card rows carry "Date: dd-mm-yyyy" (the day of the payment) in the details.
+  function isIngBusiness(text) { return /^﻿?Initial balance;End balance;account number;book date;amount;currency;transaction type/i.test(String(text).slice(0, 400)); }
+  function parseIngBusiness(text) {
+    var rows = parseCsv(text, ";"), head = rows[0].map(function (h) { return h.trim().toLowerCase(); });
+    var col = function (n) { return head.indexOf(n); };
+    var out = [], skipped = [], ident = null, currency = null;
+    rows.slice(1).forEach(function (r) {
+      var amt = (r[col("amount")] || "").trim();
+      if (!amt) return;                                            // the opening and closing balance lines
+      var booked = dmyToIso(r[col("book date")]);
+      var details = cleanText(r[col("transaction details")], LIMITS.description);
+      var amount = plainAmount(amt, true);
+      if (!booked || !amount) { skipped.push({ summary: rowSummary(r[col("book date")], details, amt), reason: "unreadable date or amount" }); return; }
+      ident = ident || (r[col("account number")] || "").trim() || null;
+      currency = currency || normCurrency(r[col("currency")]);
+      var card = /Date: (\d{2}-\d{2}-\d{4})/.exec(details || "");
+      var fx = /Amount: ([\d.,]+) ([A-Z]{3})/.exec(details || "");
+      var party = cleanText(r[col("counterparty's name")], 80);
+      var type = cleanText(r[col("transaction type")], 60);
+      var row = { date: (card && dmyToIso(card[1])) || booked, booked: booked, merchant: party || type, description: [type, party, details].filter(Boolean).join(" · "),
+        amount: amount, direction: /^-/.test(amt) ? "out" : "in", counterparty: (r[col("counterparty's account")] || "").trim() || null,
+        balance: plainAmount(r[col("balance after transaction")], true), card: /POS|Card No:/i.test(type + " " + (details || "")) };
+      if (fx && fx[2] !== currency) { var fa = plainAmount(fx[1], true); if (fa) { row.currency = fx[2]; row.accountAmount = amount; row.amount = fa; } }
+      out.push(bankRow(row));
+    });
+    return { format: "ing-business", label: "ING Business (CSV)", statements: [{ account: { name: "Business", identifier: ident, currency: currency || "RON", bank: "ING",
+      periodFrom: null, periodTo: null }, rows: out, skipped: skipped }] };
+  }
+
+  // Wise — "statement_<balance id>_<CUR>_<from>_<to>.csv": one balance (or jar) per file, signed amounts, fees
+  // already in the amount. "Converted A X to B Y" rows are exchanges (the other side is in the other balance's file),
+  // "Moved … to/from <jar>" rows move money between a balance and a jar.
+  function isWise(text) { return /^﻿?"?TransferWise ID"?,Date,"?Date Time"?,Amount,Currency,Description/.test(String(text).slice(0, 300)); }
+  function parseWise(text, fileName) {
+    var rows = parseCsv(text, ","), head = rows[0].map(function (h) { return h.trim(); });
+    var col = function (n) { return head.indexOf(n); };
+    var idm = /statement_(\d+)_([A-Z]{3})_/.exec(fileName || "");
+    var currency = idm ? idm[2] : null, out = [], skipped = [];
+    rows.slice(1).forEach(function (r) {
+      if (r.length < 5 || !(r[col("TransferWise ID")] || "").trim()) return;
+      var date = dmyToIso(r[col("Date")]), amt = (r[col("Amount")] || "").trim(), amount = plainAmount(amt, false);
+      var desc = cleanText(r[col("Description")], LIMITS.description);
+      var rowCur = normCurrency(r[col("Currency")]);
+      currency = currency || rowCur;
+      if (!date || !amount) { if (amount !== null || amt !== "0.00") skipped.push({ summary: rowSummary(r[col("Date")], desc, amt), reason: amt === "0.00" || /^0(\.0+)?$/.test(amt) ? "zero amount" : "unreadable date or amount" }); return; }
+      var party = cleanText(r[col("Merchant")] || r[col("Payee Name")] || r[col("Payer Name")], 80);
+      var ref = cleanText(r[col("Payment Reference")], 120);
+      var holder = cleanText(r[col("Card Holder Full Name")], 60);
+      var row = { date: date, merchant: party || desc, description: [desc, ref, holder ? "card: " + holder : ""].filter(Boolean).join(" · "),
+        amount: amount, direction: /^-/.test(amt) ? "out" : "in", counterparty: (r[col("Payee Account Number")] || "").trim() || null,
+        balance: (r[col("Running Balance")] || "").trim() || null, card: (r[col("Transaction Details Type")] || "").trim() === "CARD" || /^Card transaction/.test(desc || "") };
+      var conv = /^Converted ([\d,]+\.\d+) ([A-Z]{3}) to ([\d,]+\.\d+) ([A-Z]{3})/.exec(desc || "");
+      if (conv) {
+        row.merchant = "Wise conversion";
+        row.fx = row.direction === "out" ? { currency: conv[4], amount: plainAmount(conv[3], false) } : { currency: conv[2], amount: plainAmount(conv[1], false) };
+      } else if (/^Moved [\d,.]+ [A-Z]{3} (to|from) /.test(desc || "")) {
+        row.merchant = "Wise jar move";
+      } else {
+        var exFrom = normCurrency(r[col("Exchange From")]), exTo = normCurrency(r[col("Exchange To")]), exAmt = plainAmount(r[col("Exchange To Amount")], false);
+        if (exTo && exFrom && exTo !== exFrom && exAmt && exTo !== rowCur) { row.currency = exTo; row.accountAmount = amount; row.amount = exAmt; }
+      }
+      out.push(bankRow(row));
+    });
+    return { format: "wise", label: "Wise (CSV)", statements: [{ account: { name: currency ? currency + " balance" : null, identifier: idm ? "wise" + idm[1] : null,
+      currency: currency, bank: "Wise", periodFrom: null, periodTo: null }, rows: out, skipped: skipped }] };
+  }
+
+  /** Read a text statement in a known format; null when the format isn't one of them. */
+  function parseKnownText(text, fileName) {
+    if (isIngRo(text)) return parseIngRo(text);
+    if (isIngBusiness(text)) return parseIngBusiness(text);
+    if (isWise(text)) return parseWise(text, fileName);
+    return null;
+  }
+
+  // Revolut — the account statement PDF ("<CUR> Statement" on every page). One PDF holds a statement per currency,
+  // and per Revolut entity (Revolut Ltd, Payments UAB, Bank UAB), each with a "Balance summary" and sections:
+  // "Account transactions" (read), "Pending" and "Reverted" (skipped: not final / undone), "Personal and Group
+  // Pockets", "Deposit" (savings) and "Investment" (skipped: sub-accounts; the moves into them are in the account
+  // section, offered unticked). Columns are found from the "Money out / Money in / Balance" header on each page.
+  /** pdf.js text items → [{ y, cells: [{ x, w, s }] }], top to bottom, cells left to right, empty items dropped. */
+  function pdfLines(items) {
+    var rows = [];
+    (items || []).forEach(function (it) {
+      if (!it || typeof it.str !== "string" || !it.transform || !it.str.trim()) return;
+      var x = it.transform[4], y = it.transform[5];
+      var row = null;
+      for (var i = 0; i < rows.length; i++) if (Math.abs(rows[i].y - y) <= 1.5) { row = rows[i]; break; }
+      if (!row) { row = { y: y, cells: [] }; rows.push(row); }
+      row.cells.push({ x: x, w: it.width || 0, s: it.str.trim() });
+    });
+    rows.sort(function (a, b) { return b.y - a.y; });
+    rows.forEach(function (r) { r.cells.sort(function (a, b) { return a.x - b.x; }); });
+    return rows;
+  }
+  function isRevolutPdf(firstPageLines) {
+    var t = (firstPageLines || []).map(function (l) { return l.cells.map(function (c) { return c.s; }).join(" "); }).join("\n");
+    return /\b[A-Z]{3} Statement\b/.test(t) && /Revolut/.test(t) && /Balance summary/.test(t);
+  }
+  var REV_MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+  function revDate(s) {
+    var m = /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4})$/.exec(s);
+    if (!m || !REV_MONTHS[m[1]]) return null;
+    var iso = m[3] + "-" + String(REV_MONTHS[m[1]]).padStart(2, "0") + "-" + m[2].padStart(2, "0");
+    return isIsoDate(iso) ? iso : null;
+  }
+  var REV_SYMBOL = { "€": "EUR", "£": "GBP", "$": "USD", "AU$": "AUD", "C$": "CAD", "CA$": "CAD", "NZ$": "NZD", "¥": "JPY", "CHF": "CHF" };
+  /** "€1,234.56" / "1,234.56 RON" / "AU$12.50" → { amount: "1234.56", currency } or null. */
+  function revMoney(s) {
+    var t = String(s || "").trim(), m, num, c;
+    if ((m = /^-?([A-Z]{0,2}[$€£¥])\s?([\d,]+\.\d{2,})$/.exec(t))) { num = m[2]; c = REV_SYMBOL[m[1]] || null; }
+    else if ((m = /^-?([\d,]+\.\d{2,})\s?([A-Z]{3})$/.exec(t))) { num = m[1]; c = m[2]; }
+    else return null;
+    num = num.replace(/,/g, "");
+    return { amount: plainAmount(num, false), value: Number(num), currency: c };   // amount is null for 0.00
+  }
+  var REV_SECTION = /^(Account transactions|Reverted|Pending|Personal and Group Pockets transactions|Deposit transactions|Investment transactions|Savings transactions|Crypto transactions|Commodities transactions)\b.*\bfrom\b/;
+  var REV_POCKET = /^(To pocket|From pocket|Pocket Withdrawal|To [A-Z]{3} \S|From [A-Z]{3} Savings|To Metal Cashback|To USD Investment|Moved to|Moved from)/;
+  var REV_NAMELESS = /^(Revolut Bank UAB|Revolut Payments UAB|Revolut Ltd|Revolut Technologies Inc|Revolut Payments Australia Pty Ltd)$/;
+  /**
+   * pages: [lines from pdfLines] for every page, in order. → { format, label, statements (one per currency),
+   * notes: [text] }.
+   */
+  function parseRevolut(pages) {
+    var stmts = [], st = null, cur = null, section = null, cols = null, tx = null, iban = null, ibanSeen = false;
+    function flushTx() { if (tx && st) st.tx.push(tx); tx = null; }
+    pages.forEach(function (lines) {
+      cols = null;
+      lines.forEach(function (l) {
+        var text = l.cells.map(function (c) { return c.s; }).join(" ");
+        var m = /\b([A-Z]{3}) Statement$/.exec(text);
+        if (m) { cur = m[1]; return; }
+        if (!ibanSeen && l.cells[0] && l.cells.some(function (c) { return c.s === "IBAN"; })) {
+          var ib = l.cells.find(function (c) { return /^[A-Z]{2}\d{2}[A-Z0-9]{8,30}$/.test(c.s); });
+          if (ib) { iban = ib.s; ibanSeen = true; }
+        }
+        if (text === "Balance summary") { flushTx(); st = { currency: cur, products: [], tx: [] }; stmts.push(st); section = "summary"; return; }
+        var sec = REV_SECTION.exec(text);
+        if (sec && st) { flushTx(); section = sec[1].split(" ")[0]; if (section === "Personal") section = "Pockets"; return; }
+        if (section === "summary" && /^(Account|Personal and Group Pockets|Deposit|Savings|Investment)\b/.test(l.cells[0] ? l.cells[0].s : "")) {
+          var nums = l.cells.slice(1).map(function (c) { return revMoney(c.s); }).filter(Boolean);
+          if (nums.length >= 4) st.products.push({ name: l.cells[0].s, opening: nums[0].value, out: nums[1].value, in: nums[2].value, closing: nums[3].value });
+          return;
+        }
+        if (l.cells.some(function (c) { return c.s === "Money out"; }) && l.cells.some(function (c) { return c.s === "Money in"; })) {
+          flushTx();
+          cols = { date: l.cells[0].x, desc: (l.cells.find(function (c) { return c.s === "Description"; }) || l.cells[1]).x };
+          l.cells.forEach(function (c) { if (c.s === "Money out") cols.out = c.x; if (c.s === "Money in") cols.in = c.x; if (c.s === "Balance") cols.bal = c.x; });
+          return;
+        }
+        if (!cols || !st || !section || section === "summary") return;
+        var first = l.cells[0];
+        var date = Math.abs(first.x - cols.date) < 12 ? revDate(first.s) : null;
+        if (date) {
+          flushTx();
+          tx = { date: date, section: section, currency: st.currency, desc: "", out: null, in: null, bal: null, details: [] };
+          l.cells.slice(1).forEach(function (c) {
+            var money = revMoney(c.s);
+            if (money && !money.amount) money = null;
+            if (money && c.x > cols.desc + 60) {
+              var k = ["out", "in", "bal"].filter(function (n) { return cols[n] != null; })
+                .sort(function (a, b) { return Math.abs(cols[a] - c.x) - Math.abs(cols[b] - c.x); })[0];
+              tx[k] = money;
+            } else if (Math.abs(c.x - cols.desc) < 12 || (!tx.desc && c.x < (cols.out || 1e9) - 20)) tx.desc = tx.desc ? tx.desc + " " + c.s : c.s;
+          });
+          return;
+        }
+        if (tx && first.x > cols.desc + 60 && l.cells.every(function (c) { return revMoney(c.s); })) {   // the other currency's amount, on its own line
+          var om = revMoney(l.cells[0].s); if (om && om.amount && !tx.otherMoney) tx.otherMoney = om;
+          return;
+        }
+        if (tx && Math.abs(first.x - cols.desc) < 12) {
+          tx.details.push(l.cells.filter(function (c) { return c.x < (cols.out || 1e9) - 20; }).map(function (c) { return c.s; }).join(" "));
+          l.cells.forEach(function (c) { if (c.x > cols.desc + 60) { var mny = revMoney(c.s); if (mny && mny.amount && !tx.otherMoney) tx.otherMoney = mny; } });
+        }
+      });
+    });
+    flushTx();
+    // A statement that only passes money through (opening and closing 0, in = out) next to another statement of the
+    // same currency covering the same days is Revolut's e-money mirror of the bank account: the same payments twice.
+    var notes = [], mirrors = new Set();
+    stmts.forEach(function (s, i) {
+      var acc = s.products.find(function (p) { return /^Account/.test(p.name); });
+      var rows = s.tx.filter(function (t) { return t.section === "Account"; });
+      if (!acc || !rows.length || acc.opening !== 0 || acc.closing !== 0 || acc.out !== acc.in) return;
+      var from = rows[0].date, to = rows[rows.length - 1].date;
+      var twin = stmts.some(function (o, j) {
+        return j !== i && o.currency === s.currency && o.tx.some(function (t) { return t.section === "Account" && t.date >= from && t.date <= to; });
+      });
+      if (twin) { mirrors.add(i); notes.push(s.currency + ": a pass-through statement (" + from + " → " + to + ", " + rows.length + " lines) repeats the bank account's payments and was left out."); }
+    });
+    var byCur = new Map(), seenIds = new Set();
+    stmts.forEach(function (s, i) {
+      if (!s.currency) return;
+      if (!byCur.has(s.currency)) byCur.set(s.currency, { rows: [], skipped: [] });
+      var bucket = byCur.get(s.currency);
+      s.tx.forEach(function (t) {
+        var amountObj = t.out || t.in;
+        var summary = rowSummary(t.date, t.desc, amountObj ? amountObj.amount + " " + (amountObj.currency || s.currency) : "");
+        if (mirrors.has(i)) { bucket.skipped.push({ summary: summary, reason: "repeated in Revolut's pass-through statement" }); return; }
+        if (t.section === "Reverted") { bucket.skipped.push({ summary: summary, reason: "reverted by Revolut" }); return; }
+        if (t.section === "Pending") { bucket.skipped.push({ summary: summary, reason: "still pending" }); return; }
+        if (t.section !== "Account") { bucket.skipped.push({ summary: summary, reason: "inside a pocket, savings or investment account" }); return; }
+        if (!amountObj || (t.out && t.in)) { bucket.skipped.push({ summary: summary, reason: "no single money-in or money-out amount" }); return; }
+        var get = function (p) { var d = t.details.find(function (x) { return x.indexOf(p) === 0; }); return d ? cleanText(d.slice(p.length), 120) : ""; };
+        var tid = get("Transaction Id:");
+        var tkey = tid ? tid + "|" + (t.out ? "out" : "in") + "|" + amountObj.amount + "|" + t.date : "";   // a refund keeps its payment's id
+        if (tkey) { if (seenIds.has(tkey)) { bucket.skipped.push({ summary: summary, reason: "listed twice (same transaction id)" }); return; } seenIds.add(tkey); }
+        var party = (get("To:") || get("From:")).replace(/,\s*[A-Z]{2}\d{2}[A-Z0-9 ]{8,}$/, "");
+        var ref = get("Reference:");
+        var nameless = REV_NAMELESS.test(t.desc) || /^(Transfer (to|from)|To |From |Payment from)/.test(t.desc);
+        var merchant = nameless && (party || ref) ? (party || ref) : t.desc;
+        var row = { date: t.date, merchant: merchant, description: [t.desc, party, ref].filter(Boolean).filter(function (v, k, a) { return a.indexOf(v) === k; }).join(" · "),
+          amount: amountObj.amount, direction: t.out ? "out" : "in", balance: t.bal ? t.bal.amount : null, card: !!get("Card:"),
+          counterparty: (/([A-Z]{2}\d{2}[A-Z0-9]{8,30})$/.exec(get("To:") || get("From:") || "") || [])[1] || null };
+        var other = t.otherMoney && t.otherMoney.currency && t.otherMoney.currency !== s.currency ? t.otherMoney : null;
+        if (/^Exchanged to [A-Z]{3}$/.test(t.desc) || /^Exchanged to/.test(t.desc)) {
+          row.merchant = "Revolut exchange";
+          if (other) row.fx = other;
+        } else if (other) { row.currency = other.currency; row.accountAmount = amountObj.amount; row.amount = other.amount; }
+        if (REV_POCKET.test(t.desc)) row.leftOut = "a move between this account and one of its pockets or savings vaults";
+        bucket.rows.push(bankRow(row));
+      });
+    });
+    var statements = [];
+    byCur.forEach(function (b, c) {
+      if (!b.rows.length && !b.skipped.length) return;
+      statements.push({ account: { name: c + " account", identifier: iban ? iban + c : null, currency: c, bank: "Revolut", periodFrom: null, periodTo: null },
+        rows: b.rows.sort(function (a, z) { return a.date.localeCompare(z.date); }), skipped: b.skipped });
+    });
+    return { format: "revolut", label: "Revolut (PDF)", statements: statements, notes: notes };
+  }
+
+  /** The key two exports of the same account share for the same row (dates, amount, balance, text). */
+  function overlapKey(sigId, r) {
+    return r.balance == null ? null : [sigId, r.booked || r.date, r.date, r.direction, r.minor, r.balance, r.description].join("|");
+  }
+
   root.ImporterCore = {
     CSV_COLUMNS: CSV_COLUMNS, LIMITS: LIMITS,
     cleanText: cleanText, currencyDecimals: currencyDecimals, normCurrency: normCurrency, isIsoDate: isIsoDate, daysBetween: daysBetween,
@@ -1039,6 +1409,8 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     walletKey: walletKey, readWallet: readWallet, readCategory: readCategory, readConfig: readConfig,
     readTrackerExport: readTrackerExport, compareConfig: compareConfig, readLoaded: readLoaded,
     readRule: readRule, readAccount: readAccount, buildMemoryFile: buildMemoryFile, readMemoryFile: readMemoryFile,
+    parseCsv: parseCsv, parseKnownText: parseKnownText, parseIngRo: parseIngRo, parseIngBusiness: parseIngBusiness, parseWise: parseWise,
+    pdfLines: pdfLines, isRevolutPdf: isRevolutPdf, parseRevolut: parseRevolut, overlapKey: overlapKey,
   };
 })(globalThis);
 </script>
@@ -1051,7 +1423,9 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   var CHUNK_CHARS = 60000;
   var SUGGEST_BATCH = 150;
   var MAX_FILES = 50;
-  var MAX_PDF_PAGES = 60;
+  var MAX_PDF_PAGES = 60;          // for statements Claude reads; statements the page reads itself have no page limit
+  var MAX_KNOWN_PDF_PAGES = 5000;
+  var PAGE_ROWS = 250;             // review rows shown per statement before "Show more"
   var CLAUDE_OFF_CODES = ["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"];
 
   var S = {
@@ -1063,12 +1437,13 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     accounts: new Map(),           // signature id → { label, wallet, lastUsedAt }
     rules: new Map(),              // merchant doc id → rule
     files: [], rows: new Map(), seq: 1,
+    fromDate: "",                  // rows dated before this are left out (empty: no limit)
     paused: false,
     unpaired: new Set(),           // "outId|inId" pairs the user split
     confirmedKeys: new Set(),      // rule ids confirmed during this page visit (one confirmation per visit)
     suggest: { running: false, ctl: null, thinking: false, received: 0, message: "", tone: "" },
     ui: { attention: false, applySame: true, setupOpen: false, memoryOpen: false, confirmClear: false, confirmForget: false,
-      memFilter: "", trackerPreview: null, setupMsg: "", setupTone: "", memMsg: "", memTone: "", exportMsg: "", exportTone: "", lastCsv: "" },
+      memFilter: "", trackerPreview: null, pageSize: {}, setupMsg: "", setupTone: "", memMsg: "", memTone: "", exportMsg: "", exportTone: "", lastCsv: "" },
   };
   var resolveMemory;
   var memoryReady = new Promise(function (r) { resolveMemory = r; });
@@ -1264,7 +1639,9 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     pump();
   }
   function pump() {
-    if (S.sampleState !== "ready" || S.paused) return;
+    // Files are read even without Claude: the formats the page knows need no Claude call (the others then fail
+    // with a message). While Claude is still connecting, wait.
+    if (S.sampleState === "pending" || S.paused) return;
     for (var i = 0; i < S.files.length && active < 2; i++) {
       var f = S.files[i];
       if (f.status === "queued") run(f);
@@ -1388,8 +1765,94 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     if (unit.type === "images") opts.images = unit.blobs;
     return S.sample.json(prompt, opts);
   }
+  /** A statement format the page reads itself (no Claude): { parsed } or null. Text files and Revolut PDFs. */
+  async function readKnown(f) {
+    if (f.kind === "text") {
+      var text = decodeText(await f.file.arrayBuffer());
+      if (!text.trim()) throw userError("This file is empty.", "Choose the statement file itself.");
+      return Core.parseKnownText(text, f.name);
+    }
+    if (f.kind !== "pdf") return null;
+    var lib = window.pdfjsLib;
+    if (!lib || typeof lib.getDocument !== "function") return null;
+    var doc;
+    try { doc = await lib.getDocument({ data: new Uint8Array(await f.file.arrayBuffer()), isEvalSupported: false, useSystemFonts: true }).promise; }
+    catch (e) { return null; }   // pdfUnits reports why
+    try {
+      var first = await doc.getPage(1);
+      var lines = Core.pdfLines((await first.getTextContent()).items);
+      first.cleanup();
+      if (!Core.isRevolutPdf(lines)) return null;
+      if (doc.numPages > MAX_KNOWN_PDF_PAGES) throw userError("This PDF has " + doc.numPages + " pages.", "Export a shorter period (at most " + MAX_KNOWN_PDF_PAGES + " pages).");
+      var pages = [lines];
+      for (var p = 2; p <= doc.numPages; p++) {
+        if (f.status !== "reading") throw userError("Stopped.", "");
+        var page = await doc.getPage(p);
+        pages.push(Core.pdfLines((await page.getTextContent()).items));
+        page.cleanup();
+        if (p % 25 === 0) { f.progress = "Reading page " + p + " of " + doc.numPages + "…"; updateProgress(f); }
+      }
+      return Core.parseRevolut(pages);
+    } finally { doc.destroy(); }
+  }
+  /** Turn a known-format read into statements: the file itself is the first, each further account gets its own card. */
+  async function finishKnown(f, known) {
+    var parts = known.statements.filter(function (st) { return st.rows.length || st.skipped.length; });
+    if (!parts.length) { fail(f, "No transactions were found in this " + known.label + " file.", "Check that it is the full statement export.", false); return; }
+    await Promise.race([memoryReady, sleep(10000)]);
+    if (f.status !== "reading") return;
+    removeChildren(f);
+    var at = S.files.indexOf(f);
+    parts.forEach(function (st, k) {
+      var target = f;
+      if (k > 0) {
+        target = { id: S.seq++, file: f.file, name: f.name + " · " + (st.account.currency || k + 1), size: f.size, lastModified: f.lastModified, kind: f.kind,
+          status: "reading", error: null, rowIds: [], dropped: [], wallet: null, walletSource: null, newWalletOpen: false, newWalletName: "",
+          thinking: false, received: 0, part: 0, parts: 0, ctl: null, parentId: f.id };
+        S.files.splice(at + k, 0, target);
+      } else if (parts.length > 1) f.displayName = f.name + " · " + (st.account.currency || 1);
+      var settled = Core.settleStatement(st.account, st.rows);
+      if (settled.error) { fail(target, settled.error, "", false); return; }
+      target.status = "done"; target.format = known.label; target.notes = k === 0 ? (known.notes || []) : [];
+      target.account = st.account; target.currency = settled.currency; target.dropped = st.skipped.concat(settled.dropped);
+      target.signature = Core.accountSignature(st.account); target.sigId = Core.signatureId(target.signature); target.label = Core.accountLabel(st.account);
+      createRows(target, settled.rows);
+      markOverlaps(target);
+      assignRememberedWallet(target);
+    });
+    applyFromDate();
+    runPairing();
+    renderAll();
+  }
+  function removeChildren(f) {
+    S.files.filter(function (g) { return g.parentId === f.id; }).forEach(function (g) {
+      rowsOf(g).forEach(function (r) { if (r.pair) unpair(r, false); S.rows.delete(r.id); });
+      g.status = "removed";
+    });
+    S.files = S.files.filter(function (g) { return g.parentId !== f.id; });
+  }
+  /** The same row in two exports of the same account (overlapping periods) is offered once. */
+  function markOverlaps(f) {
+    if (!f.sigId) return;
+    var seen = new Map();
+    S.files.forEach(function (g) {
+      if (g === f || g.status !== "done" || g.sigId !== f.sigId) return;
+      rowsOf(g).forEach(function (r) { var k = Core.overlapKey(g.sigId, r); if (k) seen.set(k, g); });
+    });
+    rowsOf(f).forEach(function (r) {
+      var k = Core.overlapKey(f.sigId, r), g = k && seen.get(k);
+      if (g) { r.include = false; r.offReason = "also in " + (g.displayName || g.name); }
+    });
+  }
   async function processFile(f) {
     renderFiles();
+    var known = await readKnown(f);
+    if (f.status !== "reading") return;
+    if (known) { await finishKnown(f, known); return; }
+    if (S.sampleState !== "ready") {
+      fail(f, "Claude isn't available, so this statement can't be read here.", "Without Claude the page reads ING Romania and ING Business CSV, Wise CSV and Revolut statement PDFs.", S.sampleState !== "absent");
+      return;
+    }
     var units = await readUnits(f);
     if (f.status !== "reading") return;
     f.status = "extracting";
@@ -1464,7 +1927,6 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       : code === "sampling_disabled"
         ? "Claude isn't available for this account or organization, so statements can't be read here."
         : "Claude can't be used in this view, so statements can't be read here.";
-    S.files.forEach(function (f) { if (f.status === "queued") f.status = "waiting"; });
     if (S.suggest.ctl) S.suggest.ctl.abort();
   }
   function afterExtraction() {
@@ -1483,7 +1945,10 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
         key: Core.merchantKey(r.merchant) || Core.merchantKey(r.description), minor: r.minor, direction: r.direction,
         foreign: r.foreign, counterparty: r.counterparty, include: true, kind: r.direction === "out" ? "expense" : "income",
         category: null, other: null, otherMinor: null, otherText: "", note: note.slice(0, 500), status: "needs-choice",
-        hint: "", userSet: false, ruleId: null, pair: null, asked: false, open: false };
+        hint: "", userSet: false, ruleId: null, pair: null, asked: false, open: false,
+        booked: r.booked || null, balance: r.balance || null, offReason: null, userInclude: false, card: !!r.card,
+        fx: r.fx && r.fx.amount ? { currency: r.fx.currency, minor: Core.decimalToMinor(r.fx.amount, r.fx.currency) } : null };
+      if (r.leftOut) { row.include = false; row.offReason = r.leftOut; }
       applyRule(row);
       S.rows.set(id, row);
       f.rowIds.push(id);
@@ -1595,7 +2060,23 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
 
   function snapRow(r) { return { kind: r.kind, category: r.category, other: r.other, otherMinor: r.otherMinor, otherText: r.otherText, status: r.status, include: r.include }; }
   function restoreRow(r, s) { Object.assign(r, s); r.pair = null; }
+  /** Moves between a Wise balance and its jar when both statements are in the same wallet: nothing left the wallet. */
+  function leaveOutSameWalletMoves() {
+    var open = new Map();
+    S.files.forEach(function (f) {
+      if (f.status !== "done" || !f.wallet) return;
+      rowsOf(f).forEach(function (r) {
+        if (r.merchant !== "Wise jar move" || r.userInclude || r.pair) return;
+        var k = f.wallet + "|" + r.date + "|" + r.minor;
+        var mate = (open.get(k) || []).find(function (o) { return o.direction !== r.direction && o.fileId !== r.fileId && o.include && r.include; });
+        if (mate) {
+          [mate, r].forEach(function (x) { x.include = false; x.offReason = "a move between two balances of the same wallet"; });
+        } else { if (!open.has(k)) open.set(k, []); open.get(k).push(r); }
+      });
+    });
+  }
   function runPairing() {
+    leaveOutSameWalletMoves();
     var cands = [];
     S.files.forEach(function (f) {
       if (f.status !== "done" || !f.wallet) return;
@@ -1604,16 +2085,27 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       rowsOf(f).forEach(function (r) {
         if (r.pair || !r.include) return;
         if (r.userSet && r.kind !== "transfer") return;
+        if (r.card && r.kind !== "transfer") return;   // card payments are spending, not transfers (top-ups into Revolut / Wise aren't marked)
         cands.push({ id: r.id, order: r.order, wallet: f.wallet, currency: w.currency, minor: r.minor, direction: r.direction, date: r.date,
-          forcedOther: r.kind === "transfer" ? r.other : null });
+          forcedOther: r.kind === "transfer" ? r.other : null, fx: r.fx && r.fx.minor !== null ? r.fx : null });
       });
     });
     Core.pairTransfers(cands, S.unpaired).forEach(function (p) {
       var o = S.rows.get(p.outId), i = S.rows.get(p.inId);
       o.pair = { role: "out", with: i.id, saved: snapRow(o) };
       i.pair = { role: "in", with: o.id, saved: snapRow(i) };
-      o.kind = "transfer"; o.category = null; o.other = fileOf(i).wallet; o.otherMinor = null; o.include = true; o.status = "paired";
+      o.kind = "transfer"; o.category = null; o.other = fileOf(i).wallet; o.otherMinor = p.otherMinor || null; o.include = true; o.status = "paired";
+      if (p.otherMinor) o.otherText = Core.minorToDecimal(p.otherMinor, walletByKey(fileOf(i).wallet).currency);
       i.include = false; i.status = "mirror";
+    });
+  }
+  /** Rows dated before "Only from" are left out (and back in when the date moves), unless ticked or unticked by hand. */
+  function applyFromDate() {
+    allRows().forEach(function (r) {
+      if (r.userInclude) return;
+      var before = !!S.fromDate && r.date < S.fromDate;
+      if (before && r.include) { if (r.pair) unpair(r, false); r.include = false; r.offReason = "before " + S.fromDate; r.offByDate = true; }
+      else if (!before && r.offByDate) { r.include = true; r.offReason = null; r.offByDate = false; }
     });
   }
   function unpair(r, block) {
@@ -1658,7 +2150,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   }
   function rowChanged(r, field, value) {
     if (r.pair && field !== "note") unpair(r, true);
-    if (field === "include") { r.include = value; }
+    if (field === "include") { r.include = value; r.userInclude = true; if (value) r.offReason = null; }
     else if (field === "kind") {
       r.kind = value; r.userSet = true; r.category = null; r.other = null; r.otherMinor = null; r.otherText = ""; r.status = "needs-choice";
     } else if (field === "category") {
@@ -1981,14 +2473,14 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   }
   function progressText(f) {
     var part = f.parts > 1 ? " (part " + f.part + " of " + f.parts + ")" : "";
-    if (f.status === "queued") return S.sampleState === "ready" ? (S.paused ? "Waiting: paused." : "Waiting for its turn…") : S.sampleState === "pending" ? "Waiting for Claude to connect…" : "Claude isn't available.";
+    if (f.status === "queued") return S.paused ? "Waiting: paused." : S.sampleState === "pending" ? "Waiting for Claude to connect…" : "Waiting for its turn…";
     if (f.status === "waiting") return "Not read: Claude isn't available.";
-    if (f.status === "reading") return "Reading the file…";
+    if (f.status === "reading") return f.progress || "Reading the file…";
     if (f.status === "extracting") return f.thinking ? "Thinking…" + part : "Receiving transactions… " + f.received.toLocaleString("en-US") + " characters" + part;
     if (f.status === "stopped") return "Stopped before the transactions were read.";
     if (f.status === "done") {
       var n = f.rowIds.length;
-      return plural(n, "transaction") + " in " + (f.currency || "?") + (f.dropped.length ? " · " + plural(f.dropped.length, "row") + " dropped" : "");
+      return plural(n, "transaction") + " in " + (f.currency || "?") + (f.format ? " · read directly, no Claude needed" : "") + (f.dropped.length ? " · " + plural(f.dropped.length, "row") + (f.format ? " not offered" : " dropped") : "");
     }
     return "";
   }
@@ -2007,8 +2499,8 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   function cardHtml(f) {
     var chip = fileStatusChip(f);
     var kindLabel = { text: "Text", pdf: "PDF", image: "Image", other: "File" }[f.kind];
-    var h = '<article class="card" id="file-' + f.id + '"><div class="card-head"><div class="card-title"><span class="file-name">' + esc(f.name) +
-      '</span><span class="small muted">' + kindLabel + " · " + fmtSize(f.size) + '</span></div><span class="chip ' + chip[0] + '">' + esc(chip[1]) + "</span></div>";
+    var h = '<article class="card" id="file-' + f.id + '"><div class="card-head"><div class="card-title"><span class="file-name">' + esc(f.displayName || f.name) +
+      '</span><span class="small muted">' + esc(f.format || kindLabel) + " · " + fmtSize(f.size) + '</span></div><span class="chip ' + chip[0] + '">' + esc(chip[1]) + "</span></div>";
     h += '<p class="card-progress" id="f' + f.id + '-progress">' + (f.thinking && f.status === "extracting" ? '<span class="pulse" aria-hidden="true"></span>' : "") + esc(progressText(f)) + "</p>";
     if (f.status === "error" && f.error) h += '<div class="card-error" role="alert"><strong>' + esc(f.error.title) + "</strong>" + esc(f.error.detail) + "</div>";
     if (f.status === "done") {
@@ -2019,10 +2511,17 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       if (a.identifier) rows.push(["Number", maskId(a.identifier)]);
       if (a.periodFrom || a.periodTo) rows.push(["Period", (a.periodFrom || "?") + " → " + (a.periodTo || "?")]);
       if (rows.length) h += '<dl class="account">' + rows.map(function (r) { return "<dt>" + r[0] + '</dt><dd class="' + (r[0] === "Number" || r[0] === "Period" ? "mono" : "") + '">' + esc(r[1]) + "</dd>"; }).join("") + "</dl>";
+      (f.notes || []).forEach(function (n) { h += '<p class="small muted">' + esc(n) + "</p>"; });
       if (f.dropped.length) {
-        h += '<details class="dropped"><summary>' + plural(f.dropped.length, "row") + " dropped as unreadable</summary><ul>" +
+        var why = {};
+        f.dropped.forEach(function (d) { why[d.reason] = (why[d.reason] || 0) + 1; });
+        h += '<details class="dropped"><summary>' + plural(f.dropped.length, "row") + (f.format ? " not offered" : " dropped as unreadable") + "</summary><p class=\"small\">" +
+          Object.keys(why).map(function (k) { return esc(k) + ": " + why[k]; }).join(" · ") + "</p><ul>" +
           f.dropped.slice(0, 50).map(function (d) { return "<li>" + esc(d.summary) + " — " + esc(d.reason) + "</li>"; }).join("") + "</ul></details>";
       }
+      var off = rowsOf(f).filter(function (r) { return !r.include && r.offReason && !r.offByDate; }).length;
+      var early = rowsOf(f).filter(function (r) { return r.offByDate; }).length;
+      if (off || early) h += '<p class="small muted">' + [off ? plural(off, "row starts", "rows start") + " unticked (moves between your own pockets, or already in another file)" : "", early ? plural(early, "row is", "rows are") + " before " + esc(S.fromDate) + " and left out" : ""].filter(Boolean).join(" · ") + ".</p>";
       if (f.rowIds.length) {
         h += '<div class="wallet-q"><label for="f' + f.id + '-wallet">Which wallet is this statement?</label><div class="wallet-line">' +
           '<select id="f' + f.id + '-wallet" data-file="' + f.id + '" data-act="wallet">' + walletOptions(f.currency, f.wallet) + "</select>";
@@ -2040,7 +2539,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     }
     var acts = [];
     if (f.status === "reading" || f.status === "extracting" || f.status === "queued") acts.push('<button type="button" data-file="' + f.id + '" data-act="stop">Stop</button>');
-    if ((f.status === "error" && f.error && f.error.retry) || f.status === "stopped" || f.status === "waiting") acts.push('<button type="button" data-file="' + f.id + '" data-act="retry"' + (S.sampleState === "ready" ? "" : " disabled") + ">Try again</button>");
+    if ((f.status === "error" && f.error && f.error.retry) || f.status === "stopped" || f.status === "waiting") acts.push('<button type="button" data-file="' + f.id + '" data-act="retry"' + (S.sampleState === "pending" ? " disabled" : "") + ">Try again</button>");
     acts.push('<button type="button" data-file="' + f.id + '" data-act="remove">Remove</button>');
     h += '<div class="card-actions">' + acts.join("") + "</div></article>";
     return h;
@@ -2056,7 +2555,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   }
   function renderFiles() {
     withFocus(function () { $("files").innerHTML = S.files.map(cardHtml).join(""); });
-    var drop = $("drop"), canRead = S.runtime !== "none" && S.sampleState !== "absent" && S.sampleState !== "off";
+    var drop = $("drop"), canRead = true;   // known formats are read without Claude
     drop.classList.toggle("disabled", !canRead);
     $("file-input").disabled = !canRead;
     $("choose-files").disabled = !canRead;
@@ -2115,7 +2614,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     var cls = (r.include ? "" : "is-off") + (mirror ? " is-mirror" : "");
     var h = '<tr class="' + cls + '" id="row-' + r.id + '">';
     h += '<td class="c-inc"><input type="checkbox" id="r' + r.id + '-inc" data-row="' + r.id + '" data-act="include"' + (r.include ? " checked" : "") + ' aria-label="Include ' + esc(r.merchant + " " + r.date) + '"></td>';
-    h += '<td class="c-date num">' + esc(r.date) + "</td>";
+    h += '<td class="c-date num">' + esc(r.date) + (r.booked ? '<div class="small muted" title="Booked by the bank">booked ' + esc(r.booked.slice(5)) + "</div>" : "") + "</td>";
     h += '<td class="c-desc"><div class="merchant">' + esc(r.merchant) + '</div><button type="button" class="desc' + (r.open ? " open" : "") + '" id="r' + r.id + '-desc" data-row="' + r.id + '" data-act="expand" aria-expanded="' + r.open + '" title="' + esc(r.description) + '">' + esc(r.description) + "</button>" +
       (r.foreign ? '<div class="foreign">' + esc(r.foreign.amount + " " + r.foreign.currency) + " at the bank's rate</div>" : "") + "</td>";
     h += '<td class="c-amt num">' + amountHtml(r, f) + "</td>";
@@ -2130,7 +2629,8 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       if (!f.wallet) h += '<span class="small muted">Choose this statement\'s wallet first.</span>';
       else h += otherSelect(r, f, false);
     } else h += catSelect(r, false);
-    if (r.hint && ds === "needs-choice") h += '<div class="hint">' + esc(r.hint) + "</div>";
+    if (!r.include && r.offReason) h += '<div class="hint">Left out: ' + esc(r.offReason) + "</div>";
+    else if (r.hint && ds === "needs-choice") h += '<div class="hint">' + esc(r.hint) + "</div>";
     else if (r.hint && ds === "suggested") h += '<div class="hint">' + esc(r.hint) + "</div>";
     h += "</td>";
     h += '<td class="c-note"><input id="r' + r.id + '-note" data-row="' + r.id + '" data-act="note" maxlength="500" value="' + esc(r.note) + '" aria-label="Note"' + (mirror ? " disabled" : "") + "></td>";
@@ -2152,10 +2652,14 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
     var html = '<div class="table-wrap" id="review-scroll"><table class="review"><thead><tr><th class="c-inc"><span class="visually-hidden">Include</span></th><th>Date</th><th>Description</th><th class="c-amt">Amount</th><th>Type</th><th>Category / other wallet</th><th>Note</th><th>Status</th></tr></thead>';
     var shown = 0;
     done.forEach(function (f) {
-      var rows = rowsOf(f).filter(function (r) { return !S.ui.attention || needsAttention(r); });
+      var all = rowsOf(f), early = all.filter(function (r) { return r.offByDate; }).length;
+      var rows = all.filter(function (r) { return !r.offByDate && (!S.ui.attention || needsAttention(r)); });
       if (S.ui.attention && !rows.length) return;
-      html += '<tbody><tr class="group"><th colspan="8">' + esc(f.name) + ' <span class="muted">· ' + (f.wallet ? esc(walletLabel(f.wallet)) : "no wallet chosen yet") + " · " + plural(f.rowIds.length, "row") + "</span></th></tr>";
-      rows.forEach(function (r) { html += rowHtml(r, f); shown++; });
+      var limit = S.ui.pageSize[f.id] || PAGE_ROWS;
+      html += '<tbody><tr class="group"><th colspan="8">' + esc(f.displayName || f.name) + ' <span class="muted">· ' + (f.wallet ? esc(walletLabel(f.wallet)) : "no wallet chosen yet") + " · " + plural(f.rowIds.length, "row") +
+        (early ? " · " + early + " before " + esc(S.fromDate) + " hidden" : "") + "</span></th></tr>";
+      rows.slice(0, limit).forEach(function (r) { html += rowHtml(r, f); shown++; });
+      if (rows.length > limit) html += '<tr class="more"><td colspan="8"><button type="button" class="link" data-act="more" data-file="' + f.id + '">Show ' + Math.min(PAGE_ROWS, rows.length - limit) + " more of " + (rows.length - limit) + "</button></td></tr>";
       html += "</tbody>";
     });
     html += "</table></div>";
@@ -2371,12 +2875,14 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
         if (f.status === "queued" || f.status === "reading") f.status = "stopped";
         renderAll();
       } else if (act === "retry") {
+        removeChildren(f); rowsOf(f).forEach(function (r) { if (r.pair) unpair(r, false); S.rows.delete(r.id); }); f.rowIds = []; f.progress = "";
         f.status = "queued"; f.error = null;
         if (S.paused) S.paused = false;
         renderAll(); pump();
       } else if (act === "remove") {
         if (f.ctl) f.ctl.abort();
         rowsOf(f).forEach(function (r) { if (r.pair) unpair(r, false); S.rows.delete(r.id); });
+        removeChildren(f);
         f.status = "removed";
         S.files = S.files.filter(function (x) { return x !== f; });
         runPairing(); renderAll();
@@ -2434,13 +2940,15 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       var t = e.target.closest("button[data-act]");
       if (!t) return;
       var r = S.rows.get(Number(t.dataset.row));
-      if (!r) return;
+      if (!r && t.dataset.act !== "more") return;
+      if (t.dataset.act === "more") { var fm = Number(t.dataset.file); S.ui.pageSize[fm] = (S.ui.pageSize[fm] || PAGE_ROWS) + PAGE_ROWS; renderReview(); return; }
       if (t.dataset.act === "expand") { r.open = !r.open; t.classList.toggle("open", r.open); t.setAttribute("aria-expanded", String(r.open)); }
       else if (t.dataset.act === "accept") rowChanged(r, "accept");
       else if (t.dataset.act === "unpair") { unpair(r, true); renderAll(); toast("Split the pair: both rows are back as separate entries."); }
     });
 
     $("filter-attention").addEventListener("change", function (e) { S.ui.attention = e.target.checked; renderReview(); });
+    $("from-date").addEventListener("change", function (e) { S.fromDate = Core.isIsoDate(e.target.value) ? e.target.value : ""; applyFromDate(); runPairing(); renderAll(); });
     $("apply-same").addEventListener("change", function (e) { S.ui.applySame = e.target.checked; });
     $("accept-all").addEventListener("click", acceptAll);
     $("suggest-run").addEventListener("click", function () { suggest(true); });
