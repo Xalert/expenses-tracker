@@ -29,6 +29,15 @@ const updateSchema = z.object({
   initialBalance: z.string().optional(),
 });
 
+/** The optional `groupId` field: missing or empty → undefined (the service default / unchanged), else a positive id. */
+function parseGroupField(raw: FormDataEntryValue | null): { ok: true; groupId?: number } | { ok: false } {
+  if (raw === null || (typeof raw === "string" && raw.trim() === "")) return { ok: true };
+  if (typeof raw === "string" && /^[1-9]\d{0,14}$/.test(raw.trim())) return { ok: true, groupId: Number(raw.trim()) };
+  return { ok: false };
+}
+
+const GROUP_ERROR = "Choose a group.";
+
 type Parsed<T> = { ok: true; data: T } | { ok: false; state: FormState };
 
 function amountHint(currency: string): string {
@@ -59,7 +68,7 @@ export function chosenCurrency(posted: FormDataEntryValue[]): string {
 export function parseCreateWallet(
   formData: FormData,
   values: Record<string, string>,
-): Parsed<{ name: string; currency: string; initialBalanceMinor: number }> {
+): Parsed<{ name: string; currency: string; initialBalanceMinor: number; groupId?: number }> {
   // Check the balance whenever the currency is usable, so every field error shows at once.
   const rawCurrency = chosenCurrency(formData.getAll("currency"));
   values = { ...values, currency: rawCurrency };
@@ -69,36 +78,52 @@ export function parseCreateWallet(
   const initialBalanceMinor = currencyOk
     ? parseInitialBalance(typeof rawBalance === "string" ? rawBalance : undefined, rawCurrency)
     : 0;
-  if (!parsed.success || initialBalanceMinor === null) {
+  const group = parseGroupField(formData.get("groupId"));
+  if (!parsed.success || initialBalanceMinor === null || !group.ok) {
     const state: FormState = parsed.success
       ? { message: "Please fix the highlighted fields.", fieldErrors: {}, values }
       : zodErrorState(parsed.error, values);
     if (initialBalanceMinor === null) state.fieldErrors = { ...state.fieldErrors, initialBalance: amountHint(rawCurrency) };
+    if (!group.ok) state.fieldErrors = { ...state.fieldErrors, groupId: GROUP_ERROR };
     return { ok: false, state };
   }
-  return { ok: true, data: { name: parsed.data.name, currency: parsed.data.currency, initialBalanceMinor } };
+  return {
+    ok: true,
+    data: { name: parsed.data.name, currency: parsed.data.currency, initialBalanceMinor, groupId: group.groupId },
+  };
 }
 
 export function parseUpdateWallet(
   formData: FormData,
   values: Record<string, string>,
   currency: string,
-): Parsed<{ name: string; initialBalanceMinor: number }> {
+): Parsed<{ name: string; initialBalanceMinor: number; groupId?: number }> {
   const parsed = updateSchema.safeParse(Object.fromEntries(formData));
   const rawBalance = formData.get("initialBalance");
   const initialBalanceMinor = parseInitialBalance(typeof rawBalance === "string" ? rawBalance : undefined, currency);
-  if (!parsed.success || initialBalanceMinor === null) {
+  const group = parseGroupField(formData.get("groupId"));
+  if (!parsed.success || initialBalanceMinor === null || !group.ok) {
     const state: FormState = parsed.success
       ? { message: "Please fix the highlighted fields.", fieldErrors: {}, values }
       : zodErrorState(parsed.error, values);
     if (initialBalanceMinor === null) state.fieldErrors = { ...state.fieldErrors, initialBalance: amountHint(currency) };
+    if (!group.ok) state.fieldErrors = { ...state.fieldErrors, groupId: GROUP_ERROR };
     return { ok: false, state };
   }
-  return { ok: true, data: { name: parsed.data.name, initialBalanceMinor } };
+  return { ok: true, data: { name: parsed.data.name, initialBalanceMinor, groupId: group.groupId } };
 }
 
 /** Wallet id from a route segment or bound argument; null unless a positive safe integer. */
 export function parseWalletId(value: unknown): number | null {
   const n = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
   return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/** Group id from a bound argument; null unless a positive safe integer. */
+export const parseGroupId = parseWalletId;
+
+/** Raw `name` field of the group forms (the service normalises and validates it). */
+export function groupNameField(formData: FormData): string {
+  const v = formData.get("name");
+  return typeof v === "string" ? v : "";
 }

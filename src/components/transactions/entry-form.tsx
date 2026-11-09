@@ -26,7 +26,14 @@ import { initialFormState, type FormState } from "@/lib/form";
 
 export type EntryKind = "expense" | "income" | "transfer";
 
-export type WalletOption = { id: number; name: string; currency: string; archived: boolean };
+export type WalletOption = {
+  id: number;
+  name: string;
+  currency: string;
+  archived: boolean;
+  /** The wallet's group name; set only when the user has two or more groups (the pickers then group by it). */
+  groupName?: string;
+};
 export type CategoryOption = { id: number; name: string; kind: "expense" | "income" };
 
 export type EntryInitialValues = {
@@ -66,6 +73,30 @@ function stateId(state: object): number {
 
 function walletLabel(w: WalletOption) {
   return `${w.name} (${w.currency})${w.archived ? " — archived" : ""}`;
+}
+
+/**
+ * The <option>s of a wallet <select>: one <optgroup> per group (in the order the wallets come) when the wallets carry
+ * a group name, else a flat list. `disabledId` greys one wallet out (a transfer's other side).
+ */
+function WalletSelectOptions({ wallets, disabledId }: { wallets: WalletOption[]; disabledId?: string }) {
+  const option = (w: WalletOption) => (
+    <option key={w.id} value={w.id} disabled={disabledId !== undefined && String(w.id) === disabledId}>
+      {walletLabel(w)}
+    </option>
+  );
+  if (!wallets.some((w) => w.groupName)) return <>{wallets.map(option)}</>;
+  const groups = new Map<string, WalletOption[]>();
+  for (const w of wallets) groups.set(w.groupName ?? "", [...(groups.get(w.groupName ?? "") ?? []), w]);
+  return (
+    <>
+      {[...groups].map(([name, list]) => (
+        <optgroup key={name} label={name}>
+          {list.map(option)}
+        </optgroup>
+      ))}
+    </>
+  );
 }
 
 /**
@@ -259,11 +290,7 @@ export function EntryForm({
                 onChange={(e) => setFromWalletId(e.target.value)}
                 error={err.fromWalletId}
               >
-                {wallets.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {walletLabel(w)}
-                  </option>
-                ))}
+                <WalletSelectOptions wallets={wallets} />
               </Select>
               <FieldError id={pid("fromWalletId")}>{err.fromWalletId}</FieldError>
             </div>
@@ -282,11 +309,7 @@ export function EntryForm({
                 error={err.toWalletId}
               >
                 {!toWalletId && <option value="">Choose a wallet</option>}
-                {wallets.map((w) => (
-                  <option key={w.id} value={w.id} disabled={String(w.id) === fromWalletId}>
-                    {walletLabel(w)}
-                  </option>
-                ))}
+                <WalletSelectOptions wallets={wallets} disabledId={fromWalletId} />
               </Select>
               <FieldError id={pid("toWalletId")}>{err.toWalletId}</FieldError>
             </div>
@@ -389,7 +412,12 @@ export function EntryForm({
               required
               options={wallets.map((w) => ({
                 value: String(w.id),
-                label: w.archived ? `${w.name} (archived)` : w.name,
+                label: (
+                  <>
+                    {w.archived ? `${w.name} (archived)` : w.name}
+                    {w.groupName && <span className="font-normal text-muted-foreground"> · {w.groupName}</span>}
+                  </>
+                ),
               }))}
               defaultValue={walletId}
               onChange={setWalletId}

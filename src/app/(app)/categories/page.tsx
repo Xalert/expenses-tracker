@@ -4,6 +4,7 @@ import { SpendingSplitCard } from "@/components/categories/spending-split";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { CurrencySwitch, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { getGroupScope } from "@/lib/group-scope";
 import { spendingSplit } from "@/lib/category-split";
 import { currentMonth, isValidMonth } from "@/lib/dates";
 import { overviewHref, resolveOverviewCurrency } from "@/lib/overview";
@@ -18,27 +19,33 @@ type Props = { searchParams: Promise<{ month?: string | string[]; currency?: str
 export default async function CategoriesPage({ searchParams }: Props) {
   const user = await requireUser();
   const params = await searchParams;
+  const { selected } = await getGroupScope();
+  const groupId = selected?.id;
   const maxMonth = currentMonth();
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
 
   // Same rule as the Overview: a held `?currency=` wins, else the month's default. With only archived wallets there
   // is no default; their first currency is shown then. No wallets at all → no amounts and no split card.
-  const held = [...new Set(listWallets(user.id, { includeArchived: true }).map((w) => w.currency))].sort();
-  const resolved = resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month));
+  const held = [...new Set(listWallets(user.id, { includeArchived: true, groupId }).map((w) => w.currency))].sort();
+  const resolved = resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month, { groupId }));
   const currency = resolved.currency ?? held[0] ?? null;
   const explicit = resolved.explicit;
 
-  const all = listCategoriesWithUsage(user.id, currency ? { month, currency } : { month });
+  const all = listCategoriesWithUsage(user.id, { month, ...(currency ? { currency } : {}), groupId });
   const split = currency ? spendingSplit(all) : null;
-  const activeCurrencies = listUserCurrencies(user.id);
+  const activeCurrencies = listUserCurrencies(user.id, { groupId });
   const showSwitch = currency !== null && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
 
   return (
     <>
       <PageHeader
         title="Categories"
-        description="Add, rename and remove the categories you file expenses and income under."
+        description={
+          selected
+            ? `Add, rename and remove your categories. Amounts and counts are for ${selected.name}.`
+            : "Add, rename and remove the categories you file expenses and income under."
+        }
         actions={
           <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
             <MonthSwitcher

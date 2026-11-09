@@ -29,6 +29,8 @@ export type TransactionView = {
 
 export type TransactionFilters = {
   walletId?: number;
+  /** Only wallets of this group; ignored when `walletId` is set. */
+  groupId?: number;
   kind?: "expense" | "income" | "transfer";
   categoryId?: number;
   /** `YYYY-MM`: the month's first to last day. Ignored (but still validated) when `from` or `to` is given. */
@@ -142,6 +144,10 @@ function escapeLike(s: string): string {
 export function filterConditions(userId: number, f: TransactionFilters): SQL {
   const conds: SQL[] = [eq(transactions.userId, userId)];
   if (f.walletId !== undefined) conds.push(eq(transactions.walletId, assertId(f.walletId, "walletId", "wallet")));
+  else if (f.groupId !== undefined) {
+    const groupId = assertId(f.groupId, "groupId", "group");
+    conds.push(sql`${transactions.walletId} in (select id from wallets where group_id = ${groupId} and user_id = ${userId})`);
+  }
   if (f.kind !== undefined) {
     if (f.kind === "transfer") conds.push(inArray(transactions.kind, ["transfer_out", "transfer_in"]));
     else if (f.kind === "expense" || f.kind === "income") conds.push(eq(transactions.kind, f.kind));

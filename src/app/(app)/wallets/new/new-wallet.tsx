@@ -1,4 +1,5 @@
 import { WalletForm } from "@/components/wallets/wallet-form";
+import { getGroupScope } from "@/lib/group-scope";
 import { CURRENCIES, PINNED_CURRENCIES } from "@/lib/currencies";
 import { createWalletAction } from "../actions";
 
@@ -8,7 +9,8 @@ const pinnedSet = new Set<string>(PINNED_CURRENCIES);
  * The "New wallet" form, shared by the full page and the `@modal/(.)wallets/new` dialog (`variant="dialog"`: a save
  * closes the dialog instead of redirecting to the new wallet).
  */
-export function NewWallet({ variant = "page" }: { variant?: "page" | "dialog" }) {
+export async function NewWallet({ variant = "page" }: { variant?: "page" | "dialog" }) {
+  const { groups, selected } = await getGroupScope();
   // Built on the server so the option list never differs between server and browser Intl data.
   return (
     <WalletForm
@@ -17,6 +19,8 @@ export function NewWallet({ variant = "page" }: { variant?: "page" | "dialog" })
       action={createWalletAction}
       pinned={CURRENCIES.filter((c) => pinnedSet.has(c.code))}
       all={CURRENCIES}
+      groups={groups.map(({ id, name }) => ({ id, name }))}
+      defaults={selected ? { groupId: String(selected.id) } : undefined}
       cancelHref="/wallets"
       submitLabel="Create wallet"
       pendingLabel="Creating…"

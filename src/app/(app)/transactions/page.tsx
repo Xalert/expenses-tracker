@@ -22,9 +22,11 @@ import {
 } from "@/components/transactions/list-params";
 import { Card, CurrencySwitch, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { getGroupScope } from "@/lib/group-scope";
 import { currentMonth, formatMonth, shiftMonth, todayISO } from "@/lib/dates";
 import { resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
+import { toWalletOptions } from "./form-options";
 import { getMonthTimeline, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
 import { listDayTotals, listTransactions } from "@/server/transactions";
 import { listWallets } from "@/server/wallets";
@@ -51,7 +53,9 @@ export default async function TransactionsPage({
   const thisMonth = currentMonth();
   const today = todayISO();
   const view = resolveView(params, thisMonth);
-  const filters = listFilters(params, thisMonth);
+  const { selected, groups } = await getGroupScope();
+  const groupId = selected?.id;
+  const filters = { ...listFilters(params, thisMonth), groupId };
   const filtered = hasFilters(params, thisMonth);
 
   const { items, total } = listTransactions(user.id, {
@@ -65,9 +69,9 @@ export default async function TransactionsPage({
   if (params.page > lastPage) redirect(listHref(params, { page: lastPage }));
 
   const currentHref = listHref(params);
-  const wallets = listWallets(user.id, { includeArchived: true });
+  const wallets = listWallets(user.id, { includeArchived: true, groupId });
   const categories = listCategories(user.id);
-  const anyAtAll = total > 0 || listTransactions(user.id, { limit: 1 }).total > 0;
+  const anyAtAll = total > 0 || listTransactions(user.id, { limit: 1, groupId }).total > 0;
   const totals = listDayTotals(user.id, filters, [...new Set(items.map((t) => t.date))]);
 
   // The day strip: only when one month is in view (or one day of it is selected).
@@ -78,15 +82,16 @@ export default async function TransactionsPage({
     const held = [...new Set(wallets.map((w) => w.currency))];
     const currency = walletFilter
       ? walletFilter.currency
-      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month)).currency;
+      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month, { groupId })).currency;
     if (currency) {
       const timeline = getMonthTimeline(user.id, {
         month: strip.month,
         currency,
         walletId: walletFilter?.id,
         categoryId: params.category,
+        groupId,
       });
-      const activeCurrencies = listUserCurrencies(user.id);
+      const activeCurrencies = listUserCurrencies(user.id, { groupId });
       const showSwitch = !walletFilter && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
       stripNode = (
         <DayStrip
@@ -119,6 +124,11 @@ export default async function TransactionsPage({
     currency: w.currency,
     archived: w.archivedAt !== null,
   }));
+  // The row editors offer every wallet (a transfer can cross groups), not just the selected group's.
+  const editWalletOptions = toWalletOptions(
+    selected ? listWallets(user.id, { includeArchived: true }) : wallets,
+    groups.length >= 2,
+  );
   const categoryOptions = categories.map(({ id, name, kind }) => ({ id, name, kind }));
 
   let empty: React.ReactNode = null;
@@ -181,7 +191,7 @@ export default async function TransactionsPage({
           thisMonth={thisMonth}
           wallets={walletOptions}
           categories={categoryOptions}
-          exportHref={total > 0 ? exportCsvHref(params, thisMonth) : null}
+          exportHref={total > 0 ? exportCsvHref(params, thisMonth, groupId) : null}
           showClear={filtered}
         />
       )}
@@ -191,7 +201,7 @@ export default async function TransactionsPage({
       {empty ? (
         <Card>{empty}</Card>
       ) : (
-        <InlineEditProvider wallets={walletOptions} categories={categoryOptions} today={today} returnTo={currentHref}>
+        <InlineEditProvider wallets={editWalletOptions} categories={categoryOptions} today={today} returnTo={currentHref}>
           <DayList items={items} totals={totals} today={today} returnTo={currentHref} />
         </InlineEditProvider>
       )}

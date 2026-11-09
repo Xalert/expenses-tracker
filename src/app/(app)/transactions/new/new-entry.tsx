@@ -1,6 +1,8 @@
 import { EntryForm, type EntryKind } from "@/components/transactions/entry-form";
 import { Card, EmptyState, LinkButton } from "@/components/ui";
 import { todayISO } from "@/lib/dates";
+import { getGroupScope } from "@/lib/group-scope";
+import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
 import { categoryOptions, param, parseId, walletOptions } from "../form-options";
 
@@ -13,7 +15,7 @@ export type SearchParams = Record<string, string | string[] | undefined>;
  * (`transactions/new/page.tsx`) and the dialog (`@modal/(.)transactions/new/page.tsx`); the caller checks the session
  * and supplies the heading.
  */
-export function NewEntry({
+export async function NewEntry({
   userId,
   searchParams,
   returnTo,
@@ -41,7 +43,10 @@ export function NewEntry({
   const kindParam = param(searchParams.kind);
   const kind = KINDS.includes(kindParam as EntryKind) ? (kindParam as EntryKind) : "expense";
   const walletParam = parseId(searchParams.wallet);
-  const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : undefined;
+  // A `wallet` param wins; else the first active wallet of the selected group, if it has one.
+  const { selected } = await getGroupScope();
+  const groupFirst = selected ? listWallets(userId, { groupId: selected.id })[0]?.id : undefined;
+  const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : groupFirst;
 
   const today = todayISO();
   return (

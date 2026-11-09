@@ -2,6 +2,7 @@ import "server-only";
 import { notFound } from "next/navigation";
 import { ActionButton } from "@/components/wallets/action-button";
 import { WalletForm } from "@/components/wallets/wallet-form";
+import { getGroupScope } from "@/lib/group-scope";
 import { currencyName } from "@/lib/currencies";
 import { minorToInputValue } from "@/lib/money";
 import { getWallet, type WalletView } from "@/server/wallets";
@@ -60,7 +61,8 @@ function ManageWallet({ wallet }: { wallet: WalletView }) {
  * The "Edit wallet" form, shared by the full page and the `@modal/(.)wallets/[id]/edit` dialog (`variant="dialog"`:
  * a save closes the dialog instead of redirecting to the wallet).
  */
-export function EditWallet({ wallet, variant = "page" }: { wallet: WalletView; variant?: "page" | "dialog" }) {
+export async function EditWallet({ wallet, variant = "page" }: { wallet: WalletView; variant?: "page" | "dialog" }) {
+  const { groups } = await getGroupScope();
   return (
     <WalletForm
       mode="edit"
@@ -68,7 +70,12 @@ export function EditWallet({ wallet, variant = "page" }: { wallet: WalletView; v
       action={updateWalletAction.bind(null, wallet.id)}
       currency={wallet.currency}
       currencyLabel={`${wallet.currency} · ${currencyName(wallet.currency)}`}
-      defaults={{ name: wallet.name, initialBalance: minorToInputValue(wallet.initialBalanceMinor, wallet.currency) }}
+      groups={groups.map(({ id, name }) => ({ id, name }))}
+      defaults={{
+        name: wallet.name,
+        initialBalance: minorToInputValue(wallet.initialBalanceMinor, wallet.currency),
+        groupId: String(wallet.groupId),
+      }}
       cancelHref={`/wallets/${wallet.id}`}
       submitLabel="Save changes"
       pendingLabel="Saving…"

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { getGroupScope } from "@/lib/group-scope";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES } from "@/lib/constants";
 import {
   previewImport,
@@ -64,6 +65,7 @@ export async function previewImportAction(formData: FormData): Promise<ImportAct
   const user = await requireUser();
   const upload = await readUpload(formData);
   if (!upload.ok) return { error: upload.error };
+  upload.opts.groupId = (await getGroupScope()).selected?.id;
   return {
     fileNames: upload.files.map((f) => f.name),
     preview: previewImport(user.id, upload.files, upload.opts),
@@ -75,6 +77,7 @@ export async function runImportAction(formData: FormData): Promise<ImportActionS
   const user = await requireUser();
   const upload = await readUpload(formData);
   if (!upload.ok) return { error: upload.error };
+  upload.opts.groupId = (await getGroupScope()).selected?.id;
   const fileNames = upload.files.map((f) => f.name);
   let result: ImportResult;
   try {

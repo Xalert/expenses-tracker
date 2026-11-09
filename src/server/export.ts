@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, transfers, wallets } from "@/db/schema";
+import { categories, transactions, transfers, walletGroups, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
 import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
@@ -64,6 +64,14 @@ export function buildBackup(userId: number, now: Date = new Date()): Backup {
   const db = getDb();
   return db.transaction((tx) => {
     const walletRows = tx.select().from(wallets).where(eq(wallets.userId, userId)).orderBy(asc(wallets.id)).all();
+    const groupName = new Map(
+      tx
+        .select({ id: walletGroups.id, name: walletGroups.name })
+        .from(walletGroups)
+        .where(eq(walletGroups.userId, userId))
+        .all()
+        .map((g) => [g.id, g.name]),
+    );
     const categoryRows = tx
       .select()
       .from(categories)
@@ -93,6 +101,7 @@ export function buildBackup(userId: number, now: Date = new Date()): Backup {
         initialBalanceMinor: w.initialBalanceMinor,
         initialBalance: minorToInputValue(w.initialBalanceMinor, w.currency),
         archived: w.archivedAt !== null,
+        group: groupName.get(w.groupId),
       })),
       categories: categoryRows.map((c) => ({ id: categoryRef.get(c.id)!, name: c.name, kind: c.kind })),
       transactions: txRows.map((t) => ({

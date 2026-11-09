@@ -17,6 +17,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     duplicateTransactions: 3,
     duplicateTransfers: 1,
     walletsToCreate: [],
+    groupsToCreate: [],
     categoriesToCreate: [],
     problems: [],
     problemCount: 0,
@@ -50,6 +51,21 @@ describe("PreviewCard", () => {
     expect(text(html)).not.toContain("New categories");
   });
 
+  it("names the group of new wallets only from two groups or when groups are created", () => {
+    const wallets = [{ name: "Till", currency: "EUR", archived: false, group: "Business" }];
+    const one = text(renderToStaticMarkup(<PreviewCard preview={preview({ walletsToCreate: wallets })} />));
+    expect(one).toContain("Till · EUR");
+    expect(one).not.toContain("in Business");
+    expect(one).not.toContain("New groups");
+    const two = text(renderToStaticMarkup(<PreviewCard preview={preview({ walletsToCreate: wallets })} groupCount={2} />));
+    expect(two).toContain("Till · EUR in Business");
+    const created = text(
+      renderToStaticMarkup(<PreviewCard preview={preview({ walletsToCreate: wallets, groupsToCreate: ["Business"] })} />),
+    );
+    expect(created).toContain("Till · EUR in Business");
+    expect(created).toContain("New groups: Business");
+  });
+
   it("labels the confirm button by transactions + transfers", () => {
     expect(importLabel(preview({ transactionsToAdd: 1, transfersToAdd: 0 }))).toBe("Import 1 entry");
     expect(importLabel(preview({ transactionsToAdd: 1200, transfersToAdd: 34 }))).toBe("Import 1,234 entries");
@@ -62,8 +78,8 @@ describe("PreviewCard", () => {
       <PreviewCard
         preview={preview({
           walletsToCreate: [
-            { name: "Savings", currency: "EUR", archived: false },
-            { name: "Old card", currency: "RON", archived: true },
+            { name: "Savings", currency: "EUR", archived: false, group: "Personal" },
+            { name: "Old card", currency: "RON", archived: true, group: "Personal" },
           ],
           categoriesToCreate: [
             { name: "Shopping", kind: "expense" },
@@ -114,7 +130,7 @@ describe("PreviewCard", () => {
 describe("ImportSuccess", () => {
   it("summarises what was added and links onwards", () => {
     const html = renderToStaticMarkup(
-      <ImportSuccess result={preview({ walletsToCreate: [{ name: "Savings", currency: "EUR", archived: false }] })} />,
+      <ImportSuccess result={preview({ walletsToCreate: [{ name: "Savings", currency: "EUR", archived: false, group: "Personal" }] })} />,
     );
     expect(text(html)).toContain("Import complete");
     expect(text(html)).toContain(

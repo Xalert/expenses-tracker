@@ -44,6 +44,8 @@ export type WalletSpec = {
   currency: string;
   initialBalanceMinor: number;
   archived: boolean;
+  /** Backup only: the wallet group's name (normalized), when the file names one. */
+  group?: string;
   /** lower(name) + currency: how wallets are matched against the account. */
   key: string;
 };

@@ -50,6 +50,17 @@ function initOnlyFolder(): string {
   return dir;
 }
 
+/** A migrations folder holding 0000 and 0001 only (the schema before wallet groups). */
+function upTo0001Folder(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "et-0001-"));
+  fs.mkdirSync(path.join(dir, "meta"));
+  for (const f of ["0000_init.sql", "0001_user_ids.sql"]) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
+  const journal = JSON.parse(fs.readFileSync(path.join(MIGRATIONS, "meta", "_journal.json"), "utf8"));
+  journal.entries = journal.entries.filter((e: { tag: string }) => e.tag !== "0002_wallet_groups");
+  fs.writeFileSync(path.join(dir, "meta", "_journal.json"), JSON.stringify(journal));
+  return dir;
+}
+
 /** Open `file` (or memory) and bring it to migration 0000 only, as the previous release did (foreign keys on). */
 function openAt0000(file = ":memory:"): Database.Database {
   const sqlite = new Database(file);
@@ -169,9 +180,15 @@ function expectedUsernames(rows: { id: number; email: string }[]): Map<number, s
   return out;
 }
 
-function runRunner(sqlite: Database.Database, file = ":memory:") {
+/** Runs the migration runner; `through0001` stops before 0002 (the tests of 0001 compare the old wallets table). */
+function runRunner(sqlite: Database.Database, file = ":memory:", through0001 = false) {
   const db = drizzle({ client: sqlite, schema }) as DB;
-  return { db, result: migrateDatabase(db, { file }) };
+  const folder = through0001 ? upTo0001Folder() : undefined;
+  try {
+    return { db, result: migrateDatabase(db, { file, migrationsFolder: folder }) };
+  } finally {
+    if (folder) fs.rmSync(folder, { recursive: true, force: true });
+  }
 }
 
 describe("0001 user IDs on a populated database", () => {
@@ -181,7 +198,7 @@ describe("0001 user IDs on a populated database", () => {
     const before = snapshot(sqlite);
     expect(before.transactions).toHaveLength(OLD_USERS.length * 4);
 
-    const { db, result } = runRunner(sqlite);
+    const { db, result } = runRunner(sqlite, ":memory:", true);
     expect(result).toEqual({ applied: ["0001_user_ids"], backupPath: null });
     const after = snapshot(sqlite);
 
@@ -226,7 +243,7 @@ describe("0001 user IDs on a populated database", () => {
     // Foreign keys are enforced again and nothing dangles.
     expect(sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
-    expect(pendingMigrations(db)).toEqual([]);
+    expect(pendingMigrations(db)).toEqual(["0002_wallet_groups"]);
 
     // Migrated accounts sign in with their old email (any case) and with their derived user ID.
     setDb(db);
@@ -265,6 +282,78 @@ describe("0001 user IDs on a populated database", () => {
       { id: 5, email: "bob@b.com" },
       { id: 9, email: "bob-5@c.com" },
     ])).toEqual(new Map([[2, "bob"], [5, "bob-5"], [9, "user9"]]));
+  });
+});
+
+describe("0002 wallet groups on a populated database", () => {
+  /** A database at 0001 (data written at 0000, then migrated), with one extra user without wallets. */
+  function populatedAt0001() {
+    const sqlite = openAt0000();
+    insertOldData(sqlite);
+    sqlite
+      .prepare("INSERT INTO users (id, email, name, password_hash, created_at) VALUES (50, 'empty@x.com', 'No Wallets', 'h', 1)")
+      .run();
+    runRunner(sqlite, ":memory:", true);
+    return sqlite;
+  }
+
+  it("gives every user a Personal group and every wallet its owner's group, losing and changing nothing else", () => {
+    const sqlite = populatedAt0001();
+    const before = snapshot(sqlite);
+    expect(before.wallets).toHaveLength(OLD_USERS.length * 2);
+    expect(Object.keys(before.wallets[0])).not.toContain("group_id");
+    const archivedBefore = before.wallets.filter((w) => w.archived_at !== null).length;
+    expect(archivedBefore).toBeGreaterThan(0);
+
+    const { db, result } = runRunner(sqlite);
+    expect(result).toEqual({ applied: ["0002_wallet_groups"], backupPath: null });
+    const after = snapshot(sqlite);
+
+    // Untouched tables are identical.
+    for (const t of ["users", "sessions", "categories", "transfers", "transactions"] as const) {
+      expect(after[t]).toEqual(before[t]);
+    }
+    expect(counts(sqlite)).toMatchObject(Object.fromEntries(TABLES.map((t) => [t, before[t].length])));
+
+    // Wallets: same ids and every old column; only group_id is new.
+    expect(after.wallets).toHaveLength(before.wallets.length);
+    for (const old of before.wallets) {
+      const now = after.wallets.find((w) => w.id === old.id)!;
+      const { group_id: groupId, ...rest } = now;
+      expect(rest).toEqual(old);
+      expect(groupId).toEqual(expect.any(Number));
+    }
+
+    // One Personal group per user (including the user without wallets); each wallet is in its owner's.
+    const groups = sqlite.prepare("SELECT id, user_id, name, created_at FROM wallet_groups ORDER BY id").all() as {
+      id: number;
+      user_id: number;
+      name: string;
+      created_at: number;
+    }[];
+    expect(groups.map((g) => g.user_id)).toEqual(after.users.map((u) => u.id));
+    expect(groups.every((g) => g.name === "Personal" && g.created_at > 1_700_000_000)).toBe(true);
+    const groupOwner = new Map(groups.map((g) => [g.id, g.user_id]));
+    for (const w of after.wallets) expect(groupOwner.get(w.group_id as number)).toBe(w.user_id);
+
+    // Foreign keys are back on and consistent, and the new constraints work.
+    expect(sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    expect(pendingMigrations(db)).toEqual([]);
+    expect(() => sqlite.prepare("DELETE FROM wallet_groups WHERE id = ?").run(groups[0].id)).toThrow(/FOREIGN KEY/);
+    sqlite.prepare("DELETE FROM users WHERE id = 50").run();
+    expect(sqlite.prepare("SELECT count(*) AS n FROM wallet_groups WHERE user_id = 50").get()).toEqual({ n: 0 });
+  });
+
+  it("refuses to drop a wallet whose owner is missing: the migration fails and is rolled back", () => {
+    const sqlite = populatedAt0001();
+    sqlite.pragma("foreign_keys = OFF");
+    sqlite.prepare("INSERT INTO wallets (user_id, name, currency, created_at) VALUES (999, 'Orphan', 'EUR', 1)").run();
+    sqlite.pragma("foreign_keys = ON");
+    const before = snapshot(sqlite);
+    expect(() => runRunner(sqlite)).toThrow(/Database migration failed[\s\S]*NOT NULL/);
+    expect(snapshot(sqlite)).toEqual(before);
+    expect(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'wallet_groups'").all()).toEqual([]);
   });
 });
 
@@ -397,7 +486,7 @@ describe("pre-migration backup", () => {
 
     const mem = openAt0000();
     insertOldData(mem, { transactions: false });
-    expect(runRunner(mem).result).toEqual({ applied: ["0001_user_ids"], backupPath: null });
+    expect(runRunner(mem).result).toEqual({ applied: ["0001_user_ids", "0002_wallet_groups"], backupPath: null });
   });
 });
 
@@ -407,12 +496,12 @@ describe("foreign-key check after migrating", () => {
     const old = openAt0000(file);
     insertOldData(old, { transactions: false });
     old.pragma("foreign_keys = OFF");
-    old.prepare("INSERT INTO wallets (user_id, name, currency, created_at) VALUES (999, 'Orphan', 'EUR', 1)").run();
+    old.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES ('orphan', 999, 1, 1)").run();
     old.close();
     vi.spyOn(console, "info").mockImplementation(() => {});
 
     expect(() => createDatabase(file)).toThrow(
-      /integrity check failed: 1 row\(s\).*wallets row \d+ → missing users.*before-migration-0001_user_ids\.bak/,
+      /integrity check failed: 1 row\(s\).*sessions row \d+ → missing users.*before-migration-0001_user_ids\.bak/,
     );
   });
 

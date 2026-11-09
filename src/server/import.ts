@@ -1,11 +1,13 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, transfers, wallets, type CategoryKind } from "@/db/schema";
+import { categories, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
 import { listTransferRows } from "./export";
+import { assertId } from "./_validate";
+import { getDefaultGroupId, getOwnedGroupRow } from "./wallet-groups";
 import { backupFormat } from "./import-formats/backup";
 import {
   addTally,
@@ -46,6 +48,11 @@ export type ImportOptions = {
   timeZone?: string;
   /** Import transfer rows that have no partner as income / expense in a "Transfer" category. Default false. */
   unpairedTransfersAsEntries?: boolean;
+  /**
+   * The wallet group wallets created by the import go into (the selected scope); a backup's per-wallet `group` takes
+   * precedence. Omitted → the user's default group. NOT_FOUND (field `groupId`) when it is not the user's.
+   */
+  groupId?: number;
 };
 
 /** One uploaded file. `name` is only used to label the file in the preview, problems and notices. */
@@ -75,7 +82,10 @@ export type ImportPreview = {
   transfersToAdd: number;
   duplicateTransactions: number;
   duplicateTransfers: number;
-  walletsToCreate: { name: string; currency: string; archived: boolean }[];
+  /** `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). */
+  walletsToCreate: { name: string; currency: string; archived: boolean; group: string }[];
+  /** Groups named by a backup that the account does not have yet; created by the import. */
+  groupsToCreate: string[];
   categoriesToCreate: { name: string; kind: CategoryKind }[];
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
@@ -292,6 +302,10 @@ type Plan = {
   walletTargets: WalletTarget[]; // per file wallet; id null → created
   /** File wallet indexes to create, in file order. */
   walletsToCreate: number[];
+  /** Per file wallet to create: the target group's name, and its id (null → it is in `groupsToCreate`). */
+  walletGroups: Map<number, { name: string; id: number | null }>;
+  /** Group names to create (first spelling wins), in file order. */
+  groupsToCreate: string[];
   /** Category key → existing id, or null when it will be created. */
   categoryTargets: (number | null)[];
   categoriesToCreate: number[];
@@ -327,6 +341,10 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   const used = new Map<string, number>();
   const walletTargets: WalletTarget[] = [];
   const walletsToCreate: number[] = [];
+  const targetGroupId =
+    opts.groupId === undefined
+      ? getDefaultGroupId(userId, tx)
+      : getOwnedGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx).id;
   parsed.wallets.forEach((w, i) => {
     const k = used.get(w.key) ?? 0;
     used.set(w.key, k + 1);
@@ -337,6 +355,38 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
       walletsToCreate.push(i);
     }
   });
+
+  // Groups of the wallets to create -----------------------------------------------------------------
+  const groupRows = tx
+    .select({ id: walletGroups.id, name: walletGroups.name })
+    .from(walletGroups)
+    .where(eq(walletGroups.userId, userId))
+    .orderBy(walletGroups.id)
+    .all();
+  const groupByFolded = new Map(groupRows.map((g) => [g.name.toLowerCase(), g]));
+  const targetGroup = groupRows.find((g) => g.id === targetGroupId)!;
+  const walletGroups_ = new Map<number, { name: string; id: number | null }>();
+  const groupsToCreate: string[] = [];
+  const plannedGroups = new Set<string>();
+  for (const i of walletsToCreate) {
+    const named = parsed.wallets[i].group;
+    if (named === undefined) {
+      walletGroups_.set(i, { name: targetGroup.name, id: targetGroup.id });
+      continue;
+    }
+    const folded = named.toLowerCase();
+    const existing = groupByFolded.get(folded);
+    if (existing) {
+      walletGroups_.set(i, { name: existing.name, id: existing.id });
+      continue;
+    }
+    if (!plannedGroups.has(folded)) {
+      plannedGroups.add(folded);
+      groupsToCreate.push(named);
+    }
+    const first = groupsToCreate.find((n) => n.toLowerCase() === folded)!;
+    walletGroups_.set(i, { name: first, id: null });
+  }
 
   // Categories ---------------------------------------------------------------------------------------
   const existingCategories = new Map<string, number>();
@@ -459,6 +509,8 @@ function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: Import
   return {
     walletTargets,
     walletsToCreate,
+    walletGroups: walletGroups_,
+    groupsToCreate,
     categoryTargets,
     categoriesToCreate,
     entriesToAdd,
@@ -491,8 +543,9 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
     duplicateTransfers: plan?.duplicateTransfers ?? 0,
     walletsToCreate: (plan?.walletsToCreate ?? []).map((i) => {
       const w = parsed.wallets[i];
-      return { name: w.name, currency: w.currency, archived: w.archived };
+      return { name: w.name, currency: w.currency, archived: w.archived, group: plan!.walletGroups.get(i)!.name };
     }),
+    groupsToCreate: plan?.groupsToCreate ?? [],
     categoriesToCreate: (plan?.categoriesToCreate ?? []).map((i) => ({
       name: parsed.categories[i].name,
       kind: parsed.categories[i].kind,
@@ -527,13 +580,23 @@ function chunks<T>(items: T[], size = CHUNK): T[][] {
 function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: Plan): void {
   const now = new Date();
 
+  const createdGroupIds = new Map<string, number>();
+  for (const name of plan.groupsToCreate) {
+    createdGroupIds.set(
+      name.toLowerCase(),
+      tx.insert(walletGroups).values({ userId, name, createdAt: now }).returning({ id: walletGroups.id }).get().id,
+    );
+  }
+
   const walletIds = plan.walletTargets.map((t) => t.id);
   for (const i of plan.walletsToCreate) {
     const w = parsed.wallets[i];
+    const target = plan.walletGroups.get(i)!;
     walletIds[i] = tx
       .insert(wallets)
       .values({
         userId,
+        groupId: target.id ?? createdGroupIds.get(target.name.toLowerCase())!,
         name: w.name,
         currency: w.currency,
         initialBalanceMinor: w.initialBalanceMinor,

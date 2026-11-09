@@ -1,6 +1,7 @@
 import { createDatabase, setDb, type DB } from "@/db";
 import { users } from "@/db/schema";
 import { listCategories, seedDefaultCategories } from "@/server/categories";
+import { seedDefaultGroup } from "@/server/wallet-groups";
 
 /** Fresh in-memory DB (migrated) installed as the process-wide connection. Call in beforeEach. */
 export function useFreshDb(): DB {
@@ -10,7 +11,7 @@ export function useFreshDb(): DB {
 }
 
 /**
- * Insert a user directly (skips scrypt for speed) and seed default categories. The user ID is the email with
+ * Insert a user directly (skips scrypt for speed) and seed default categories and the default group. The user ID is the email with
  * `@` (and anything else not allowed) turned into `-`, so distinct emails give distinct user IDs.
  */
 export function makeUser(db: DB, email: string) {
@@ -21,6 +22,7 @@ export function makeUser(db: DB, email: string) {
     .returning()
     .get();
   seedDefaultCategories(user.id);
+  seedDefaultGroup(user.id);
   const cats = listCategories(user.id);
   const cat = (name: string) => {
     const c = cats.find((x) => x.name === name);

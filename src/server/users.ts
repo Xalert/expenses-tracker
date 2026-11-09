@@ -6,6 +6,7 @@ import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
 import { NAME_MAX, displayName, normalizeUserId, userIdProblem } from "@/lib/user-id";
 import { seedDefaultCategories } from "./categories";
+import { seedDefaultGroup } from "./wallet-groups";
 
 export type UserView = {
   id: number;
@@ -50,7 +51,7 @@ const byUsername = (username: string) => sql`lower(${users.username}) = ${userna
 const byEmail = (email: string) => sql`lower(${users.email}) = ${email}`;
 
 /**
- * Create a user and seed their default categories in one DB transaction.
+ * Create a user and seed their default categories and group in one DB transaction.
  * VALIDATION (field username / email / password / firstName / lastName) or CONFLICT (field username / email).
  */
 export async function registerUser(input: RegisterInput): Promise<UserView> {
@@ -89,6 +90,7 @@ export async function registerUser(input: RegisterInput): Promise<UserView> {
         .returning()
         .get();
       seedDefaultCategories(user.id, tx);
+      seedDefaultGroup(user.id, tx);
       return toUserView(user);
     });
   } catch (err) {

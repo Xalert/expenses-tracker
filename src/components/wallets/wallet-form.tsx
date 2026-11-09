@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { BigAmount, Button, Field, FieldError, FormError, Input, PillPicker, buttonClasses } from "@/components/ui";
+import { BigAmount, Button, Field, FieldError, FormError, Input, PillPicker, Select, buttonClasses } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { CurrencyOption } from "@/lib/currencies";
 import { initialFormState, type FormState } from "@/lib/form";
@@ -21,7 +21,9 @@ type WalletFormProps = {
    */
   variant?: "page" | "dialog";
   cancelHref: string;
-  defaults?: { name?: string; initialBalance?: string };
+  defaults?: { name?: string; initialBalance?: string; /** The group preselected in the Group select. */ groupId?: string };
+  /** The user's groups; the Group select is shown from two. */
+  groups?: { id: number; name: string }[];
   /** Edit only: the Archive / Unarchive (and Delete) section, rendered between the fields and the footer. */
   manage?: ReactNode;
 } & (
@@ -145,6 +147,24 @@ function WalletFields(props: WalletFormProps & { state: FormState }) {
           error={err.name}
         />
       </Field>
+
+      {props.groups && props.groups.length >= 2 && (
+        <Field id="groupId" label="Group" error={err.groupId}>
+          <Select
+            id="groupId"
+            name="groupId"
+            required
+            defaultValue={v.groupId ?? props.defaults?.groupId ?? String(props.groups[0].id)}
+            error={err.groupId}
+          >
+            {props.groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
 
       {props.mode === "create" ? (
         <CurrencyAndBalance

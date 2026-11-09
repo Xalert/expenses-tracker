@@ -139,16 +139,20 @@ export function dayHref(p: ListParams, month: string, date: string | null, thisM
 
 /**
  * `/api/export/transactions?…` carrying the list's filters (not the page or the currency): the "Export CSV" link.
- * The month the list shows is always written out — the export route itself defaults to all time.
+ * The month the list shows is always written out — the export route itself defaults to all time. `groupId` (the
+ * selected wallet group) adds `group=<id>`; the service ignores it when a wallet filter is set.
  */
-export function exportCsvHref(p: ListParams, thisMonth: string = currentMonth()): string {
+export function exportCsvHref(p: ListParams, thisMonth: string = currentMonth(), groupId?: number): string {
   const view = resolveView(p, thisMonth);
   const qs = listHref(p, {
     month: view.type === "month" ? view.month : undefined,
     currency: undefined,
     page: 1,
   }).split("?")[1];
-  return qs ? `/api/export/transactions?${qs}` : "/api/export/transactions";
+  const all = new URLSearchParams(qs ?? "");
+  if (groupId) all.set("group", String(groupId));
+  const query = all.toString();
+  return query ? `/api/export/transactions?${query}` : "/api/export/transactions";
 }
 
 /** "5 Nov" in `year`, "5 Nov 2025" otherwise. */

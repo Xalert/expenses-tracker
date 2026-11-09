@@ -9,6 +9,7 @@ import { listCategories } from "@/server/categories";
 import { createTransaction, type TransactionInput } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { registerUser } from "@/server/users";
+import { createWalletGroup } from "@/server/wallet-groups";
 import { createWallet } from "@/server/wallets";
 
 /**
@@ -111,7 +112,7 @@ export function findDemoUser(db: DB = getDb()): { id: number; username: string }
 }
 
 /**
- * Create the demo user (`DEMO_USER`) with five wallets and sample income, expenses and transfers for last month and
+ * Create the demo user (`DEMO_USER`) with two wallet groups (Personal, Business), six wallets and sample income, expenses and transfers for last month and
  * this month, through the services on the process-wide connection (`getDb()`). The caller checks that no demo user
  * exists yet (`findDemoUser`); registering a second one fails on the unique user ID.
  */
@@ -129,6 +130,8 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
   const usd = createWallet(user.id, { name: "Revolut USD", currency: "USD", initialBalanceMinor: 50000 });
   const ron = createWallet(user.id, { name: "BT Lei", currency: "RON", initialBalanceMinor: 120000 });
   createWallet(user.id, { name: "Japan trip", currency: "JPY", initialBalanceMinor: 30000 });
+  const business = createWalletGroup(user.id, { name: "Business" });
+  const studio = createWallet(user.id, { name: "Studio account", currency: "EUR", initialBalanceMinor: 600000, groupId: business.id });
 
   const today = todayISO();
   const thisMonth = currentMonth();
@@ -159,6 +162,11 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
     tx({ walletId: ron.id, kind: "expense", category: "Food", amountMinor: 8650, date: day(month, 14), note: "Dinner in Cluj" });
     tx({ walletId: ron.id, kind: "expense", category: "Transport", amountMinor: 3200, date: day(month, 15), note: "Taxi" });
   }
+  for (const month of [lastMonth, thisMonth]) {
+    tx({ walletId: studio.id, kind: "income", category: "Extra Income", amountMinor: 350000, date: day(month, 9), note: "Client invoice" });
+    tx({ walletId: studio.id, kind: "expense", category: "Bills", amountMinor: 4900, date: day(month, 11), note: "Software licences" });
+    tx({ walletId: studio.id, kind: "expense", category: "Housing", amountMinor: 60000, date: day(month, 3), note: "Coworking desk" });
+  }
   tx({ walletId: usd.id, kind: "income", category: "Extra Income", amountMinor: 75000, date: day(lastMonth, 20), note: "Freelance invoice #12" });
   tx({ walletId: eurBank.id, kind: "income", category: "Refund", amountMinor: 2499, date: day(thisMonth, 3), note: "Returned headphones" });
 
@@ -180,6 +188,9 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
     date: day(lastMonth, 25),
     note: "Move freelance money",
   });
+
+  // Between the two groups: the studio pays the owner.
+  createTransfer(user.id, { fromWalletId: studio.id, toWalletId: eurBank.id, amountMinor: 150000, date: day(thisMonth, 4), note: "Owner draw" });
 
   return { userId: user.id, username: user.username, months: [lastMonth, thisMonth] };
 }

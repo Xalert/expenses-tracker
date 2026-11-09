@@ -18,19 +18,19 @@ export type Dashboard = {
   totalsByCurrency: CurrencyTotals[];
   /** Expenses in `month` on active wallets, per currency + category, largest first. */
   expenseByCategory: CategorySpend[];
-  /** Latest 8 transactions across all wallets. */
+  /** Latest 8 transactions across all wallets (of the group, when one is given). */
   recent: TransactionView[];
 };
 
 export const RECENT_COUNT = 8;
 
-export function getDashboard(userId: number, opts: { month?: string } = {}): Dashboard {
+export function getDashboard(userId: number, opts: { month?: string; groupId?: number } = {}): Dashboard {
   const month = opts.month ?? currentMonth();
   if (!isValidMonth(month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
   const { from, to } = monthRange(month);
   const db = getDb();
 
-  const activeWallets = listWallets(userId);
+  const activeWallets = listWallets(userId, { groupId: opts.groupId });
 
   const totals = new Map<string, CurrencyTotals>();
   for (const w of activeWallets) {
@@ -43,6 +43,7 @@ export function getDashboard(userId: number, opts: { month?: string } = {}): Das
     eq(transactions.userId, userId),
     eq(wallets.userId, userId),
     isNull(wallets.archivedAt),
+    opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId),
     gte(transactions.date, from),
     lte(transactions.date, to),
   );
@@ -85,6 +86,6 @@ export function getDashboard(userId: number, opts: { month?: string } = {}): Das
     wallets: activeWallets,
     totalsByCurrency: [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency)),
     expenseByCategory,
-    recent: listTransactions(userId, { limit: RECENT_COUNT }).items,
+    recent: listTransactions(userId, { limit: RECENT_COUNT, groupId: opts.groupId }).items,
   };
 }

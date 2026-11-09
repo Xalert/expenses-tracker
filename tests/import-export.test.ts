@@ -335,8 +335,8 @@ describe("CSV round trip", () => {
     const r = runImport(alice.id, text);
     expect(r).toMatchObject({ ok: true, imported: true, transactionsToAdd: 2, categoriesToCreate: [] });
     expect(r.walletsToCreate).toEqual([
-      { name: "Cash", currency: "EUR", archived: false },
-      { name: "Tokyo", currency: "JPY", archived: false },
+      { name: "Cash", currency: "EUR", archived: false, group: "Personal" },
+      { name: "Tokyo", currency: "JPY", archived: false, group: "Personal" },
     ]);
     const ws = listWallets(alice.id);
     expect(ws.find((w) => w.currency === "EUR")?.balanceMinor).toBe(-1_250);

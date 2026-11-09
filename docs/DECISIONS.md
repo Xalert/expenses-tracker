@@ -287,6 +287,26 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
 | `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
+### Wallet groups
+
+Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, data model and services, and 2, the interface, are built).
+
+| Decision | Why | Decided by |
+|---|---|---|
+| Wallet groups inside one account, not separate books or users; groups are user-defined; categories stay shared | Personal and business money should be looked at apart without a second login or duplicated categories; transfers between the two stay ordinary transfers | owner |
+| `wallets.group_id` is NOT NULL with ON DELETE RESTRICT; a group is deleted only when empty and not the user's last | A wallet can never be left without a group, and deleting a group never moves or removes money | planner |
+| Migration `0002` rebuilds `wallets` by hand and gives each user a `Personal` group; a wallet with a missing owner makes it fail and roll back instead of being dropped | `ALTER ... ADD NOT NULL` cannot work on a populated table; losing a row silently is worse than refusing to start (the pre-migration copy exists) | built (step 1) |
+| Group names are unique per user ignoring case, compared case-folded in the service; there is no DB unique index | Same as categories; keeps the migration to the rebuild of one table | built (step 1) |
+| A group of another user in a `groupId` option behaves like an empty group; in a mutation it is NOT_FOUND on `groupId` | The rule for every other foreign row | built (step 1) |
+| The backup stays `version: 1` with an optional `group` per wallet | Old files still import (into the target group) and new files lose nothing; a version bump would reject them for no gain | built (step 1) |
+| An import never moves an existing wallet between groups; only created wallets get the backup's group or the target group | "Import adds, never changes" | built (step 1) |
+| The selected group is a cookie (`et_group`, httpOnly, one year), set by a Server Action from a plain form; the switcher is hidden below two groups | No URL parameter to carry through every link and `returnTo`; works without JavaScript; one group changes nothing in the interface | built (step 2) |
+| `selectGroupAction` falls back to `/` (not `/transactions`) when `returnTo` is missing or unsafe | The switcher lives on every page, so the safe place to land is the Overview | built (step 2) |
+| The expense / income wallet picker (pills) shows the group as a muted suffix instead of grouping | Pills cannot be grouped like `<optgroup>`; the transfer selects do group | built (step 2) |
+| Entry forms and the inline row editor offer every wallet, not just the selected group's | A transfer can cross groups; the selected group only decides the default wallet | built (step 2) |
+| The Groups card is on the Wallets page, rows open in place like Categories, and deleting is only offered when it can succeed (the panel says why not otherwise) | No new route or dialog; same interaction as categories | built (step 2) |
+| The demo data has Personal and Business, a business wallet with entries and one transfer between the groups | Lets the scope be seen working on `npm run dev:demo` | built (step 1) |
+
 ### Process
 
 | Decision | Why | Decided by |
@@ -345,6 +365,12 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
   different date, so they would not be recognised as duplicates.
 - **A category's kind cannot be changed**, and categories cannot be archived.
 - **A CSV cannot carry initial balances or archived state**; wallets it creates start at zero.
+- **Wallet groups have no archive state, no ordering and no colour**; they are listed by name.
+- **The context export (Statement Importer) and the transactions CSV carry no group.** The CSV can be narrowed by
+  `group=<id>` on the export URL but has no group column, so a CSV import always puts new wallets in the target
+  group; only the backup round-trips groups.
+- **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
+  real `data/app.db`.
 
 ### Rough edges
 
@@ -410,6 +436,12 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
   when it does).
 
 ### Not verified
+
+- **Wallet groups interface (step 2)** was covered by tests (render to static markup, actions with mocked Next APIs)
+  and typecheck / lint only; it was not exercised in a browser. Unchecked there: the switcher's submit on change and
+  its look at 375px (top bar width with a long group name; the select is capped at `max-w-44`), the no-JS "Go"
+  button, focus after a group rename / delete, the `<optgroup>` pickers on a real phone, and the Overview with the
+  group name in the heading.
 
 - **Bind mounts on a real Linux host.** The "folder must be owned by uid 1000" failure and its fixes were only
   simulated on Docker Desktop.

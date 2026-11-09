@@ -5,7 +5,7 @@ import { categories, transactions, wallets, type CategoryKind } from "@/db/schem
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
-import { isUniqueViolation, normalizeName } from "./_validate";
+import { assertId, isUniqueViolation, normalizeName } from "./_validate";
 
 export type CategoryView = { id: number; name: string; kind: CategoryKind };
 export type CategoryWithUsage = CategoryView & { transactionCount: number };
@@ -47,7 +47,7 @@ export function listCategories(userId: number, kind?: CategoryKind): CategoryVie
  */
 export function listCategoriesWithUsage(
   userId: number,
-  opts: { month?: string; currency?: string } = {},
+  opts: { month?: string; currency?: string; groupId?: number } = {},
 ): CategoryWithMonthUsage[] {
   if (opts.month !== undefined && !isValidMonth(opts.month)) {
     throw new ServiceError("VALIDATION", "Invalid month.", "month");
@@ -60,6 +60,11 @@ export function listCategoriesWithUsage(
     ? sql`${transactions.date} >= ${range.from} and ${transactions.date} <= ${range.to}`
     : sql`0`;
   const inCurrency = opts.currency !== undefined ? sql`${wallets.currency} = ${opts.currency}` : sql`0`;
+  if (opts.groupId !== undefined) assertId(opts.groupId, "groupId", "group");
+  const inGroup =
+    opts.groupId === undefined
+      ? undefined
+      : sql`${transactions.walletId} in (select id from wallets where group_id = ${opts.groupId} and user_id = ${userId})`;
   return getDb()
     .select({
       id: categories.id,
@@ -70,7 +75,7 @@ export function listCategoriesWithUsage(
       monthAmountMinor: sql<number>`coalesce(sum(case when ${inMonth} and ${inCurrency} then ${transactions.amountMinor} else 0 end), 0)`,
     })
     .from(categories)
-    .leftJoin(transactions, and(eq(transactions.categoryId, categories.id), eq(transactions.userId, userId)))
+    .leftJoin(transactions, and(eq(transactions.categoryId, categories.id), eq(transactions.userId, userId), inGroup))
     .leftJoin(wallets, eq(wallets.id, transactions.walletId))
     .where(eq(categories.userId, userId))
     .groupBy(categories.id)

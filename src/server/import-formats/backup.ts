@@ -4,7 +4,8 @@ import { isValidCurrency } from "@/lib/currencies";
 import { isValidDate } from "@/lib/dates";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { currencyDecimals, parseAmount } from "@/lib/money";
-import { normalizeNote } from "../_validate";
+import { normalizeName, normalizeNote } from "../_validate";
+import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
 import {
   categoryKey,
   check,
@@ -87,6 +88,10 @@ function parseBackup(body: string): ParsedFile {
     const currency = w.currency.trim().toUpperCase();
     const validCurrency = isValidCurrency(currency);
     if (!validCurrency) problem(`${p}.currency`, `“${w.currency}” is not a supported ISO 4217 currency code.`);
+    const group =
+      w.group === undefined || w.group === null || !w.group.trim()
+        ? undefined
+        : (check(() => normalizeName(w.group, "group", MAX_GROUP_NAME_LENGTH), (m) => problem(`${p}.group`, m)) ?? undefined);
     checkDecimal(`${p}.initialBalance`, w.initialBalance, w.initialBalanceMinor, validCurrency ? currency : null, true);
     if (!walletIndex.has(w.id)) walletIndex.set(w.id, out.wallets.length);
     walletCurrency.push(validCurrency ? currency : null);
@@ -95,6 +100,7 @@ function parseBackup(body: string): ParsedFile {
       currency,
       initialBalanceMinor: w.initialBalanceMinor,
       archived: w.archived,
+      ...(group === undefined ? {} : { group }),
       key: walletKey(name, currency),
     });
   });

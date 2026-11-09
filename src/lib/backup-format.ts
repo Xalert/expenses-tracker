@@ -41,6 +41,8 @@ export const backupWalletSchema = z.object({
   initialBalanceMinor: safeInt,
   initialBalance: decimal.optional(),
   archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
+  /** Optional: the name of the wallet group the wallet belongs to (added after version 1 shipped; old files lack it). */
+  group: text.nullable().optional(),
 });
 
 export const backupCategorySchema = z.object({

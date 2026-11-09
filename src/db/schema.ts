@@ -45,6 +45,19 @@ export const sessions = sqliteTable(
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
+export const walletGroups = sqliteTable(
+  "wallet_groups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("wallet_groups_user_idx").on(t.userId)],
+);
+
 export const wallets = sqliteTable(
   "wallets",
   {
@@ -52,6 +65,9 @@ export const wallets = sqliteTable(
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    groupId: integer("group_id")
+      .notNull()
+      .references(() => walletGroups.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     currency: text("currency").notNull(),
     initialBalanceMinor: integer("initial_balance_minor").notNull().default(0),
@@ -60,6 +76,7 @@ export const wallets = sqliteTable(
   },
   (t) => [
     index("wallets_user_idx").on(t.userId),
+    index("wallets_group_idx").on(t.groupId),
     check("wallets_currency_len", sql`length(${t.currency}) = 3`),
   ],
 );
@@ -131,6 +148,7 @@ export const transactions = sqliteTable(
 );
 
 export type User = typeof users.$inferSelect;
+export type WalletGroup = typeof walletGroups.$inferSelect;
 export type Wallet = typeof wallets.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type Transfer = typeof transfers.$inferSelect;

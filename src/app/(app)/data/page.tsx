@@ -5,11 +5,15 @@ import { ImportPanel } from "@/components/data/import-panel";
 import { DownloadIcon } from "@/components/shell/icons";
 import { Card, PageHeader, buttonClasses } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { getGroupScope } from "@/lib/group-scope";
 
 export const metadata: Metadata = { title: "Import & export" };
 
 export default async function DataPage() {
   await requireUser();
+  const { groups, selected } = await getGroupScope();
+  // Where an import puts new wallets: the selected group, else the oldest one (the default group).
+  const target = selected ?? groups.reduce<(typeof groups)[number] | null>((a, g) => (!a || g.id < a.id ? g : a), null);
   return (
     <>
       <PageHeader
@@ -48,7 +52,7 @@ export default async function DataPage() {
             </ul>
           </Card>
         </section>
-        <ImportPanel />
+        <ImportPanel groupCount={groups.length} targetGroup={target?.name ?? null} />
       </div>
     </>
   );

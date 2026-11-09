@@ -57,7 +57,7 @@ this file in the same change and call the deviation out in your final report.
 - **Money** is stored as integer **minor units** (`amountMinor`), never floats. The number of decimals comes
   from the currency (`Intl.NumberFormat(..., {style:'currency', currency}).resolvedOptions().maximumFractionDigits`
   — JPY 0, EUR 2, KWD 3). Stored amounts are always **positive**; the sign comes from the transaction kind.
-- **Wallet** (a.k.a. account): belongs to one user, has a name, one ISO-4217 currency (immutable after
+- **Wallet** (a.k.a. account): belongs to one user and to exactly one **wallet group** (see "Wallet groups"), has a name, one ISO-4217 currency (immutable after
   creation), and an initial balance. `balance = initial + Σ income + Σ transfer_in − Σ expense − Σ transfer_out`.
   A wallet with transactions cannot be deleted, only archived (hidden from pickers and dashboard totals; its
   history stays visible). A wallet with no transactions can be deleted.
@@ -95,7 +95,8 @@ Integer autoincrement primary keys; `createdAt` as integer timestamp; foreign ke
 |---|---|
 | `users` | `id`, `username` (the "user ID": unique, stored lowercased, required), `email` (nullable; unique when present, stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt` |
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
-| `wallets` | `id`, `userId` → users (cascade), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt` |
+| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
+| `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
 | `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `createdAt`; unique (`userId`, `kind`, `name`) |
 | `transfers` | `id`, `userId` → users (cascade), `date`, `note` (nullable), `createdAt` |
 | `transactions` | `id`, `userId` → users (cascade), `walletId` → wallets (restrict), `kind` (`expense`\|`income`\|`transfer_out`\|`transfer_in`), `categoryId` → categories (restrict, null for transfer legs), `amountMinor` (int > 0), `date` (`YYYY-MM-DD`), `note` (nullable), `transferId` → transfers (cascade, null for non-transfers), `createdAt`; indexes on (`userId`, `date`), (`walletId`, `date`), (`transferId`) |
@@ -197,7 +198,9 @@ src/
     (app)/data/                                     # /data import & export page + actions.ts (preview / run import)
   components/ui/                                    # primitives, barrel-exported from "@/components/ui"
   components/transaction-list.tsx                   # shared read-only list of TransactionView rows
-  components/shell/  components/brand.tsx           # app shell pieces (top menu, account menu, Add button, icons)
+  components/shell/  components/brand.tsx           # app shell pieces (top menu, account menu, group switcher, Add button, icons)
+  lib/group-scope.ts  lib/group-cookie.ts           # the selected wallet group (cookie et_group); the cookie name is client-safe
+  components/wallets/groups-card.tsx                # client: the "Groups" card of /wallets
   components/charts/                                # DayBars, RunningLine (redesign)
   components/dashboard/                             # Overview pieces: MonthChart, WalletsCard / LatestCard, MonthSwitcher
   lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
@@ -214,7 +217,7 @@ src/
   components/data/import-panel.tsx                  # client: two-step import UI
   components/data/import-preview.tsx                # the preview card, problems and success banner (no state)
   components/data/copy-context-button.tsx           # client: "Copy to clipboard" for the wallets & categories export
-  server/wallets.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
+  server/wallets.ts  server/wallet-groups.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
   server/users.ts  server/_validate.ts (internal helpers)
 scripts/seed.ts  tests/  drizzle/
@@ -239,7 +242,7 @@ returned form state, then `revalidatePath`/`redirect`.
 Only `registerUser`/`authenticateUser` are async (scrypt). Ids are `number`. Accessing another user's row
 behaves exactly like a missing row: getters return `null`, mutations throw `NOT_FOUND`.
 
-`ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `kind`, `categoryId`, `amount`,
+`ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
 `firstName`, `lastName`, `password`, `moveToCategoryId`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
@@ -611,7 +614,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   brand mark + "Expenses" (links to `/`), then the main menu **Overview · Transactions · Wallets · Categories ·
   Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
   (initials from `user.displayName` in a circle) opening a popover with the display name, the user-ID / email line
-  (see Auth) and Sign out. On narrow screens the bar is two rows: brand + account button, then the menu as a
+  (see Auth) and Sign out. **Group switcher** (only with two or more wallet groups): a select left of the account
+  button, see "Wallet groups". On narrow screens the bar is two rows: brand + account button, then the menu as a
   horizontally scrolling row of pills (no wrapping, no hidden "more" menu). Page content sits in a centred
   container (`max-w-[1240px]`, 32px side padding on desktop, 12–16px on phones).
   **Add button:** a floating pill "+ Add" fixed at the bottom-right of every signed-in page (on phones a 60px round
@@ -650,7 +654,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   `DatePicker` trigger 44px, radius 12px, `--field` background, `--border` border; `PageHeader` title 28px/800.
   Body text is 14px (`text-sm` on `<body>`). `--danger-hover` (only the solid danger button's hover) is kept
   outside the token table: `#9A3A22` / `#FFB8A3`.
-- **/** Overview — empty state as before (create your first wallet / all wallets archived). Otherwise, top to bottom:
+- **/** Overview — empty state as before (create your first wallet / all wallets archived). With a wallet group
+  selected (see "Wallet groups") everything below covers only that group's wallets and the group's name is appended
+  to the heading ("November 2026 · EUR · Business"). Otherwise, top to bottom:
   1. **Month chart card** — heading "November 2026 · EUR" with the month switcher (existing `MonthSwitcher`, the
      month in `?month=`) and the currency switch; the big number is the month's expenses in that currency
      ("€1,401.39 spent so far" for the current month, "spent" for a past one). The chart: one bar per calendar day
@@ -730,7 +736,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       `bg-income` / `bg-transfer`), `transactionLabel`, "Today / Yesterday / 6 Nov · note · wallet", and the signed
       amount (income `text-income`, expense `text-foreground`, transfers `text-transfer`; a cross-currency transfer
       shows only its own leg).
-- **/transactions** — filter chips at the top (month, wallet, type, category; each opens a popover; a search field
+- **/transactions** — (with a wallet group selected the list, totals, strip, currency picker and wallet options are
+  narrowed to it and "Export CSV" carries `group=<id>`; an explicit `wallet` filter wins) filter chips at the top (month, wallet, type, category; each opens a popover; a search field
   for the note text), then the **day strip**, then the list. **The default view is the current month**
   (`?month=YYYY-MM`, with "All time" in the month chip; explicit `from`/`to` still work and override `month`).
   - **Day strip** (only when one month is shown): a bar per day of that month for expenses in one currency — the
@@ -804,7 +811,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     - **Empty states**: no wallets / no transactions at all (as before); a month with nothing in it and no other
       filter: "Nothing in December 2026." with "‹ November 2026" and "All time" buttons; otherwise "No matching
       transactions" + "Clear filters". The chip row shows whenever the user has any transaction.
-- **/wallets** — header with "+ New wallet" (opens the dialog). Active wallets grouped by currency: a group heading
+- **/wallets** — header with "+ New wallet" (opens the dialog). With a wallet group selected only its wallets show;
+  with All and two or more groups the cards sit under one heading per group (by name), and a "Groups" card (rename,
+  delete, "New group") closes the page. Active wallets grouped by currency: a group heading
   (code, currency name, group total) over a grid of cards — name, entry count, balance, this month's change
   (coloured), and a small line of the balance through the month (flat and muted when nothing changed). Cards link
   to `/wallets/<id>`. Below, an "Archived" list (name, currency, entry count, balance, an Unarchive button).
@@ -1002,7 +1011,8 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 
 - **Backup (JSON)** — the whole account, lossless: `{ app: "expenses-tracker", version: 1, exportedAt, wallets[],
   categories[], transactions[], transfers[] }`. Wallets carry name, currency, initial balance and archived flag;
-  categories name + kind; transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
+  an optional `group` (the wallet group's name; absent in files written before wallet groups, and the version stays
+  1); categories name + kind; transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
@@ -1020,7 +1030,7 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   Both require a session (401 otherwise — route handlers are not covered by the `(app)` layout), are scoped to
   the signed-in user, and answer with `Content-Disposition: attachment` and `Cache-Control: no-store`.
 - The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category, from, to,
-  q) and exports **all** matching rows (no pagination). `/transactions` gets an "Export CSV" action that carries
+  q) and `group` (a wallet group id, ignored when `wallet` is given; the CSV itself has no group column) and exports **all** matching rows (no pagination). `/transactions` gets an "Export CSV" action that carries
   its current filters. Since step 4 it also takes `month=YYYY-MM`; unlike the list, a missing `month` (or
   `month=all`) means all time, so the list's link always writes out the month it shows (`exportCsvHref`) and a bare
   `/api/export/transactions` still exports everything.
@@ -1050,6 +1060,8 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   - Wallets are matched by name + currency (ignoring case); a missing wallet is created (CSV: initial balance 0;
     backup: the file's initial balance and archived flag). An existing wallet's name, initial balance and archived
     state are left untouched. The same name with a different currency is a different wallet.
+  - A wallet that an import creates goes into the target group (see "Wallet groups"); a backup's `group` names its
+    group instead (created when missing).
   - Categories are matched by kind + name (ignoring case); missing ones are created.
   - **Duplicates are skipped by default** (checkbox "Skip transactions that already exist", on): entries are
     compared on (wallet, kind, category, date, amount, note) — transfers on (from, to, date, both amounts, note) —
@@ -1202,7 +1214,8 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
 
 ### Screen
 
-- **/data** ("Import & export") — an Export card (backup JSON, transactions CSV, wallets & categories JSON with a
+- **/data** ("Import & export") — (new wallets go into the selected wallet group; from two groups the panel says which
+  and the preview names the group of each new wallet and lists groups to create) an Export card (backup JSON, transactions CSV, wallets & categories JSON with a
   Copy button, one sentence each on what it is for) and an Import card (file picker, the duplicate checkbox, preview summary, confirm). After a successful
   import: a summary of what was added and links to the dashboard and transactions. Reachable from the top menu
   ("Import & export", the fifth item). Redesign layout: "Export" and "Import" side by side from `lg` up; each export
@@ -1342,6 +1355,174 @@ type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; dat
     the service rules apply. Unknown fields are ignored; `version` ≠ 1 is rejected with a message (newer vs unknown).
   - The CSV export lists rows oldest first; a transfer is included when either leg matches the filters (so a wallet
     filter includes transfers into it) and appears once.
+
+## Wallet groups
+
+Purpose: keep personal and business money apart in one account and look at each part on its own. Decided
+2026-11-09 with the owner: **wallet groups** (not separate books), **user-defined** groups, **shared categories**.
+
+### Rules
+
+- A **wallet group** belongs to one user and has a name (same rules as other names: `normalizeName`, 1–40
+  characters) that is unique per user **ignoring case**. Every wallet belongs to exactly one group
+  (`wallets.group_id`, NOT NULL).
+- **Every user has at least one group.** Registration creates the group `Personal`; the migration creates
+  `Personal` for every existing user and puts all their wallets in it. The **default group** is the user's oldest
+  group (lowest id); it is where a wallet goes when nobody chose a group (service default, import).
+- Groups can be created, renamed and deleted. Only an **empty** group (no wallets, archived ones included) can be
+  deleted, and never the user's last group (CONFLICT, with a message that says what to do: move or delete the
+  wallets first). There is no archive state for groups.
+- A wallet's group can be changed at any time (wallet edit form); it moves the wallet with all its history.
+  Nothing else about a transaction depends on the group.
+- **Categories stay shared** by all groups. **Transfers between groups are allowed** (a business wallet paying a
+  personal one) and are ordinary transfers.
+- Groups do **not** change any balance or total rule; they only narrow which wallets a view looks at.
+
+### Selecting a group (the scope)
+
+- The top bar shows a **group switcher** next to the account menu, **only when the user has two or more groups**:
+  "All groups", then each group by name. With one group nothing in the interface changes (no switcher, no group
+  field, no headings).
+- The choice is stored in the cookie `et_group` (the group id; no cookie, an empty value, or an id that is not one
+  of the user's groups means **All**). `httpOnly`, `sameSite=lax`, `secure` like the session cookie
+  (`shouldUseSecureCookie`), `path=/`, one year. Set by `selectGroupAction` (`src/app/(app)/actions.ts`), which
+  then calls `revalidatePath("/", "layout")` and goes back to the page it came from (`returnTo` through
+  `safeReturnTo`). Works without JavaScript (a form with a submit button; with JavaScript the select submits on
+  change and the button is visually hidden).
+- `getGroupScope(): Promise<{ groups: WalletGroupView[]; selected: WalletGroupView | null }>` in
+  `src/lib/group-scope.ts` (server-only, React `cache`, calls `requireUser()`) is the one place that reads the cookie.
+  Pages pass `selected?.id` to the services as `groupId`.
+
+What the scope narrows:
+
+| place | with a group selected |
+|---|---|
+| Overview | wallets card, totals, month chart, insights, latest entries, the "All in <currency>" conversion and the currency list: only wallets of the group. The page title area names the group. |
+| Transactions | the list, day totals, the month strip, the currency picker and the wallet filter's options: only the group's wallets. **An explicit `wallet` filter wins**: `?wallet=<id>` shows that wallet even when it is in another group. The CSV export link carries the same filters and also `group=<id>`. |
+| Wallets | only the group's wallets (active and archived). With **All** and two or more groups, the cards are shown under one heading per group (group order: by name). |
+| Categories | the usage counts and month totals count only the group's wallets. The list of categories itself is not narrowed. |
+| Add / edit entry, wallet pickers | **not narrowed**: every active wallet is offered (with two or more groups, in one `<optgroup>` per group), so a cross-group transfer is possible. The default wallet of a new entry is the first active wallet of the selected group, if it has one. |
+| Wallet page `/wallets/[id]`, edit pages | not narrowed (they show one wallet / entry). |
+| Exports | backup and context export: always the whole account. Transactions CSV: narrowed only by an explicit `group` query parameter. |
+
+### Data model
+
+| table | columns |
+|---|---|
+| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` |
+| `wallets` | + `groupId` → wallet_groups (**restrict**), NOT NULL; index on `groupId` |
+
+Migration `drizzle/0002_*` (hand-checked, it rebuilds `wallets`): create `wallet_groups`; insert one `Personal`
+group per existing user; rebuild `wallets` with `group_id` set to that user's group; every wallet, transaction,
+transfer and id is kept unchanged. A test in `tests/migrations.test.ts` applies it to a populated 0001 database and
+checks that nothing was lost and every wallet has its owner's group.
+
+### Services
+
+`src/server/wallet-groups.ts`: `WalletGroupView = { id; name; walletCount; createdAt }`;
+`listWalletGroups(userId): WalletGroupView[]` (by name, case-insensitive, then id);
+`getWalletGroup(userId, groupId): WalletGroupView | null`; `getDefaultGroupId(userId, tx?): number`;
+`createWalletGroup(userId, { name })`; `renameWalletGroup(userId, groupId, { name })`;
+`deleteWalletGroup(userId, groupId): void`; `seedDefaultGroup(userId, tx?)` (used by `registerUser`);
+internal `getOwnedGroupRow(userId, groupId, tx?, field = "groupId")`. Errors use the fields `name` and `groupId`.
+
+Changes to existing services (all `groupId` options are optional; omitted = all groups; a group of another user
+behaves like an empty group — no rows, never an error, except in mutations, which throw NOT_FOUND on `groupId`):
+
+- `WalletView` gets `groupId` and `groupName`. `listWallets(userId, { includeArchived?, groupId? })`.
+- `createWallet(userId, { name, currency, initialBalanceMinor, groupId? })` (omitted → default group);
+  `updateWallet(userId, walletId, { name, initialBalanceMinor, groupId? })` (omitted → unchanged).
+- `TransactionFilters.groupId?`, used by `listTransactions`, `listDayTotals`, `filterConditions` and the CSV
+  export; ignored when `walletId` is set.
+- `getDashboard(userId, { month?, groupId? })`; `getMonthTimeline` / `getMonthInsights` opts `groupId?`
+  (ignored when `walletId` is set); `listUserCurrencies(userId, { groupId? })`; `pickDefaultCurrency(userId, month,
+  { groupId? })`; `listCategoriesWithUsage(..., { groupId? })` (keep the existing parameters, add the option).
+- Import: a wallet created by an import goes into the target group — `previewImport` / `runImport` take an optional
+  `groupId` (the selected scope; omitted → default group), validated as owned. The preview's "wallets to create"
+  says which group. Backup JSON stays `version: 1` and gains an **optional** `group` (name) per wallet: the export
+  writes it; the import puts a created wallet into the group of that name (matched ignoring case; created if
+  missing and listed in the preview as a group to create), else into the target group. Existing wallets are never
+  moved by an import.
+- `registerUser` seeds `Personal` in the same DB transaction as the categories. The demo data
+  (`src/server/maintenance.ts`) has two groups, `Personal` and `Business`, with at least one business wallet
+  and some business entries plus one transfer between the groups.
+
+As built (step 1, data model and services):
+
+- Migration `0002_wallet_groups.sql` creates the groups with `created_at = unixepoch()`. A wallet whose owner row
+  is missing has no group to get, so the NOT NULL fails and the whole migration rolls back (the runner's
+  pre-migration copy is the way back) instead of the wallet being dropped.
+- `getWalletGroup` returns `null` for a non-numeric id (never throws); the mutations throw NOT_FOUND on `groupId`.
+  `listWalletGroups` counts archived wallets in `walletCount`.
+- Group narrowing is a condition on `wallets.group_id` (joined) or, in `filterConditions` and
+  `listCategoriesWithUsage`, a subquery `wallet_id in (select id from wallets where group_id = ? and user_id = ?)`.
+  `listCategoriesWithUsage` puts it in the join on transactions, so categories without matching entries still
+  appear with zeros. An invalid (non-positive) `groupId` is VALIDATION on `groupId`; an id of another user
+  is just empty.
+- `getMonthTimeline` takes `groupId` (ignored when `walletId` is set); `getMonthInsights` takes `groupId` and no
+  `walletId`. `getWalletMonth` is per wallet and unchanged. `getDashboard`'s `recent` list is narrowed too.
+- Import: `ImportOptions.groupId`. `ImportPreview.walletsToCreate[]` gained `group` (name of its target group) and
+  the preview gained `groupsToCreate: string[]` (groups only a backup can name, in file order). A group named by a
+  backup is matched to an existing one ignoring case (the existing spelling is kept); two spellings in one file
+  create one group with the first. `WalletSpec.group` is the normalized name (1–40 characters; a blank `group`
+  counts as absent; too long is a problem on `wallets[i].group`). Only created wallets use the group; wallets that
+  match an existing one never move.
+- The backup writes `group` for every wallet. `GET /api/export/transactions` reads `group` straight from the query
+  string (positive integer, else ignored); `buildTransactionsCsv` just passes `groupId` to `filterConditions`.
+  The context export is unchanged (no groups).
+- The wallets form actions, the switcher and the pages are step 2 (below).
+
+As built (step 2, interface):
+
+- `src/lib/group-scope.ts` exports `getGroupScope`, `parseGroupCookie(value)` (positive integer or null) and
+  re-exports `GROUP_COOKIE` (`"et_group"`), which lives in `src/lib/group-cookie.ts` so client code can import it.
+  `selectGroupAction(formData)` reads `groupId` and `returnTo` (fallback `/`, not `/transactions`), validates the
+  id with `getWalletGroup`, sets the cookie (`maxAge` one year) or deletes it, revalidates, redirects.
+- `GroupSwitcher` is a client component (it needs `usePathname` / `useSearchParams` for `returnTo`); the layout
+  passes plain `{ id, name }` objects. Before hydration the submit button ("Go") is visible; after it the button is
+  `sr-only` and a change submits via `requestSubmit()` (`useSyncExternalStore` tells the two apart). The select is
+  keyed on the selection. `returnTo` drops the `page` and `wallet` query parameters: a new group starts on page 1,
+  and a `wallet` filter would override the new group (an explicit wallet wins).
+- Overview: the group name is appended to the small heading ("November 2026 · EUR · Business"); with a group that has
+  no wallets the empty state reads "No wallets in <name>" under the group's name as the title. Wallets and Transactions
+  also say so in their empty states / descriptions; Categories says in its description whose amounts these are.
+- Transactions: `anyAtAll` is scoped too, so an empty group shows "No transactions yet" rather than "No matching".
+  The inline row editor gets every wallet (`toWalletOptions`), not the narrowed filter options. `exportCsvHref(params,
+  thisMonth, groupId?)` appends `group=<id>`.
+- Entry pickers: `WalletOption.groupName` is set only with two or more groups; the transfer From / To selects render
+  one `<optgroup>` per group (ordered by group name). The expense / income picker is a row of pills, which cannot be
+  grouped, so each pill gets the group name as a muted suffix ("Till · Business"). `walletOptions` / `toWalletOptions`
+  live in `transactions/form-options.ts`. `NewEntry` is async: a `wallet` search parameter wins, else the first active
+  wallet of the selected group (by name), else the form's own default.
+- Wallet form: `WalletForm` takes `groups` and `defaults.groupId`; the select is required and echoed after an error
+  (the fields remount on every result, so `defaultValue` is applied). The parsers read an optional `groupId`: absent or
+  empty → undefined, not a positive integer → field error "Choose a group.", an unknown / foreign id → the service's
+  NOT_FOUND on `groupId`. `NewWallet` and `EditWallet` are async server components (they read the scope).
+- Groups card (`components/wallets/groups-card.tsx`, client): rows are `ExpandableRow`s with the name and "N wallets";
+  the panel renames in place and offers "Delete <name>" (a `confirm()`) only for an empty group that is not the last,
+  otherwise it says why not. Actions: `createGroupAction(prev, formData)`, `renameGroupAction(groupId, prev, formData)`,
+  `deleteGroupAction(groupId)`, all `revalidatePath("/", "layout")`, success messages "Added the group “X”." /
+  "Renamed to “X”." / "Deleted the group “X”.". No new route, so no new `@modal` page.
+- Import: `previewImportAction` / `runImportAction` set `opts.groupId` from the scope. `ImportPanel` takes `groupCount`
+  and `targetGroup` (the selected group, else the oldest) and, from two groups, says where created wallets go.
+  `PreviewCard` takes `groupCount`: a created wallet is shown "Till · EUR in Business" from two groups or when a group
+  is created; "New groups: …" is listed whenever `groupsToCreate` is non-empty and counts as something to import.
+
+### Screens
+
+- **Group switcher** (`src/components/shell/group-switcher.tsx`): described above. Label "Group" for screen
+  readers; the visible control shows the selected group's name or "All groups".
+- **Wallet form** (new and edit, dialog and full page — change the body components): a "Group" select (field
+  `groupId`) when the user has two or more groups, default = the selected group, else the default group. With one
+  group, no field (the service default applies on create; edit leaves it unchanged).
+- **Wallets page**: a "Groups" card below the wallet cards, always shown (this is where the second group is made):
+  each group with its wallet count, inline rename and delete in the style of the Categories rows (delete only
+  offered when empty and not the last group), and a "New group" input. Group actions live in
+  `src/app/(app)/wallets/actions.ts` and call `revalidatePath("/", "layout")` (the switcher is in the layout).
+- **Overview / Transactions / Categories**: as in the scope table. When a group is selected and it has no
+  wallets, the pages show their normal empty states.
+- **Import** (`/data`): see "Import / export"; new wallets go into the selected group, and from two groups the panel
+  says so and the preview names each wallet's group and the groups to create.
 
 ## Deployment — self-hosted with Docker
 

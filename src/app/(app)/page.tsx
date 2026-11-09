@@ -6,6 +6,7 @@ import { TransactionList } from "@/components/transaction-list";
 import { Card, CardHeader, CurrencySwitch, EmptyState, InsightCard, LinkButton, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
+import { getGroupScope } from "@/lib/group-scope";
 import { currentMonth, formatMonth, isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { convertedTotal } from "@/lib/fx";
 import { formatMoney } from "@/lib/money";
@@ -40,22 +41,32 @@ export default async function OverviewPage({ searchParams }: Props) {
   const maxMonth = currentMonth();
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
-  const data = getDashboard(user.id, { month });
+  const { selected } = await getGroupScope();
+  const groupId = selected?.id;
+  const data = getDashboard(user.id, { month, groupId });
 
-  const held = [...new Set(listWallets(user.id, { includeArchived: true }).map((w) => w.currency))];
+  const held = [...new Set(listWallets(user.id, { includeArchived: true, groupId }).map((w) => w.currency))];
   const { currency, explicit } =
     data.wallets.length === 0
       ? { currency: null, explicit: false }
-      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month));
+      : resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, month, { groupId }));
 
   if (currency === null) {
     return (
       <>
-        <PageHeader title={`Welcome, ${user.displayName}`} />
+        <PageHeader
+          title={selected ? selected.name : `Welcome, ${user.displayName}`}
+        />
         <Card>
           <EmptyState
             icon={<WalletIcon className="size-8" />}
-            title={data.recent.length ? "No active wallets" : "Create your first wallet"}
+            title={
+              data.recent.length
+                ? "No active wallets"
+                : selected
+                  ? `No wallets in ${selected.name}`
+                  : "Create your first wallet"
+            }
             description={
               data.recent.length
                 ? "All your wallets are archived. Create a new one or unarchive one from the Wallets page."
@@ -94,8 +105,8 @@ export default async function OverviewPage({ searchParams }: Props) {
   const convertMonth = view === "all" && canSwitchView;
   const dailyRates = convertMonth ? await getDailyRates(monthRange(previousMonth).from, monthRange(month).to) : null;
   const convert = convertMonth ? { rates: dailyRates } : undefined;
-  const timeline = getMonthTimeline(user.id, { month, currency, convert });
-  const insights = getMonthInsights(user.id, { month, currency, convert });
+  const timeline = getMonthTimeline(user.id, { month, currency, convert, groupId });
+  const insights = getMonthInsights(user.id, { month, currency, convert, groupId });
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
   const monthMissing = [
     ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
@@ -138,7 +149,7 @@ export default async function OverviewPage({ searchParams }: Props) {
     changes.set(w.id, m ? m.inMinor - m.outMinor : 0);
   }
 
-  const activeCurrencies = listUserCurrencies(user.id);
+  const activeCurrencies = listUserCurrencies(user.id, { groupId });
   const pace = paceSummary({ ...insights.pace, previousMonth, isCurrentMonth });
   const previousName = monthName(previousMonth);
   const { noSpendDays: noSpend, topCategory } = insights;
@@ -153,6 +164,7 @@ export default async function OverviewPage({ searchParams }: Props) {
           <div className="min-w-0">
             <h1 id="overview-heading" className="text-sm font-semibold text-muted-foreground">
               {formatMonth(month)} · {currency}
+              {selected && ` · ${selected.name}`}
             </h1>
             <p className="mt-1.5 text-[34px] leading-none font-extrabold tracking-[-0.03em] text-foreground tabular-nums sm:text-[42px]">
               {money(insights.expenseMinor)}{" "}

@@ -32,7 +32,15 @@ function browserTimeZone(): string {
  * preview, so what is confirmed is always what was previewed. Several files are one import. Files come from the
  * (visually hidden, label-wrapped) file input or are dropped on the drop area; both just replace the selection.
  */
-export function ImportPanel() {
+export function ImportPanel({
+  groupCount = 1,
+  targetGroup = null,
+}: {
+  /** How many wallet groups the user has. */
+  groupCount?: number;
+  /** The group new wallets go into (the selected one, else the default group); shown from two groups. */
+  targetGroup?: string | null;
+}) {
   const [files, setFiles] = useState<File[]>([]);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [unpairedAsEntries, setUnpairedAsEntries] = useState(false);
@@ -256,6 +264,14 @@ export function ImportPanel() {
           </div>
         </div>
 
+        {groupCount >= 2 && targetGroup && (
+          <p className="text-xs text-muted-foreground">
+            Wallets created by an import go into{" "}
+            <strong className="font-semibold text-foreground">{targetGroup}</strong>; choose another group in the top
+            bar first to change that. A backup can name its own groups.
+          </p>
+        )}
+
         <div>
           <Button
             variant={preview?.ok && !imported ? "secondary" : "primary"}
@@ -277,6 +293,7 @@ export function ImportPanel() {
             {!imported && preview && (
               <PreviewCard
                 preview={preview}
+                groupCount={groupCount}
                 option={unpairedOption}
                 actions={
                   preview.ok ? (

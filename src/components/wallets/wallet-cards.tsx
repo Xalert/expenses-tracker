@@ -92,20 +92,26 @@ export function WalletGroup({
   currency,
   wallets,
   months,
+  idPrefix = "",
+  as: Heading = "h2",
 }: {
   currency: string;
   wallets: WalletView[];
   months: Map<number, WalletCardMonth>;
+  /** Keeps heading ids unique when the same currency is listed under several groups. */
+  idPrefix?: string;
+  /** The heading element: `h3` under a group's own `h2`. */
+  as?: "h2" | "h3";
 }) {
   const total = wallets.reduce((sum, w) => sum + w.balanceMinor, 0);
-  const headingId = `wallets-${currency}`;
+  const headingId = `wallets-${idPrefix}${currency}`;
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1">
-        <h2 id={headingId} className="flex min-w-0 items-baseline gap-2">
+        <Heading id={headingId} className="flex min-w-0 items-baseline gap-2">
           <span className="text-[15px] font-extrabold text-foreground">{currency}</span>
           <span className="truncate text-sm text-muted-foreground">{currencyName(currency)}</span>
-        </h2>
+        </Heading>
         <p className={cn("text-[15px] font-bold tabular-nums", total < 0 ? "text-expense" : "text-foreground")}>
           <span className="sr-only">Total in {currency}: </span>
           {formatMoney(total, currency)}

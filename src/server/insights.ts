@@ -96,13 +96,14 @@ export function monthDayN(month: string, today: string = todayISO()): number {
   return month < current ? monthLength(month) : 0;
 }
 
-type Narrow = { walletId?: number; categoryId?: number };
+type Narrow = { walletId?: number; groupId?: number; categoryId?: number };
 
 /** Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. */
 function currencyConditions(userId: number, currency: string | null, narrow: Narrow = {}): SQL[] {
   const conds: SQL[] = [eq(transactions.userId, userId), eq(wallets.userId, userId)];
   if (currency !== null) conds.push(eq(wallets.currency, currency));
   if (narrow.walletId !== undefined) conds.push(eq(transactions.walletId, narrow.walletId));
+  else if (narrow.groupId !== undefined) conds.push(eq(wallets.groupId, narrow.groupId));
   if (narrow.categoryId !== undefined) conds.push(eq(transactions.categoryId, narrow.categoryId));
   return conds;
 }
@@ -172,11 +173,17 @@ const expenseOn = (flows: Map<string, { expenseMinor: number }>, date: string) =
 // Currencies
 
 /** Currencies of the user's active wallets, by code. */
-export function listUserCurrencies(userId: number): string[] {
+export function listUserCurrencies(userId: number, opts: { groupId?: number } = {}): string[] {
   return getDb()
     .selectDistinct({ currency: wallets.currency })
     .from(wallets)
-    .where(and(eq(wallets.userId, userId), isNull(wallets.archivedAt)))
+    .where(
+      and(
+        eq(wallets.userId, userId),
+        isNull(wallets.archivedAt),
+        opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId),
+      ),
+    )
     .orderBy(asc(wallets.currency))
     .all()
     .map((r) => r.currency);
@@ -187,9 +194,10 @@ export function listUserCurrencies(userId: number): string[] {
  * the most, or when the month has none: the currency of the active wallet with the most transactions overall
  * (then by code). No active wallets then → null. The result can be a currency held only in archived wallets.
  */
-export function pickDefaultCurrency(userId: number, month: string): string | null {
+export function pickDefaultCurrency(userId: number, month: string, opts: { groupId?: number } = {}): string | null {
   const { from, to } = monthRange(assertMonth(month));
   const db = getDb();
+  const inGroup = opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId);
   const busiest = db
     .select({ currency: wallets.currency, n: count() })
     .from(transactions)
@@ -198,6 +206,7 @@ export function pickDefaultCurrency(userId: number, month: string): string | nul
       and(
         eq(transactions.userId, userId),
         eq(wallets.userId, userId),
+        inGroup,
         inArray(transactions.kind, ["expense", "income"]),
         gte(transactions.date, from),
         lte(transactions.date, to),
@@ -213,7 +222,7 @@ export function pickDefaultCurrency(userId: number, month: string): string | nul
     .select({ currency: wallets.currency, n: count(transactions.id) })
     .from(wallets)
     .leftJoin(transactions, eq(transactions.walletId, wallets.id))
-    .where(and(eq(wallets.userId, userId), isNull(wallets.archivedAt)))
+    .where(and(eq(wallets.userId, userId), isNull(wallets.archivedAt), inGroup))
     .groupBy(wallets.id)
     .orderBy(desc(count(transactions.id)), asc(wallets.currency))
     .limit(1)
@@ -230,12 +239,21 @@ export function pickDefaultCurrency(userId: number, month: string): string | nul
  */
 export function getMonthTimeline(
   userId: number,
-  opts: { month: string; currency: string; walletId?: number; categoryId?: number; convert?: ConvertOption },
+  opts: {
+    month: string;
+    currency: string;
+    walletId?: number;
+    /** Only wallets of this group; ignored when `walletId` is set. */
+    groupId?: number;
+    categoryId?: number;
+    convert?: ConvertOption;
+  },
 ): MonthTimeline {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
   const narrow: Narrow = {};
   if (opts.walletId !== undefined) narrow.walletId = assertId(opts.walletId, "walletId", "wallet");
+  if (opts.groupId !== undefined) narrow.groupId = assertId(opts.groupId, "groupId", "group");
   if (opts.categoryId !== undefined) narrow.categoryId = assertId(opts.categoryId, "categoryId", "category");
 
   const previous = shiftMonth(month, -1);
@@ -311,14 +329,15 @@ export function getMonthTimeline(
 /** The Overview insight cards for one month and currency (with `convert`: every currency, converted). */
 export function getMonthInsights(
   userId: number,
-  opts: { month: string; currency: string; convert?: ConvertOption },
+  opts: { month: string; currency: string; groupId?: number; convert?: ConvertOption },
 ): MonthInsights {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
   const previous = shiftMonth(month, -1);
   const { from, to } = monthRange(month);
   const { convert } = opts;
-  const { byDate: flows, missing } = dailyFlows(userId, currency, monthRange(previous).from, to, {}, convert);
+  const narrow: Narrow = opts.groupId === undefined ? {} : { groupId: assertId(opts.groupId, "groupId", "group") };
+  const { byDate: flows, missing } = dailyFlows(userId, currency, monthRange(previous).from, to, narrow, convert);
 
   const dates = monthDates(month);
   const previousDates = monthDates(previous);
@@ -336,7 +355,7 @@ export function getMonthInsights(
   const countNoSpend = (ds: string[]) => ds.filter((d) => expenseOn(flows, d) === 0).length;
 
   const inMonthExpenses = and(
-    ...currencyConditions(userId, convert ? null : currency),
+    ...currencyConditions(userId, convert ? null : currency, narrow),
     eq(transactions.kind, "expense"),
     gte(transactions.date, from),
     lte(transactions.date, to),

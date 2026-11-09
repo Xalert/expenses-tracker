@@ -21,7 +21,7 @@ export function entriesToImport(p: ImportPreview): number {
 
 /** Whether confirming would change anything (entries, or only new wallets / categories). */
 export function hasSomethingToImport(p: ImportPreview): boolean {
-  return entriesToImport(p) + p.walletsToCreate.length + p.categoriesToCreate.length > 0;
+  return entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length > 0;
 }
 
 export function importLabel(p: ImportPreview): string {
@@ -39,8 +39,11 @@ export function PreviewCard({
   preview: p,
   option,
   actions,
+  groupCount = 1,
 }: {
   preview: ImportPreview;
+  /** How many wallet groups the user has; the groups of new wallets are named from two (or when groups are created). */
+  groupCount?: number;
   /** The "unpaired transfers" checkbox, when it applies. */
   option?: ReactNode;
   /** Cancel + "Import N entries"; shown unless there is nothing to import. */
@@ -48,6 +51,7 @@ export function PreviewCard({
 }) {
   if (!p.ok) return <ProblemCard preview={p} option={option} />;
 
+  const showGroups = groupCount >= 2 || p.groupsToCreate.length > 0;
   const duplicates = p.duplicateTransactions + p.duplicateTransfers;
   const formats = new Set(p.files.filter((f) => !f.duplicateOf).map((f) => f.format));
   const categoryKinds = new Map<string, Set<string>>();
@@ -79,7 +83,19 @@ export function PreviewCard({
                 <strong className="font-semibold text-foreground">
                   {w.name} · {w.currency}
                 </strong>
+                {showGroups && <> in {w.group}</>}
                 {w.archived && " (archived)"}
+              </span>
+            ))}
+          </p>
+        )}
+        {p.groupsToCreate.length > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            New groups:{" "}
+            {p.groupsToCreate.map((g, i) => (
+              <span key={i}>
+                {i > 0 && ", "}
+                <strong className="font-semibold text-foreground">{g}</strong>
               </span>
             ))}
           </p>
@@ -304,6 +320,7 @@ export function ImportSuccess({ result: r }: { result: ImportPreview }) {
             ` from ${plural(r.files.length, "file", "files")}`
           ) : null}
           .{r.walletsToCreate.length > 0 && ` Created ${plural(r.walletsToCreate.length, "wallet", "wallets")}.`}
+          {r.groupsToCreate.length > 0 && ` Created ${plural(r.groupsToCreate.length, "group", "groups")}.`}
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}

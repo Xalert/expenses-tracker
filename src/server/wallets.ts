@@ -1,13 +1,16 @@
 import "server-only";
 import { and, asc, eq, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { transactions, wallets, type Wallet } from "@/db/schema";
+import { transactions, walletGroups, wallets, type Wallet } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
 import { ServiceError } from "@/lib/errors";
 import { assertId, normalizeName } from "./_validate";
+import { getDefaultGroupId, getOwnedGroupRow } from "./wallet-groups";
 
 export type WalletView = {
   id: number;
+  groupId: number;
+  groupName: string;
   name: string;
   currency: string;
   initialBalanceMinor: number;
@@ -26,6 +29,8 @@ function selectWalletViews(userId: number, extra?: SQL) {
   return getDb()
     .select({
       id: wallets.id,
+      groupId: wallets.groupId,
+      groupName: walletGroups.name,
       name: wallets.name,
       currency: wallets.currency,
       initialBalanceMinor: wallets.initialBalanceMinor,
@@ -35,14 +40,21 @@ function selectWalletViews(userId: number, extra?: SQL) {
       createdAt: wallets.createdAt,
     })
     .from(wallets)
+    .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
     .leftJoin(transactions, eq(transactions.walletId, wallets.id))
     .where(extra ? and(eq(wallets.userId, userId), extra) : eq(wallets.userId, userId))
     .groupBy(wallets.id);
 }
 
 /** The user's wallets with balances: active first, then archived, each by name. Archived excluded unless asked. */
-export function listWallets(userId: number, opts: { includeArchived?: boolean } = {}): WalletView[] {
-  const q = selectWalletViews(userId, opts.includeArchived ? undefined : sql`${wallets.archivedAt} is null`);
+export function listWallets(
+  userId: number,
+  opts: { includeArchived?: boolean; groupId?: number } = {},
+): WalletView[] {
+  const conds: SQL[] = [];
+  if (!opts.includeArchived) conds.push(sql`${wallets.archivedAt} is null`);
+  if (opts.groupId !== undefined) conds.push(eq(wallets.groupId, opts.groupId));
+  const q = selectWalletViews(userId, conds.length ? and(...conds) : undefined);
   return q
     .orderBy(sql`${wallets.archivedAt} is not null`, sql`${wallets.name} collate nocase`, asc(wallets.id))
     .all();
@@ -73,36 +85,45 @@ function assertInitialBalance(value: unknown): number {
 
 export function createWallet(
   userId: number,
-  input: { name: string; currency: string; initialBalanceMinor: number },
+  input: { name: string; currency: string; initialBalanceMinor: number; groupId?: number },
 ): WalletView {
   const name = normalizeName(input.name);
   const currency = typeof input.currency === "string" ? input.currency.trim().toUpperCase() : "";
   if (!isValidCurrency(currency)) throw new ServiceError("VALIDATION", "Choose a valid currency.", "currency");
   const initialBalanceMinor = assertInitialBalance(input.initialBalanceMinor ?? 0);
 
-  const row = getDb()
-    .insert(wallets)
-    .values({ userId, name, currency, initialBalanceMinor })
-    .returning({ id: wallets.id })
-    .get();
+  const row = getDb().transaction((tx) => {
+    const groupId =
+      input.groupId === undefined
+        ? getDefaultGroupId(userId, tx)
+        : getOwnedGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx).id;
+    return tx
+      .insert(wallets)
+      .values({ userId, groupId, name, currency, initialBalanceMinor })
+      .returning({ id: wallets.id })
+      .get();
+  });
   return getWallet(userId, row.id)!;
 }
 
-/** Update name and initial balance. The currency is immutable. */
+/** Update name, initial balance and (when given) group. The currency is immutable. */
 export function updateWallet(
   userId: number,
   walletId: number,
-  input: { name: string; initialBalanceMinor: number },
+  input: { name: string; initialBalanceMinor: number; groupId?: number },
 ): WalletView {
   assertId(walletId, "walletId", "wallet");
   getOwnedWalletRow(userId, walletId);
   const name = normalizeName(input.name);
   const initialBalanceMinor = assertInitialBalance(input.initialBalanceMinor);
-  getDb()
-    .update(wallets)
-    .set({ name, initialBalanceMinor })
-    .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)))
-    .run();
+  getDb().transaction((tx) => {
+    const groupId =
+      input.groupId === undefined ? undefined : getOwnedGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx).id;
+    tx.update(wallets)
+      .set({ name, initialBalanceMinor, ...(groupId === undefined ? {} : { groupId }) })
+      .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)))
+      .run();
+  });
   return getWallet(userId, walletId)!;
 }
 

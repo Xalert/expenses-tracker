@@ -19,7 +19,7 @@ import { createTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
-const DEMO_COUNTS = { users: 1, sessions: 0, wallets: 5, categories: 8, transfers: 3, transactions: 34 };
+const DEMO_COUNTS = { users: 1, sessions: 0, wallet_groups: 2, wallets: 6, categories: 8, transfers: 4, transactions: 42 };
 
 function counts(db: DB) {
   return Object.fromEntries(countRows(db).map((t) => [t.table, t.rows]));
@@ -36,7 +36,7 @@ describe("maintenance", () => {
   });
 
   it("lists the app tables but not the migrations table", () => {
-    expect(appTables(db)).toEqual(["categories", "sessions", "transactions", "transfers", "users", "wallets"]);
+    expect(appTables(db)).toEqual(["categories", "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"]);
   });
 
   it("wipes every row, keeps foreign keys on and resets the autoincrement counters", () => {
@@ -47,7 +47,7 @@ describe("maintenance", () => {
     expect(sequence(db).length).toBeGreaterThan(0);
 
     const removed = Object.fromEntries(wipeAllData(db).map((t) => [t.table, t.rows]));
-    expect(removed).toMatchObject({ users: 1, wallets: 2, categories: 8, transfers: 1, transactions: 2 });
+    expect(removed).toMatchObject({ users: 1, wallet_groups: 1, wallets: 2, categories: 8, transfers: 1, transactions: 2 });
 
     expect(Object.values(counts(db)).every((n) => n === 0)).toBe(true);
     expect(db.$client.pragma("foreign_keys", { simple: true })).toBe(1);
@@ -72,7 +72,7 @@ describe("maintenance", () => {
     expect(second.userId).toBe(1);
     expect(counts(db)).toEqual(DEMO_COUNTS);
     const walletIds = db.$client.prepare("SELECT id FROM wallets ORDER BY id").pluck().all();
-    expect(walletIds).toEqual([1, 2, 3, 4, 5]);
+    expect(walletIds).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it("refuses under NODE_ENV=production only", () => {

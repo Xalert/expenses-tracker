@@ -2,15 +2,18 @@ import Link from "next/link";
 import { BrandMark } from "@/components/brand";
 import { AccountMenu } from "@/components/shell/account-menu";
 import { AddButton } from "@/components/shell/add-button";
+import { GroupSwitcher } from "@/components/shell/group-switcher";
 import { MainMenu } from "@/components/shell/nav";
 import { NewEntryShortcut } from "@/components/shell/new-entry-shortcut";
 import { requireUser } from "@/lib/auth";
+import { getGroupScope } from "@/lib/group-scope";
 
 /** Side padding shared by the top bar and the page container (16px on phones, 32px from `lg`). */
 const GUTTER = "px-4 sm:px-6 lg:px-8";
 
 export default async function AppLayout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }) {
   const user = await requireUser();
+  const scope = await getGroupScope();
 
   return (
     <div className="min-h-dvh">
@@ -25,7 +28,8 @@ export default async function AppLayout({ children, modal }: { children: React.R
             <span className="sm:max-md:sr-only">Expenses</span>
           </Link>
           <MainMenu className="order-last w-full sm:order-none sm:w-auto sm:flex-1" />
-          <div className="ml-auto sm:ml-0">
+          <div className="ml-auto flex items-center gap-2 sm:ml-0">
+            <GroupSwitcher groups={scope.groups.map(({ id, name }) => ({ id, name }))} selectedId={scope.selected?.id ?? null} />
             <AccountMenu displayName={user.displayName} username={user.username} email={user.email} />
           </div>
         </div>

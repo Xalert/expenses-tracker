@@ -15,6 +15,13 @@
       "when": 1793901929217,
       "tag": "0001_user_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794239616627,
+      "tag": "0002_wallet_groups",
+      "breakpoints": true
     }
   ]
 }
