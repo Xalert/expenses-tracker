@@ -15,8 +15,8 @@ file, shipped as a Docker image.
   design decision, or leave something unfinished or unverified, add it there.**
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
-- `README.md` — user-facing and short: run it (demo login, reset), debugging, scripts, the Compose quick start and
-  env vars, a pointer for each larger topic. Keep it under ~120 lines; long-form material goes in a `docs/` file.
+- `README.md` — user-facing and short: run it (demo login, reset), debugging, scripts, the Compose quick start (its
+  first lines), env vars only as a pointer to `docs/SELF-HOSTING.md` → Settings, a pointer for each larger topic. Keep it under ~120 lines; long-form material goes in a `docs/` file.
 - `docs/SELF-HOSTING.md` — long-form operations: reverse proxy and `COOKIE_SECURE`, closing registration, where
   the data lives, bind mounts (uid 1000), backup/restore, upgrading and the pre-migration copy, the user-ID
   migration, the standalone build without Docker, database notes.

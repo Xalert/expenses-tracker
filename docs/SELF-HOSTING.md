@@ -4,10 +4,11 @@ The app runs from a single container: a Next.js standalone server plus a SQLite 
 platform, external database or account is needed. The image builds on `linux/amd64` and `linux/arm64` (x86
 servers, Raspberry Pi 4/5, Apple silicon).
 
-The [README](../README.md#self-hosting) has the Compose quick start and the table of environment variables. This
-page is everything else: running without Compose, HTTPS behind a reverse proxy, closing registration, where the
+The [README](../README.md#self-hosting) has the Compose quick start. This page has the [settings](#settings) and
+everything else: running without Compose, HTTPS behind a reverse proxy, closing registration, where the
 data lives, backup and restore, upgrading, and running without Docker.
 
+- [Settings](#settings)
 - [Prebuilt image](#prebuilt-image) (tags, pinning a version, publishing it from a fork)
 - [Plain `docker run`](#plain-docker-run)
 - [Health check and container user](#health-check-and-container-user)
@@ -19,6 +20,31 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Upgrading](#upgrading) (automatic pre-migration copy, rolling back, the user-ID migration)
 - [Running without Docker (standalone build)](#running-without-docker-standalone-build)
 - [Database notes](#database-notes)
+
+## Settings
+
+All runtime configuration is environment variables; nothing is baked into the image, and a restart applies a
+change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.env` file next to it; with the source
+[`docker-compose.yml`](../docker-compose.yml), edit its `environment:` block. Then run `docker compose up -d` again.
+
+| variable | default (image) | default (dev) | meaning |
+|---|---|---|---|
+| `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
+| `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
+| `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
+| `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
+| `PORT` | `3000` | `3000` | listen port inside the container |
+| `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
+| `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |
+| `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
+
+`deploy/compose.yaml` also reads these (they configure Compose, not the app):
+
+| variable | default | meaning |
+|---|---|---|
+| `EXPENSES_TRACKER_VERSION` | `latest` | image tag; pin a release (`1.2.3`, or `1.2` for its fixes) or `sha-<commit>` |
+| `EXPENSES_TRACKER_PORT` | `3000` | host port |
+| `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
 
 ## Prebuilt image
 
@@ -35,12 +61,7 @@ typecheck, lint and the tests, then builds the image for `linux/amd64` and `linu
 [`deploy/compose.yaml`](../deploy/compose.yaml) runs it; everything in it can be set from a `.env` file next to
 it, so the file itself never needs editing and can simply be downloaded again:
 
-| variable | default | meaning |
-|---|---|---|
-| `EXPENSES_TRACKER_VERSION` | `latest` | image tag; pin a release (`1.2.3`, or `1.2` for its fixes) to upgrade only when you choose |
-| `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
-| `EXPENSES_TRACKER_PORT` | `3000` | host port |
-| `COOKIE_SECURE`, `ALLOW_REGISTRATION`, `EXCHANGE_RATES` | as in the README | passed to the app |
+Its variables are in [Settings](#settings).
 
 The file sets the Compose project name to `expenses-tracker`, the same as a clone of the repository, so both
 use the volume `expenses-tracker_expenses-data`: switching between the prebuilt image and a source build keeps

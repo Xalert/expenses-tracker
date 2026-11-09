@@ -1550,7 +1550,7 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   `.gitkeep` today. `better-sqlite3` is in `serverExternalPackages` and is traced into
   `.next/standalone/node_modules` with its native prebuild for the build platform — build inside the image.
   No telemetry (`NEXT_TELEMETRY_DISABLED=1` in the image).
-- **Runtime configuration is environment-only** (documented in `.env.example` and the README):
+- **Runtime configuration is environment-only** (documented in `.env.example` and `docs/SELF-HOSTING.md` → Settings):
   - `DATABASE_URL` — path of the SQLite file. Default `data/app.db` locally, `/data/app.db` in the image.
   - `COOKIE_SECURE` — `auto` (default: mark the session cookie `secure` only when the request arrived over
     HTTPS, judged by `x-forwarded-proto`), `true`, or `false`. Many homelabs serve plain HTTP on the LAN; a
@@ -1583,7 +1583,8 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   `expenses-tracker`. Image `${EXPENSES_TRACKER_IMAGE:-ghcr.io/xalert/expenses-tracker}:${EXPENSES_TRACKER_VERSION:-latest}`,
   host port `EXPENSES_TRACKER_PORT` (3000), and `COOKIE_SECURE` / `ALLOW_REGISTRATION` / `EXCHANGE_RATES` taken
   from the environment or a `.env` file with the app's defaults.
-- The README has the prebuilt-image quick start, the build-from-source alternative and the env vars; `docs/SELF-HOSTING.md` documents running behind a
+- The README opens with the three-line prebuilt-image quick start and has the build-from-source alternative; the
+  env var tables are in `docs/SELF-HOSTING.md` → Settings. `docs/SELF-HOSTING.md` also documents running behind a
   reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore of the SQLite file, and upgrading.
 
 ## UI direction

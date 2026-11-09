@@ -2,8 +2,16 @@
 
 A self-hosted, multi-user expenses tracker: income, expenses and transfers across wallets in different currencies,
 filed under categories you manage, with totals grouped per currency (the Overview can also show all wallets
-converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a
-prebuilt Docker image (amd64 and arm64) that runs from a single Compose file.
+converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a prebuilt
+Docker image (amd64 and arm64). To run it:
+
+```bash
+mkdir expenses-tracker && cd expenses-tracker
+curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/compose.yaml
+docker compose up -d     # then open http://localhost:3000 and create your account
+```
+
+That runs the prebuilt image; nothing to clone or build. More in [Self-hosting](#self-hosting).
 
 ## Run it
 
@@ -128,19 +136,8 @@ Images are built and published by GitHub Actions ([`.github/workflows/docker-ima
 after the tests pass: `latest` follows `main`, a `v1.2.3` tag publishes `1.2.3`, `1.2` and `1`, and `sha-<commit>`
 pins one commit.
 
-| variable | default (image) | default (dev) | meaning |
-|---|---|---|---|
-| `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
-| `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
-| `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
-| `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
-| `PORT` | `3000` | `3000` | listen port inside the container |
-| `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
-| `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |
-| `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
-| `EXPENSES_TRACKER_VERSION` | `latest` | — | `deploy/compose.yaml` only: image tag to run (`1.2.3`, `1.2`, `sha-<commit>`) |
-| `EXPENSES_TRACKER_PORT` | `3000` | — | `deploy/compose.yaml` only: host port |
-| `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | — | `deploy/compose.yaml` only: image repository, for a fork or mirror |
+All settings (the app's environment variables and the Compose file's own) are listed in
+[`docs/SELF-HOSTING.md` → Settings](docs/SELF-HOSTING.md#settings).
 
 All data is in the `/data` volume (`app.db` with its `-wal` and `-shm` files); back it up with SQLite's backup API,
 not by copying `app.db` alone while the app runs. Migrations run on start of a new version, after an automatic copy
