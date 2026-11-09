@@ -3,7 +3,7 @@
 
 import { MONTH_LABELS } from "./calendar";
 import { isValidCurrency } from "./currencies";
-import { isValidMonth, monthRange } from "./dates";
+import { formatDate, isValidMonth, monthRange } from "./dates";
 
 /** "October" for "2026-10". */
 export function monthName(month: string): string {
@@ -40,13 +40,31 @@ export function resolveOverviewCurrency(
 }
 
 /**
- * `/?month=…&currency=…`; the current month (`maxMonth`) leaves `month` out, a null currency leaves it out.
- * `basePath` serves other month + currency pages (`/categories`).
+ * What the Overview's Wallets card shows: `all` (default) — every active wallet, with the total converted into the
+ * selected currency at today's rates; `only` — just the wallets in the selected currency, nothing converted.
  */
-export function overviewHref(month: string, currency: string | null, maxMonth: string, basePath = "/"): string {
+export type OverviewView = "all" | "only";
+
+/** `?view=only` → `only`; anything else → `all`. */
+export function resolveOverviewView(requested: unknown): OverviewView {
+  return requested === "only" ? "only" : "all";
+}
+
+/**
+ * `/?month=…&currency=…&view=only`; the current month (`maxMonth`) leaves `month` out, a null currency leaves it
+ * out, the default view `all` leaves `view` out. `basePath` serves other month + currency pages (`/categories`).
+ */
+export function overviewHref(
+  month: string,
+  currency: string | null,
+  maxMonth: string,
+  basePath = "/",
+  view: OverviewView = "all",
+): string {
   const params = new URLSearchParams();
   if (month !== maxMonth) params.set("month", month);
   if (currency) params.set("currency", currency);
+  if (view === "only") params.set("view", "only");
   const qs = params.toString();
   return qs ? `${basePath}?${qs}` : basePath;
 }
@@ -94,4 +112,31 @@ export function shortDateLabel(date: string, today: string): string {
   if (date === t.toISOString().slice(0, 10)) return "Yesterday";
   const label = `${Number(date.slice(8, 10))} ${monthShortName(date.slice(0, 7))}`;
   return date.slice(0, 4) === today.slice(0, 4) ? label : `${label} ${date.slice(0, 4)}`;
+}
+
+/**
+ * The lines under the Wallets card's total. `ratesDate` is the rate table's date when a rate was used (null when no
+ * wallet was converted); `missing` are the currencies left out of the total; `ratesState` says why: rates switched
+ * off, not loaded, or loaded but without a rate for `currency` itself (`no-target`) or for the `missing` ones.
+ */
+export function walletsTotalNotes(opts: {
+  currency: string;
+  missing: readonly string[];
+  ratesDate: string | null;
+  source: string;
+  ratesState: "loaded" | "no-target" | "unavailable" | "off";
+}): string[] {
+  const notes: string[] = [];
+  if (opts.ratesDate) notes.push(`Rates of ${formatDate(opts.ratesDate)} · ${opts.source}`);
+  if (opts.missing.length > 0) {
+    const list = opts.missing.join(", ");
+    const reason = {
+      off: "Exchange rates are switched off",
+      unavailable: "Exchange rates are not available now",
+      "no-target": `No exchange rate for ${opts.currency}`,
+      loaded: `No exchange rate for ${list}`,
+    }[opts.ratesState];
+    notes.push(`${reason}. Not included: wallets in ${list}.`);
+  }
+  return notes;
 }

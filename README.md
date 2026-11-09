@@ -1,8 +1,8 @@
 # Expenses Tracker
 
 A self-hosted, multi-user expenses tracker: income, expenses and transfers across wallets in different currencies,
-filed under categories you manage, with totals always grouped per currency (no conversion). One Next.js app and
-one SQLite file, shipped as a Docker image.
+filed under categories you manage, with totals grouped per currency (the Overview can also show all wallets
+converted into one currency at the day's ECB rates). One Next.js app and one SQLite file, shipped as a Docker image.
 
 ## Run it
 
@@ -119,6 +119,7 @@ Open `http://<your-server>:3000`, create your account(s), then consider closing 
 | `DATABASE_URL` | `/data/app.db` | `data/app.db` | SQLite file (path, `file:./x.db` or `:memory:`); the parent folder is created if missing |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
+| `EXCHANGE_RATES` | `true` | `true` | `false` stops the daily request to `api.frankfurter.dev` for the Overview's converted wallet total |
 | `PORT` | `3000` | `3000` | listen port inside the container |
 | `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | where the SQL migrations are read from; leave as is |

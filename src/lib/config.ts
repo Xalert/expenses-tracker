@@ -27,3 +27,8 @@ export function shouldUseSecureCookie(forwardedProto: string | null | undefined)
   if (mode !== "auto") return mode === "true";
   return forwardedProto?.split(",")[0]?.trim().toLowerCase() === "https";
 }
+
+/** `EXCHANGE_RATES` (default true): fetch daily rates for the converted wallet total on Overview. */
+export function exchangeRatesEnabled(): boolean {
+  return flag(process.env.EXCHANGE_RATES, true);
+}

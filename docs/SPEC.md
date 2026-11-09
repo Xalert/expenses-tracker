@@ -81,7 +81,9 @@ this file in the same change and call the deviation out in your final report.
   DB transaction. Same currency → both legs carry the same amount. Different currencies → the user enters both
   the amount sent and the amount received (no exchange-rate service). Legs are only ever edited/deleted through
   the transfer, never individually.
-- **No currency conversion anywhere.** Totals are always grouped per currency.
+- **No currency conversion, with one exception.** Totals are grouped per currency everywhere except the Overview
+  Wallets card, which can show the total of all active wallets converted into the selected currency at the day's
+  reference rates (see Overview → "Converted total"). Nothing converted is ever stored.
 - Every query and mutation is scoped by `userId`; a user can never read or touch another user's rows.
 
 ## Data model (Drizzle, `src/db/schema.ts`)
@@ -590,7 +592,8 @@ values (Sand light, Graphite dark) are in "UI direction".
 ## Screens
 
 The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
-listed there. Every amount is shown in its own currency; nothing is converted. Where a screen shows one currency
+listed there. Every amount is shown in its own currency; nothing is converted (the one exception is the Overview
+Wallets card total, below). Where a screen shows one currency
 at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 
 - **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
@@ -659,6 +662,25 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      plus the previous month's figure).
   3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
      with a link to Transactions), side by side from `lg` up.
+  - **Converted total** (Wallets card; `src/lib/fx.ts`, `src/server/exchange-rates.ts`): the card starts with
+    "Total in <currency>" for the currency selected on the page. `?view=` picks what the card shows:
+    - `all` (default, left out of the URL): every active wallet; the total is converted into the selected currency
+      (`convertedTotal`: each wallet converted once, rounded half away from zero to the target's decimals, then
+      added) and shown with "≈"; a wallet in another currency shows "≈ <converted balance>" under its own balance.
+      Under the total: "Rates of 6 Nov 2026 · European Central Bank, via Frankfurter".
+    - `only`: just the wallets in the selected currency, their plain sum, nothing converted (the card as before,
+      limited to that currency).
+    The switch ("All in EUR · EUR only", links, `WalletsViewSwitch`) is shown when the active wallets are not all
+    in the selected currency; otherwise the view is `all` and nothing is converted. The month switcher and the
+    currency switch keep `view=only`. A currency with no rate (not quoted by the provider, rates switched off, or
+    the provider unreachable with nothing cached) is left out of the total, with a note naming it
+    (`walletsTotalNotes`). Balances are today's balances and the rates are the latest ones, also for a past month;
+    the chart and the insight cards stay in one currency, unconverted.
+    - Rates: `getExchangeRates()` fetches `https://api.frankfurter.dev/v1/latest?base=EUR` (ECB reference rates,
+      no API key; cross rates through EUR), only when a wallet needs converting. One table in memory serves every
+      user, refreshed after 6 h; a failed fetch keeps the last table and waits 10 min before trying again; 4 s
+      timeout; it never throws. Nothing goes in the database. `EXCHANGE_RATES=false` turns it off (no request is
+      made).
   - As built (step 3; `page.tsx`, `components/dashboard/month-chart.tsx`, `overview-lists.tsx`):
     - **Currency**: `?currency=` is used when it is a valid code (`isValidCurrency`, uppercase only) of a wallet the
       user holds, archived included; anything else falls back to `pickDefaultCurrency(userId, month)`
@@ -1329,6 +1351,8 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   - `ALLOW_REGISTRATION` — `true` (default) or `false`. When `false`, `/register` shows a "registration is
     disabled" message and the register action refuses, so an instance exposed to the internet can be closed
     after its accounts exist.
+  - `EXCHANGE_RATES` — `true` (default) or `false`. When `true`, the server requests the day's reference rates
+    from `api.frankfurter.dev` for the Overview's converted total; `false` makes no outbound request.
   - `PORT` (default 3000), `HOSTNAME` (`0.0.0.0` in the image).
 - Migrations are applied automatically at startup, so the migrations folder must be resolvable in the
   standalone build (resolve from `process.cwd()`, overridable with `MIGRATIONS_DIR`) and copied into the image.

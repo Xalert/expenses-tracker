@@ -72,7 +72,8 @@ names so errors land on the right control.
 **Money.** Integer minor units everywhere (`amountMinor`), never floats; decimals come from the currency
 (`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored amounts are positive and the transaction kind gives the sign.
 User input goes through `parseAmount(value, currency)` with the currency of the wallet looked up server-side.
-There is no currency conversion anywhere: totals are always grouped per currency.
+There is no currency conversion except the Overview Wallets total (`src/lib/fx.ts`, rates from
+`src/server/exchange-rates.ts`); every other total is grouped per currency and nothing converted is stored.
 
 **Transfers** are one `transfers` row plus two `transactions` legs (`transfer_out`, `transfer_in`) written in
 one DB transaction; legs are only edited or deleted through the transfer. Cross-currency transfers store both
