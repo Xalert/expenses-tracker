@@ -4,7 +4,7 @@ The app runs from two containers started by one Compose file: a Next.js standalo
 database with its data in a volume. No hosted platform or account is needed. The image is pure JavaScript and is
 published for `linux/amd64` and `linux/arm64` (x86 servers, Raspberry Pi 4/5, Apple silicon).
 
-The [README](../README.md#self-hosting) has the Compose quick start. This page has the [settings](#settings) and
+The [README](../README.md#quick-start-docker) has the Compose quick start. This page has the [settings](#settings) and
 everything else: running without Compose, HTTPS behind a reverse proxy, closing registration, where the
 data lives, backup and restore, upgrading, and running without Docker.
 
@@ -282,7 +282,7 @@ cd .next/standalone && DATABASE_URL=postgres://expenses:secret@localhost:5432/ex
   (once per process, in a transaction; foreign keys are always enforced).
 - The database `expenses_demo` (created by the development container's init script) holds the demo data; `npm run
   dev:demo` and `npm run demo:reset` use it and never touch `expenses`. `npm run dev` is on `expenses`, the real
-  data. To reset local data, use `npm run db:reset` (see the README); it asks first and does not keep a copy, so
+  data. To reset local data, use `npm run db:reset` (see [`DEVELOPMENT.md`](DEVELOPMENT.md#run-it)); it asks first and does not keep a copy, so
   take a backup with the app's JSON export or `pg_dump` before confirming.
 - A scratch database: put `DATABASE_URL=postgres://expenses:expenses@localhost:5432/<scratch>` on the same command line
   (never `export` it).

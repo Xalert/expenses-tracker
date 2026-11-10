@@ -202,6 +202,7 @@ Added 2026-11-08.
 | In "Run it" and "Debugging", every command is its own one-line `bash` code block with the explanation in a sentence above, no trailing `# comments` | The owner reads the README in an app that puts a Run button on each single-line block; multi-line blocks with comments render badly there. This took the README to about 170 lines instead of the ~120 aimed for | owner (format), built (length) |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
+| README reduced to a landing page (2026-11-10): what the app is, the Docker quick start, a self-hosting pointer and links. "Run it", "Debugging", "Scripts" and "Layout" moved unchanged to `docs/DEVELOPMENT.md`; the import/export, statement importer and accounts paragraphs were dropped because `docs/SPEC.md`, `docs/STATEMENT-IMPORTER.md` and `docs/SELF-HOSTING.md` already hold them. Supersedes the "five-minute path" README above; the one-line `bash` block rule now applies to `docs/DEVELOPMENT.md` | The owner found the README had too many commands and wants only a quick Docker start, a short description and the self-hosting pointer there | owner |
 
 ### Interface
 

@@ -55,9 +55,10 @@ this file in the same change and call the deviation out in your final report.
   `src/db/index.ts`, called by `getDb()` only when `NEXT_RUNTIME` is set (the scripts print it themselves); since
   the dev server opens the database lazily, the line appears on its first request, not at boot. The scripts print a
   "Database: …" line from `describeDatabase(url)` (password masked).
-- The README's "Run it" section is the five-minute path: install, `npm run db:up`, run, demo login, reset.
-  Everything long-form (reverse proxies, backup/restore, upgrading, standalone without Docker)
-  lives in `docs/SELF-HOSTING.md`; the README links to it.
+- The README is a landing page: what the app is, the Docker quick start, a pointer to `docs/SELF-HOSTING.md`
+  (reverse proxies, backup/restore, upgrading, standalone without Docker) and links to the other docs.
+  `docs/DEVELOPMENT.md` → "Run it" is the five-minute path from a clone (install, `npm run db:up`, run, demo
+  login, reset), followed by debugging, the script table and the code layout.
 
 ## Domain rules
 
@@ -1576,7 +1577,7 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   `expenses-tracker`. Image `${EXPENSES_TRACKER_IMAGE:-ghcr.io/xalert/expenses-tracker}:${EXPENSES_TRACKER_VERSION:-latest}`,
   host port `EXPENSES_TRACKER_PORT` (3000), and `COOKIE_SECURE` / `ALLOW_REGISTRATION` / `EXCHANGE_RATES` taken
   from the environment or a `.env` file with the app's defaults.
-- The README opens with the three-line prebuilt-image quick start and has the build-from-source alternative; the
+- The README has the three-line prebuilt-image quick start; the build-from-source alternative and the
   env var tables are in `docs/SELF-HOSTING.md` → Settings. `docs/SELF-HOSTING.md` also documents running behind a
   reverse proxy (HTTPS, forwarded headers), where the data lives, backup/restore with `pg_dump` / `pg_restore`,
   upgrading (and Postgres major upgrades) and how an old SQLite instance's data can be carried over (JSON backups).
