@@ -16,7 +16,8 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — a landing page, kept short: what the app is, the Compose quick start, a pointer to
-  `docs/SELF-HOSTING.md`, and one link per other doc. No dev commands or long-form material; those go in a `docs/` file.
+  `docs/SELF-HOSTING.md`, the everyday `make` shortcuts (each its own one-line `bash` block, explanation above), and one link per other doc. No other dev
+  commands or long-form material; those go in a `docs/` file.
 - `docs/DEVELOPMENT.md` — working from a clone: run it (demo login, reset), debugging, the script table, the code
   layout. Each command there is its own one-line `bash` block with the explanation above it.
 - `docs/SELF-HOSTING.md` — long-form operations: settings, reverse proxy and `COOKIE_SECURE`, closing registration,

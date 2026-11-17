@@ -24,6 +24,47 @@ running without Docker. Take a backup before upgrading. **Instances from before 
 upgraded in place**; carry each account across with its JSON backup
 ([how](docs/SELF-HOSTING.md#moving-from-sqlite-older-versions)).
 
+## Development
+
+From a clone, with Node 20.9+ and Docker. `make` lists every shortcut; details in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+Run the app on demo data at http://localhost:3000 (sign in as `demo` / `demo-password`):
+
+```bash
+make dev
+```
+
+Typecheck, lint and run the whole test suite:
+
+```bash
+make check
+```
+
+One test file, optionally only the tests whose name matches:
+
+```bash
+make test FILE=tests/users.test.ts NAME=changePassword
+```
+
+Re-run the tests on every save:
+
+```bash
+make watch
+```
+
+Put the demo data back to its fresh state:
+
+```bash
+make demo-reset
+```
+
+Stop the development database (the data stays):
+
+```bash
+make down
+```
+
 ## More
 
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts, code

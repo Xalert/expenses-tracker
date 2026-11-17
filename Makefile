@@ -31,7 +31,10 @@ install: node_modules
 
 ## Development database (compose.dev.yaml, 127.0.0.1:5432) -------------------
 
+# Fails early, naming the container, when another one (e.g. billy's Postgres) already publishes 5432.
 up:
+	@holder=$$(docker ps --filter publish=5432 --format '{{.Names}}' | grep -vx expenses-tracker-dev-db-1 | head -1); \
+	if [ -n "$$holder" ]; then echo "Port 5432 is taken by container $$holder. Stop it with: docker stop $$holder"; exit 1; fi
 	npm run -s db:up
 
 # Data stays in the expenses-dev-pg volume.
