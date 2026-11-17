@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useRef, useState } from "react";
 import { signOutAction } from "@/app/(app)/actions";
-import { Popover, SubmitButton } from "@/components/ui";
+import { Popover, SubmitButton, buttonClasses } from "@/components/ui";
 import { initials } from "@/lib/user-id";
-import { LogOutIcon } from "./icons";
+import { LogOutIcon, UserIcon } from "./icons";
 
 export type AccountMenuProps = {
   displayName: string;
@@ -59,7 +60,17 @@ export function AccountMenu({ displayName, username, email }: AccountMenuProps) 
             </p>
           )}
         </div>
-        <form action={signOutAction} className="border-t border-surface-muted pt-2">
+        <div className="border-t border-surface-muted pt-2">
+          <Link
+            href="/account"
+            onClick={() => setOpen(false)}
+            className={buttonClasses({ variant: "ghost", size: "sm", className: "w-full justify-start" })}
+          >
+            <UserIcon className="size-4" />
+            Account settings
+          </Link>
+        </div>
+        <form action={signOutAction}>
           <SubmitButton variant="ghost" size="sm" className="w-full justify-start" pendingLabel="Signing out…">
             <LogOutIcon className="size-4" />
             Sign out

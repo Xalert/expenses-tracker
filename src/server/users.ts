@@ -1,7 +1,7 @@
 import "server-only";
-import { sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { users, type User } from "@/db/schema";
+import { sessions, users, type User } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
 import { NAME_MAX, displayName, normalizeUserId, userIdProblem } from "@/lib/user-id";
@@ -123,4 +123,36 @@ export async function authenticateUser(identifier: string, password: string): Pr
   }
   if (!(await verifyPassword(password ?? "", row.passwordHash))) return null;
   return toUserView(row);
+}
+
+/**
+ * Replace the user's password. The current one must verify first (VALIDATION on `currentPassword`; an unknown user
+ * looks the same). Then, in one DB transaction, the hash is replaced and every session of the user except
+ * `keepSessionTokenHash` is deleted (null deletes all of them). Other users' sessions are never touched.
+ */
+export async function changePassword(
+  userId: number,
+  input: { currentPassword: string; newPassword: string },
+  opts: { keepSessionTokenHash: string | null },
+): Promise<void> {
+  const db = await getDb();
+  const [row] = await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, userId)).limit(1);
+  const wrong = new ServiceError("VALIDATION", "That is not your current password.", "currentPassword");
+  if (!row) {
+    await verifyPassword(input.currentPassword ?? "", await getDummyPasswordHash());
+    throw wrong;
+  }
+  if (!(await verifyPassword(input.currentPassword ?? "", row.passwordHash))) throw wrong;
+  if ((input.newPassword ?? "").length < MIN_PASSWORD_LENGTH) {
+    throw new ServiceError("VALIDATION", `Use at least ${MIN_PASSWORD_LENGTH} characters.`, "newPassword");
+  }
+
+  const passwordHash = await hashPassword(input.newPassword); // slow: outside the transaction
+  const keep = opts.keepSessionTokenHash;
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ passwordHash }).where(eq(users.id, userId));
+    await tx
+      .delete(sessions)
+      .where(keep === null ? eq(sessions.userId, userId) : and(eq(sessions.userId, userId), ne(sessions.tokenHash, keep)));
+  });
 }

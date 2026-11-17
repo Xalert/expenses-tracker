@@ -47,6 +47,9 @@ docker compose up -d --build                  # the real deployment artefact
 npx tsx --conditions=react-server script.ts   # run a one-off script that imports src/server/* (needed for `server-only`)
 ```
 
+The `Makefile` wraps these (`make` lists the targets; `make check`, `make test FILE=… NAME=…`, `make dev` on the
+demo database). `make dev-real` and `make psql DB=expenses` reach the real data: never run them from an agent.
+
 The database is migrated on first request. `dev:demo` and `demo:reset` put
 `DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` inside the npm script, so they never reach
 `expenses`.

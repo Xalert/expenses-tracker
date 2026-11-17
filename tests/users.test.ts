@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { sessions, users } from "@/db/schema";
 import type { DB } from "@/db";
 import { ServiceError } from "@/lib/errors";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { displayName } from "@/lib/user-id";
 import { listCategories } from "@/server/categories";
-import { authenticateUser, registerUser } from "@/server/users";
+import { authenticateUser, changePassword, registerUser } from "@/server/users";
 import { useFreshDb } from "./helpers";
 
 let db: DB;
@@ -160,5 +161,61 @@ describe("displayName", () => {
     [{ firstName: "", lastName: "" }, "ana.p"],
   ])("%j → %s", (names, expected) => {
     expect(displayName({ username: "ana.p", ...names })).toBe(expected);
+  });
+});
+
+describe("changePassword", () => {
+  const sess = (userId: number, tokenHash: string) =>
+    db.insert(sessions).values({ userId, tokenHash, expiresAt: new Date(Date.now() + 86_400_000) });
+  const hashesOf = async (userId: number) =>
+    (await db.select({ h: sessions.tokenHash }).from(sessions).where(eq(sessions.userId, userId))).map((r) => r.h).sort();
+
+  async function setup() {
+    const a = await registerUser({ username: "alice", password: PW });
+    const b = await registerUser({ username: "bob", password: PW });
+    await sess(a.id, "a1");
+    await sess(a.id, "a2");
+    await sess(b.id, "b1");
+    return { a: a.id, b: b.id };
+  }
+
+  it("rejects a wrong current password and changes nothing", async () => {
+    const { a } = await setup();
+    const err = await changePassword(a, { currentPassword: "nope-nope", newPassword: "brand-new-pw" }, { keepSessionTokenHash: "a1" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({ code: "VALIDATION", field: "currentPassword" });
+    expect(await authenticateUser("alice", PW)).not.toBeNull();
+    expect(await hashesOf(a)).toEqual(["a1", "a2"]);
+  });
+
+  it("treats an unknown user like a wrong current password", async () => {
+    await expect(
+      changePassword(999, { currentPassword: PW, newPassword: "brand-new-pw" }, { keepSessionTokenHash: null }),
+    ).rejects.toMatchObject({ field: "currentPassword" });
+  });
+
+  it("rejects a too-short new password and changes nothing", async () => {
+    const { a } = await setup();
+    await expect(
+      changePassword(a, { currentPassword: PW, newPassword: "short" }, { keepSessionTokenHash: "a1" }),
+    ).rejects.toMatchObject({ code: "VALIDATION", field: "newPassword" });
+    expect(await authenticateUser("alice", PW)).not.toBeNull();
+    expect(await hashesOf(a)).toEqual(["a1", "a2"]);
+  });
+
+  it("switches to the new password, keeps one session, spares other users", async () => {
+    const { a, b } = await setup();
+    await changePassword(a, { currentPassword: PW, newPassword: "brand-new-pw" }, { keepSessionTokenHash: "a1" });
+    expect(await authenticateUser("alice", "brand-new-pw")).not.toBeNull();
+    expect(await authenticateUser("alice", PW)).toBeNull();
+    expect(await hashesOf(a)).toEqual(["a1"]);
+    expect(await hashesOf(b)).toEqual(["b1"]);
+  });
+
+  it("deletes all of the user's sessions when no session is kept", async () => {
+    const { a, b } = await setup();
+    await changePassword(a, { currentPassword: PW, newPassword: "brand-new-pw" }, { keepSessionTokenHash: null });
+    expect(await hashesOf(a)).toEqual([]);
+    expect(await hashesOf(b)).toEqual(["b1"]);
   });
 });

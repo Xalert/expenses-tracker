@@ -60,6 +60,8 @@ section holds what replaced it.
 | Registration is open by default, closable with `ALLOW_REGISTRATION=false` | Easy first run; an internet-facing instance can be closed once accounts exist | planner |
 | `COOKIE_SECURE=auto` (secure only when the request arrived over HTTPS) | Homelabs often serve plain HTTP on the LAN; a hard-coded `Secure` cookie silently breaks sign-in there | planner |
 | Login failures give one generic message; registration does say when a user ID or email is taken | Standard trade-off for open registration | built |
+| Password change lives on a new `/account` page (linked from the account menu, not the main menu) and needs the current password plus the new one twice | One place for account settings that profile editing can join later; the current password guards against a borrowed, already signed-in browser | planner (2026-11-17) |
+| Changing the password signs out every **other** session of that user, in the same transaction; the current one stays | The usual reason to change a password is suspecting someone else has it; keeping the current session avoids an immediate re-login | planner (2026-11-17) |
 | Accounts are identified by a user ID; email, first name and surname are optional | The owner asked for it: a self-hosted tracker should not need an email address | owner |
 | "User ID" is a name the user chooses (3–32 of `a–z 0–9 . _ -`, case-insensitive), not the numeric database id | Memorable, and it does not reveal how many accounts exist. **This is the planner's reading of "log in with their user id" — confirm** | planner |
 | One sign-in field takes a user ID or an email; a user ID can never contain `@` | Existing email sign-ins keep working, and the two can never be confused | planner |
@@ -193,6 +195,7 @@ Added 2026-11-08.
 
 | Decision | Why | Decided by |
 |---|---|---|
+| A `Makefile` of short aliases (`make dev`, `make check`, `make test FILE=… NAME=…`, …) over the npm scripts, modelled on the owner's other project (billy); `make dev` uses the demo database, the real one only via `make dev-real` | The owner asked for less typing when testing; the npm scripts stay the source of truth, so nothing works only through make (2026-11-17) | owner (ask), planner (targets) |
 | *(superseded 2026-11-09 by Postgres)* `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
 | *(superseded 2026-11-09 by Postgres)* The reset writes `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database first (`--no-backup` skips it) and refuses with `NODE_ENV=production` | A reset is one typo away from losing real data; the command is a development tool | planner |
 | *(superseded 2026-11-09 by Postgres)* **`--yes` is honoured only with an explicit `DATABASE_URL` on the command; the default `data/app.db` always asks, and the answer must be the word `reset`** (not `y`). No terminal and no usable `--yes` → refuse | An agent wiped the developer's real database through a broken shell chain: a failed step before the command left `DATABASE_URL` unset, so the default file became the target. A `--yes` that reaches the default file by accident must not be able to wipe it | planner |
@@ -348,8 +351,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - **No login rate limiting.** An internet-facing instance should sit behind something that throttles sign-in
   attempts.
-- **No password change, password reset or account deletion.** A forgotten password currently means editing the
-  database by hand.
+- **No password reset or account deletion** (password change exists, on `/account`). A forgotten password
+  currently means editing the database by hand.
 - **No profile screen: user ID, email and names cannot be changed after registration** (nor can an email be added
   later to an account created without one).
 - *(superseded 2026-11-09 by Postgres)* **Migrated accounts are not told their new user ID** other than by the shell after signing in with their email;
@@ -475,6 +478,10 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Not verified
 
+- **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
+  menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking
+  up the new password, and another signed-in browser actually being sent to `/login`. The account menu has no
+  render test for the link (the closed `Popover` renders nothing under `renderToStaticMarkup`).
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250

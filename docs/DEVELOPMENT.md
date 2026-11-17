@@ -6,6 +6,7 @@ live. To just run the app, use the Compose quick start in the [README](../README
 
 - [Run it](#run-it)
 - [Debugging](#debugging)
+- [Make shortcuts](#make-shortcuts)
 - [Scripts](#scripts)
 - [Layout](#layout)
 
@@ -84,6 +85,52 @@ npx vitest run tests/money.test.ts -t "JPY"
 
 The Statement Importer page can be tried locally: the `statement-importer-harness` entry in
 `.claude/launch.json` serves `tools/statement-importer/` on http://127.0.0.1:8765.
+
+## Make shortcuts
+
+A `Makefile` wraps the scripts below so day-to-day work is a few keystrokes. `make` on its own lists the targets.
+
+Start the development database, seed the demo data if missing and run the dev server on it (sign in as `demo` /
+`demo-password`; also prints the LAN address for a phone):
+
+```bash
+make dev
+```
+
+Run typecheck, lint and the whole test suite:
+
+```bash
+make check
+```
+
+Run one test file, optionally only the tests whose name matches:
+
+```bash
+make test FILE=tests/users.test.ts NAME=changePassword
+```
+
+Re-run tests on every save (`FILE` and `NAME` work here too):
+
+```bash
+make watch
+```
+
+Put the demo database back to its fresh state:
+
+```bash
+make demo-reset
+```
+
+Open `psql` on the demo database (`DB=expenses` for your real data):
+
+```bash
+make psql
+```
+
+The rest: `make up` / `down` / `logs` (the development Postgres), `make dev-real` (the dev server on your **real**
+data in `expenses`), `make build`, `make migration` (`db:generate`), `make docker-up` / `docker-down` / `docker-logs`
+(the source-built Compose stack on :3000). Targets that need dependencies run `npm ci` first when
+`package-lock.json` is newer than `node_modules`.
 
 ## Scripts
 
