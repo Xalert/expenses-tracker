@@ -42,3 +42,6 @@ next-env.d.ts
 *.db-journal
 *.db-wal
 *.db-shm
+
+# IDE project files
+/.idea/
