@@ -7,9 +7,11 @@ import { FilterChips } from "@/components/transactions/filter-chips";
 import { MonthLinks } from "@/components/transactions/month-links";
 import { MonthStepShortcut } from "@/components/transactions/month-step-shortcut";
 import { InlineEditProvider } from "@/components/transactions/inline-edit";
+import { NoScriptFilters } from "@/components/transactions/no-script-filters";
 import {
   dayHref,
   exportCsvHref,
+  hasEmptyParams,
   hasFilters,
   hasNonDateFilters,
   listFilters,
@@ -51,7 +53,10 @@ export default async function TransactionsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const user = await requireUser();
-  const params = parseListParams(await searchParams);
+  const sp = await searchParams;
+  const params = parseListParams(sp);
+  // A no-JS GET form leaves empty fields in the URL (`?q=`, `?wallet=`): show the same list under its clean URL.
+  if (hasEmptyParams(sp)) redirect(listHref(params));
   const thisMonth = currentMonth();
   const today = todayISO();
   const view = resolveView(params, thisMonth);
@@ -213,6 +218,12 @@ export default async function TransactionsPage({
           exportHref={total > 0 ? exportCsvHref(params, thisMonth, groupId) : null}
           showClear={filtered}
         />
+      )}
+      {anyAtAll && (
+        // Without JavaScript the popover chips cannot open: a plain GET form replaces them.
+        <noscript>
+          <NoScriptFilters params={params} thisMonth={thisMonth} wallets={walletOptions} categories={categoryOptions} />
+        </noscript>
       )}
 
       <MonthStepShortcut
