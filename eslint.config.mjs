@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     // Standalone claude.ai Artifact (plain browser JS, not part of the Next.js app); covered by its harness and
     // tests/statement-importer-csv.test.ts.
     "tools/**",
+    ".claude/**",
   ]),
 ]);
 
