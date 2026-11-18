@@ -41,6 +41,16 @@ export const backupWalletSchema = z.object({
   initialBalanceMinor: safeInt,
   initialBalance: decimal.optional(),
   archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
+  /**
+   * Optional: when an archived wallet was archived (an ISO timestamp; added after version 1 shipped). Restored on
+   * import; absent (older files) or on an active wallet it is ignored, and an archived wallet is archived as of the import.
+   */
+  archivedAt: z
+    .string({ error: "Expected an ISO timestamp." })
+    .max(64, { error: "Expected an ISO timestamp." })
+    .refine((v) => /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)), { error: "Expected an ISO timestamp such as 2026-03-01T10:00:00.000Z." })
+    .nullable()
+    .optional(),
   /** Optional: the name of the wallet group the wallet belongs to (added after version 1 shipped; old files lack it). */
   group: text.nullable().optional(),
 });

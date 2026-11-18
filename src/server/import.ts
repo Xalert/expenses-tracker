@@ -26,6 +26,7 @@ import {
   type Loc,
   type ParsedFile,
   type TransferSpec,
+  type WalletSpec,
 } from "./import-formats/shared";
 import { spendeeFormat } from "./import-formats/spendee";
 import { transactionsCsvFormat } from "./import-formats/transactions-csv";
@@ -42,8 +43,8 @@ export type ImportOptions = {
   /** Skip entries that already exist in the account (multiset comparison). Default true. */
   skipDuplicates?: boolean;
   /**
-   * The importing browser's IANA time zone. Timestamps with a UTC offset (Spendee) are dated in it. Missing or
-   * invalid → UTC (with a notice saying so).
+   * The importing browser's IANA time zone. Dates never depend on it (Spendee timestamps keep the date written in the
+   * file); it only lets the time-zone notice say how many entries fall on another day there. Missing or invalid → UTC.
    */
   timeZone?: string;
   /** Import transfer rows that have no partner as income / expense in a "Transfer" category. Default false. */
@@ -82,8 +83,12 @@ export type ImportPreview = {
   transfersToAdd: number;
   duplicateTransactions: number;
   duplicateTransfers: number;
-  /** `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). */
-  walletsToCreate: { name: string; currency: string; archived: boolean; group: string }[];
+  /**
+   * `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). `described`:
+   * the file gives the wallet's initial balance and archived state (a backup always; a CSV in a `wallet` row);
+   * otherwise it starts at 0 and active.
+   */
+  walletsToCreate: { name: string; currency: string; archived: boolean; group: string; described: boolean }[];
   /** Groups named by a backup that the account does not have yet; created by the import. */
   groupsToCreate: string[];
   categoriesToCreate: { name: string; kind: CategoryKind }[];
@@ -242,10 +247,17 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
         entries: parsed.entries.map((e) => ({ ...e, loc: tag(e.loc) })),
         transfers: parsed.transfers.map((t) => ({ ...t, loc: tag(t.loc) })),
         transferLegs: parsed.transferLegs.map((l) => ({ ...l, loc: tag(l.loc) })),
+        brokenTransferRows: parsed.brokenTransferRows.map((b) => ({ ...b, loc: tag(b.loc) })),
+        wallets: parsed.wallets.map((w) => ({
+          ...w,
+          ...(w.detailsLoc ? { detailsLoc: tag(w.detailsLoc) } : {}),
+          ...(w.groupLoc ? { groupLoc: tag(w.groupLoc) } : {}),
+        })),
       });
       return;
     }
     const walletMap = parsed.wallets.map((w) => merger.walletFor(w.name, w.currency));
+    parsed.wallets.forEach((w, k) => mergeWalletDetails(combined, walletMap[k], w, tag));
     const categoryMap = parsed.categories.map((c) => merger.categoryFor(c.kind, c.name));
     combined.entries.push(
       ...parsed.entries.map((e) => ({ ...e, wallet: walletMap[e.wallet], category: categoryMap[e.category], loc: tag(e.loc) })),
@@ -254,6 +266,7 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
       ...parsed.transfers.map((t) => ({ ...t, from: walletMap[t.from], to: walletMap[t.to], loc: tag(t.loc) })),
     );
     combined.transferLegs.push(...parsed.transferLegs.map((l) => ({ ...l, wallet: walletMap[l.wallet], loc: tag(l.loc) })));
+    combined.brokenTransferRows.push(...parsed.brokenTransferRows.map((b) => ({ ...b, loc: tag(b.loc) })));
     combined.problems.push(...parsed.problems.map(tag));
     combined.notices.push(...parsed.notices.map(tag));
     combined.rowCount += parsed.rowCount;
@@ -286,6 +299,47 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
     });
   }
   return { file: combined, files };
+}
+
+const where = (loc: Loc | undefined) =>
+  loc ? `${loc.file ? `“${loc.file}”, ` : ""}${loc.line !== undefined ? `line ${loc.line}` : (loc.path ?? "")}` : "another row";
+
+/**
+ * Merging a file's wallet into the selection's: its details (a CSV wallet row) and group are taken when the selection
+ * has none yet; two files that describe the same wallet differently are a problem at the later one.
+ */
+function mergeWalletDetails(combined: ParsedFile, idx: number, src: WalletSpec, tag: <T extends object>(x: T) => T) {
+  const dst = combined.wallets[idx];
+  const label = `“${dst.name}” (${dst.currency})`;
+  if (src.detailsLoc) {
+    if (!dst.detailsLoc) {
+      dst.initialBalanceMinor = src.initialBalanceMinor;
+      dst.archived = src.archived;
+      if (src.archivedAt) dst.archivedAt = src.archivedAt;
+      dst.detailsLoc = tag(src.detailsLoc);
+    } else if (
+      dst.initialBalanceMinor !== src.initialBalanceMinor ||
+      dst.archived !== src.archived ||
+      (dst.archivedAt ?? null) !== (src.archivedAt ?? null)
+    ) {
+      combined.problems.push(
+        tag({ ...src.detailsLoc, message: `wallet: Wallet ${label} is described differently in ${where(dst.detailsLoc)}.` }),
+      );
+    }
+  }
+  if (src.group !== undefined) {
+    if (dst.group === undefined) {
+      dst.group = src.group;
+      dst.groupLoc = src.groupLoc ? tag(src.groupLoc) : undefined;
+    } else if (dst.group.toLowerCase() !== src.group.toLowerCase()) {
+      combined.problems.push(
+        tag({
+          ...(src.groupLoc ?? {}),
+          message: `group: Wallet ${label} is put in group “${dst.group}” in ${where(dst.groupLoc)}; a wallet can only be in one group.`,
+        }),
+      );
+    }
+  }
 }
 
 /** File order, then line order; problems without a line (whole-file problems) first within their file. */
@@ -542,7 +596,13 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
     duplicateTransfers: plan?.duplicateTransfers ?? 0,
     walletsToCreate: (plan?.walletsToCreate ?? []).map((i) => {
       const w = parsed.wallets[i];
-      return { name: w.name, currency: w.currency, archived: w.archived, group: plan!.walletGroups.get(i)!.name };
+      return {
+        name: w.name,
+        currency: w.currency,
+        archived: w.archived,
+        group: plan!.walletGroups.get(i)!.name,
+        described: w.detailsLoc !== undefined,
+      };
     }),
     groupsToCreate: plan?.groupsToCreate ?? [],
     categoriesToCreate: (plan?.categoriesToCreate ?? []).map((i) => ({
@@ -600,9 +660,10 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
         name: w.name,
         currency: w.currency,
         initialBalanceMinor: w.initialBalanceMinor,
-        // A backup restores archived wallets as archived (their history is inserted below, bypassing the
+        // A backup (or a CSV wallet row) restores archived wallets as archived (their history is inserted below, bypassing the
         // "no new transactions on archived wallets" rule on purpose: it is a restore, not new activity).
-        archivedAt: w.archived ? now : null,
+        // The original archived date when the file has one (backup `archivedAt`, CSV `archived`), else the import's.
+        archivedAt: w.archived ? (w.archivedAt ? new Date(w.archivedAt) : now) : null,
         createdAt: now,
       })
       .returning({ id: wallets.id });

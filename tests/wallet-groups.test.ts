@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
 import { ServiceError } from "@/lib/errors";
+import { parseCsv } from "@/lib/csv";
 import type { DailyRates } from "@/lib/fx";
 import { listCategoriesWithUsage } from "@/server/categories";
 import { getDashboard } from "@/server/dashboard";
@@ -263,10 +264,20 @@ describe("transactions, dashboard, categories and insights by group", () => {
 
   it("the CSV export is narrowed only by an explicit group", async () => {
     const { personal } = await setup();
-    const rows = async (groupId?: number) => (await buildTransactionsCsv(alice.id, { groupId })).trim().split("\r\n").length - 1;
+    const rows = async (groupId?: number) =>
+      (await buildTransactionsCsv(alice.id, { groupId }))
+        .trim()
+        .split("\r\n")
+        .slice(1)
+        .filter((r) => r.split(",")[1] !== "wallet").length;
     expect(await rows()).toBe(6);
     expect(await rows(personal)).toBe(3); // two entries + the transfer (its incoming leg matches)
-    expect(await buildTransactionsCsv(alice.id)).not.toMatch(/group/i);
+    // The group column names each row's wallet's group, and the wallet rows carry it too.
+    const all = parseCsv(await buildTransactionsCsv(alice.id)).records.map((r) => r.cells);
+    expect(all[0].slice(10)).toEqual(["group", "archived"]);
+    const wallets = all.filter((r) => r[1] === "wallet").map((r) => `${r[2]}|${r[10]}`);
+    expect(wallets).toContain("Home|Personal");
+    expect(wallets.some((w) => w.endsWith("|Business"))).toBe(true);
   });
 });
 
@@ -276,7 +287,7 @@ describe("import and backup with groups", () => {
   it("puts wallets created by an import into the target group, or the default one", async () => {
     const biz = await createWalletGroup(alice.id, { name: "Business" });
     const p = await previewImport(alice.id, csv, { groupId: biz.id });
-    expect(p.walletsToCreate).toEqual([{ name: "Brand new", currency: "EUR", archived: false, group: "Business" }]);
+    expect(p.walletsToCreate).toEqual([{ name: "Brand new", currency: "EUR", archived: false, group: "Business", described: false }]);
     expect(p.groupsToCreate).toEqual([]);
     await runImport(alice.id, csv, { groupId: biz.id });
     expect((await listWallets(alice.id, { groupId: biz.id })).map((w) => w.name)).toEqual(["Brand new"]);

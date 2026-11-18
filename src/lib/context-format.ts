@@ -1,7 +1,7 @@
 // The "Wallets & categories" context export (JSON): the account's wallets and categories only, for companion tools
 // such as the Statement Importer artifact. Pure: schema + types only, no DB access.
 //
-// No ids, balances or transactions: just names, currencies, the archived flag and category kinds. The schema is what
+// No ids, balances or transactions: just names, currencies, the archived flag, the wallet's group and category kinds. The schema is what
 // a reader of the file (the app itself, later) validates against; unknown fields are ignored (zod strips them).
 
 import { z } from "zod";
@@ -17,6 +17,8 @@ export const contextWalletSchema = z.object({
   name: text,
   currency: z.string({ error: "Expected a currency code." }).max(10, { error: "Expected a currency code." }),
   archived: z.boolean({ error: "Expected true or false." }),
+  /** Optional: the name of the wallet's group (added after version 1 shipped; older files lack it). */
+  group: text.nullable().optional(),
 });
 
 export const contextCategorySchema = z.object({

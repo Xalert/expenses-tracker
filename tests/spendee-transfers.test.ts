@@ -210,15 +210,20 @@ describe("Spendee per-wallet dialect: detection and rows", () => {
 });
 
 describe("Spendee timestamps", () => {
-  it("converts a timestamp with an offset to the user's time zone", async () => {
+  it("keeps the date written in the file, whatever the time zone; the zone only says whether it would shift", async () => {
     expect(parseSpendeeTimestamp("2026-08-26T22:05:17+00:00", "UTC")).toMatchObject({ date: "2026-08-26", converted: true, shifted: false });
-    expect(parseSpendeeTimestamp("2026-08-26T22:05:17+00:00", "Europe/Brussels")).toMatchObject({ date: "2026-08-27", shifted: true });
-    // 22:05 at -05:00 is 03:05 UTC the next day; 01:30 at +02:00 is 23:30 UTC the previous day.
-    expect(parseSpendeeTimestamp("2026-08-26T22:05:17-05:00", "UTC")?.date).toBe("2026-08-27");
-    expect(parseSpendeeTimestamp("2026-08-27T01:30:00+02:00", "UTC")?.date).toBe("2026-08-26");
-    expect(parseSpendeeTimestamp("2026-08-27T01:30:00+02:00", "Europe/Brussels")?.date).toBe("2026-08-27");
-    expect(parseSpendeeTimestamp("2026-08-31T22:30:00Z", "Europe/Brussels")?.date).toBe("2026-09-01");
-    expect(parseSpendeeTimestamp("2026-01-01T03:00:00+00:00", "America/New_York")?.date).toBe("2025-12-31");
+    expect(parseSpendeeTimestamp("2026-08-26T22:05:17+00:00", "Europe/Brussels")).toMatchObject({ date: "2026-08-26", shifted: true });
+    // The date in the timestamp's own offset: 22:05 at -05:00 stays the 26th, 01:30 at +02:00 stays the 27th.
+    expect(parseSpendeeTimestamp("2026-08-26T22:05:17-05:00", "UTC")).toMatchObject({ date: "2026-08-26", shifted: true });
+    expect(parseSpendeeTimestamp("2026-08-27T01:30:00+02:00", "UTC")).toMatchObject({ date: "2026-08-27", shifted: true });
+    expect(parseSpendeeTimestamp("2026-08-27T01:30:00+02:00", "Europe/Brussels")).toMatchObject({ date: "2026-08-27", shifted: false });
+    expect(parseSpendeeTimestamp("2026-08-31T22:30:00Z", "Europe/Brussels")?.date).toBe("2026-08-31");
+    expect(parseSpendeeTimestamp("2026-01-01T03:00:00+00:00", "America/New_York")).toMatchObject({ date: "2026-01-01", shifted: true });
+    // The same value gives the same date in every zone.
+    const zones = ["UTC", "Europe/Brussels", "America/New_York", "Pacific/Auckland", "Asia/Kolkata"];
+    expect(new Set(zones.map((z) => parseSpendeeTimestamp("2026-08-26T23:59:59+00:00", z)?.date))).toEqual(new Set(["2026-08-26"]));
+    // The instant still accounts for the offset (pairing uses it).
+    expect(parseSpendeeTimestamp("2026-08-27T01:30:00+02:00", "UTC")?.instant).toBe(Date.UTC(2026, 7, 26, 23, 30));
   });
 
   it("takes timestamps without an offset as written, and rejects impossible ones", async () => {
@@ -238,20 +243,27 @@ describe("Spendee timestamps", () => {
     expect(dateInTimeZone(Date.UTC(2026, 7, 26, 22, 5, 17), "Europe/Brussels")).toBe("2026-08-27");
   });
 
-  it("dates entries in the zone sent with the import and says so; an invalid zone means UTC", async () => {
+  it("dates entries as written in the file wherever they are imported, and says how many would differ locally", async () => {
     const text = wallet(joint("2026-08-26T22:05:17+00:00", "Expense", "-1.00000000", { category: "Food" }));
     const p = await previewImport(alice.id, text, BXL);
     expect(p.notices).toContainEqual({
       code: "time-zone",
       count: 1,
       message:
-        "Spendee records the time of each entry; dates are taken in your time zone, Europe/Brussels. 1 entry falls on a different day than the UTC date in the file.",
+        "Spendee records the time of each entry with its UTC offset; dates are taken as written in the file, so the same " +
+        "files give the same dates wherever they are imported. 1 entry falls on a different day in your time zone, " +
+        "Europe/Brussels (made near midnight); edit it afterwards if needed.",
     });
     const q = await previewImport(alice.id, text, { timeZone: "Not/AZone" });
-    expect(q.notices.find((n) => n.code === "time-zone")?.message).toMatch(/taken in UTC \(your browser's time zone was not recognised\)\. No entry changes day/);
+    expect(q.notices.find((n) => n.code === "time-zone")?.message).toMatch(/time zone was not recognised/);
+    const u = await previewImport(alice.id, text, { timeZone: "UTC" });
+    expect(u.notices.find((n) => n.code === "time-zone")?.message).toMatch(/wherever they are imported\.$/);
 
     await runImport(alice.id, text, BXL);
-    expect((await entriesOf(alice.id))[0].date).toBe("2026-08-27");
+    expect((await entriesOf(alice.id))[0].date).toBe("2026-08-26");
+    // From a browser in another zone: the same date, so a re-import finds everything as a duplicate.
+    const again = await previewImport(alice.id, text, { timeZone: "Pacific/Auckland" });
+    expect(again).toMatchObject({ transactionsToAdd: 0, duplicateTransactions: 1 });
     const bob = await makeUser(db, "bob@example.com");
     await runImport(bob.id, text, { timeZone: "Not/AZone" });
     expect((await entriesOf(bob.id))[0].date).toBe("2026-08-26");
@@ -400,10 +412,37 @@ describe("Spendee transfer pairing", () => {
     const r = await previewImport(alice.id, [f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000")), f("b.csv", joint("2026-08-01T08:00:10+00:00", IN, "5.00000000"))], BXL);
     expect(r).toMatchObject({ ok: true, transfersToAdd: 1 });
   });
+
+  it.each([
+    ["a bad amount", joint("2026-08-01T08:00:01+00:00", IN, "5,00"), /^Amount: /],
+    ["a wrong sign", joint("2026-08-01T08:00:01+00:00", IN, "-5.00000000"), /^Amount: .*is negative/],
+    ["a bad date", joint("2026-08-01 25:00", IN, "5.00000000"), /^Date: /],
+    ["a missing wallet", { ...joint("2026-08-01T08:00:01+00:00", IN, "5.00000000"), wallet: "" }, /^Wallet: Required/],
+    ["a note that is too long", joint("2026-08-01T08:00:01+00:00", IN, "5.00000000", { note: "n".repeat(501) }), /^Note: /],
+  ])("reports one problem when a transfer row's partner has %s, not a second one for the unpaired row", async (_, broken, message) => {
+    const p = await refused([f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000")), f("b.csv", broken)]);
+    expect(p).toMatchObject({ problemCount: 1, unpairedTransfers: 0 });
+    expectProblems(p, [{ file: "b.csv", line: 2, message }]);
+  });
+
+  it("still reports a row as unpaired when the broken row could not have been its partner", async () => {
+    // The broken incoming row is in the same wallet, so it never covers the outgoing one.
+    const p = await refused([
+      f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000"), sav("2026-08-01T08:00:01+00:00", IN, "5,00")),
+    ]);
+    expect(p).toMatchObject({ problemCount: 2, unpairedTransfers: 1 });
+    expectProblems(p, [{ line: 2, message: /has no matching Incoming Transfer/ }, { line: 3, message: /^Amount: / }]);
+    // One broken row covers one leftover only.
+    const q = await refused([
+      f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000"), sav("2026-08-01T08:00:02+00:00", OUT, "-5.00000000")),
+      f("b.csv", joint("2026-08-01T08:00:01+00:00", IN, "5,00")),
+    ]);
+    expect(q).toMatchObject({ problemCount: 2, unpairedTransfers: 1 });
+  });
 });
 
 // A three-wallet selection used below: EUR savings, EUR joint, USD; a same-currency and a cross-currency transfer
-// (one each way), labels, and a late-evening UTC entry that lands on the next day in Brussels.
+// (one each way), labels, and a late-evening UTC entry that would be on the next day in Brussels (kept as written).
 const SAVINGS = f(
   "savings.csv",
   sav("2026-08-01T09:00:00+00:00", "Income", "1000.00000000", { category: "Salary" }),
@@ -455,7 +494,7 @@ describe("importing several files at once", () => {
 
     const r = await runImport(alice.id, SELECTION, BXL);
     expect(r).toMatchObject({ imported: true, transactionsToAdd: 6, transfersToAdd: 2 });
-    expect((await entriesOf(alice.id)).find((e) => e.note === "late")?.date).toBe("2026-09-01");
+    expect((await entriesOf(alice.id)).find((e) => e.note === "late")?.date).toBe("2026-08-31"); // 22:30 UTC, as written
     // Independently: income − expenses ± transfers, per wallet, in minor units.
     const balance = Object.fromEntries((await listWallets(alice.id)).map((w) => [w.name, w.balanceMinor]));
     expect(balance).toEqual({

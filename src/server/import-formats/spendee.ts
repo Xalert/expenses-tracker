@@ -14,6 +14,8 @@ import {
   normalizeWalletName,
   readCsvTable,
   specBuilder,
+  walletKey,
+  type BrokenTransferRow,
   type ImportContext,
   type ImportFormat,
   type ParsedFile,
@@ -80,20 +82,21 @@ const TIMESTAMP_RE =
   /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?(?:\s*(Z|[+-]\d{2}(?::?\d{2})?))?)?$/i;
 
 export type SpendeeTimestamp = {
-  /** The calendar date to store. */
+  /** The calendar date to store: the date as written in the file (in the timestamp's own offset). */
   date: string;
   /** Milliseconds since the epoch; without an offset, the time as written read as UTC (used for pairing only). */
   instant: number;
-  /** True when the value carried a UTC offset and was converted to the time zone. */
+  /** True when the value carried a UTC offset. */
   converted: boolean;
-  /** True when that conversion changed the calendar date written in the file. */
+  /** True when that instant falls on another calendar day in `timeZone` (only counted for the preview's notice). */
   shifted: boolean;
 };
 
 /**
  * `YYYY-MM-DD`, optionally with ` HH:MM[:SS[.fff]]` (or `T`), optionally followed by `Z` or a `±HH:MM` offset.
- * With an offset, the date is the local date of that instant in `timeZone`; without one, the date as written.
- * Null for anything else (including impossible dates and times).
+ * The date is always the one written in the file, so it does not depend on where the file is imported from; with an
+ * offset, `shifted` says whether that instant is on another day in `timeZone` (the importing browser's zone).
+ * Null for anything else (including impossible dates, times and offsets).
  */
 export function parseSpendeeTimestamp(value: string, timeZone: string): SpendeeTimestamp | null {
   const m = TIMESTAMP_RE.exec(value.trim());
@@ -116,9 +119,7 @@ export function parseSpendeeTimestamp(value: string, timeZone: string): SpendeeT
     offsetMinutes = (om[1] === "-" ? -1 : 1) * (oh * 60 + omin);
   }
   const instant = wall - offsetMinutes * 60_000;
-  const date = dateInTimeZone(instant, timeZone);
-  if (!isValidDate(date)) return null;
-  return { date, instant, converted: true, shifted: date !== written };
+  return { date: written, instant, converted: true, shifted: dateInTimeZone(instant, timeZone) !== written };
 }
 
 /** `note · labels`, or whichever of the two is present. */
@@ -212,7 +213,21 @@ function parseSpendeeCsv(fileText: string, ctx: ImportContext): ParsedFile {
     const note =
       bareNote === undefined ? undefined : check(() => normalizeNote(joinNote(bareNote, labels)), (m) => problem(noteLabel, `${m.replace(/\.$/, "")} (with the labels added).`));
 
-    if (out.problems.length > problemsBefore) continue;
+    if (out.problems.length > problemsBefore) {
+      // Remember a broken transfer row, so its partner is not reported as unpaired as well (finalize).
+      if (type === "out" || type === "in") {
+        out.brokenTransferRows.push({
+          direction: type,
+          walletKey: walletName !== undefined && currency ? walletKey(walletName, currency) : null,
+          currency,
+          amountMinor,
+          instant: ts?.instant ?? null,
+          matchKey: bareNote === undefined ? null : (bareNote ?? ""),
+          loc: { line },
+        });
+      }
+      continue;
+    }
     if (wasRounded) addTally(out, `rounded:${currency}`);
     if (labels) addTally(out, "labels");
     if (ts!.converted) addTally(out, "tz-converted");
@@ -378,7 +393,28 @@ function pairTransfers(combined: ParsedFile, ctx: ImportContext): void {
     });
   }
 
-  const unpaired = legs.map((_, k) => k).filter((k) => !used.has(k));
+  // A leftover row that could have paired with a transfer row that has its own problem is not reported again: that
+  // row's problem is the one mistake. Each broken row covers at most one leftover (the closest in time).
+  const brokenUsed = new Set<BrokenTransferRow>();
+  const coveredByBroken = (leg: TransferLeg) => {
+    let best: BrokenTransferRow | null = null;
+    let bestD = Infinity;
+    for (const b of combined.brokenTransferRows) {
+      if (brokenUsed.has(b) || b.direction === leg.direction) continue;
+      if (b.walletKey !== null && b.walletKey === combined.wallets[leg.wallet].key) continue;
+      if (b.matchKey !== null && b.matchKey !== leg.matchKey) continue;
+      const d = b.instant === null ? TRANSFER_PAIR_WINDOW_MS : Math.abs(b.instant - leg.instant);
+      if (d > TRANSFER_PAIR_WINDOW_MS) continue;
+      if (b.amountMinor !== null && b.currency === leg.currency && b.amountMinor !== leg.amountMinor) continue;
+      if (d < bestD) {
+        best = b;
+        bestD = d;
+      }
+    }
+    if (best) brokenUsed.add(best);
+    return best !== null;
+  };
+  const unpaired = legs.map((_, k) => k).filter((k) => !used.has(k) && !coveredByBroken(legs[k]));
   combined.unpairedTransferRows += unpaired.length;
   if (unpaired.length === 0) return;
   if (ctx.unpairedTransfersAsEntries) {
@@ -425,20 +461,22 @@ function addNotices(combined: ParsedFile, ctx: ImportContext): void {
   const t = combined.tallies;
   const converted = t.get("tz-converted") ?? 0;
   if (converted > 0) {
+    // Dates are taken as written in the file; the browser's zone only tells the user how many would differ there.
     const shifted = t.get("tz-shifted") ?? 0;
-    const zone = ctx.timeZoneFallback
-      ? "UTC (your browser's time zone was not recognised)"
+    const comparison = ctx.timeZoneFallback
+      ? "Your browser's time zone was not recognised, so they were not compared with it."
       : ctx.timeZone === "UTC"
-        ? "UTC"
-        : `your time zone, ${ctx.timeZone}`;
+        ? ""
+        : shifted > 0
+          ? `${fmtCount(shifted)} ${shifted === 1 ? "entry falls" : "entries fall"} on a different day in your time zone, ` +
+            `${ctx.timeZone} (made near midnight); edit ${shifted === 1 ? "it" : "them"} afterwards if needed.`
+          : `None falls on a different day in your time zone, ${ctx.timeZone}.`;
     combined.notices.push({
       code: "time-zone",
       count: converted,
       message:
-        `Spendee records the time of each entry; dates are taken in ${zone}. ` +
-        (shifted > 0
-          ? `${fmtCount(shifted)} ${shifted === 1 ? "entry falls" : "entries fall"} on a different day than the UTC date in the file.`
-          : "No entry changes day because of that."),
+        "Spendee records the time of each entry with its UTC offset; dates are taken as written in the file, so the " +
+        `same files give the same dates wherever they are imported.${comparison ? ` ${comparison}` : ""}`,
     });
   }
   const labelled = t.get("labels") ?? 0;
