@@ -1,7 +1,8 @@
 import "server-only";
-import { and, asc, count, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, wallets, type CategoryKind } from "@/db/schema";
+import { sortCategories } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
@@ -28,13 +29,8 @@ const KIND_NOUN: Record<CategoryKind, string> = { expense: "expense", income: "i
 
 const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
 
-// Expense first, active before archived, then by name ignoring case (user-entered names are not always capitalised).
-const categoryOrder = [
-  asc(categories.kind),
-  sql`${categories.archivedAt} is not null`,
-  sql`lower(${categories.name})`,
-  asc(categories.id),
-];
+// Order: `sortCategories` (src/lib/category-order.ts) in JS: expense first, active before archived, then by name
+// ignoring case by code point, then id. Never SQL `lower(name)`, whose result depends on the database's collation.
 
 const viewColumns = {
   id: categories.id,
@@ -53,7 +49,7 @@ export async function listCategories(
   kind?: CategoryKind,
   opts: { includeArchived?: boolean } = {},
 ): Promise<CategoryView[]> {
-  return (await getDb())
+  const rows = await (await getDb())
     .select(viewColumns)
     .from(categories)
     .where(
@@ -62,8 +58,8 @@ export async function listCategories(
         kind ? eq(categories.kind, kind) : undefined,
         opts.includeArchived ? undefined : isNull(categories.archivedAt),
       ),
-    )
-    .orderBy(...categoryOrder);
+    );
+  return sortCategories(rows);
 }
 
 /**
@@ -90,7 +86,7 @@ export async function listCategoriesWithUsage(
     opts.groupId === undefined
       ? undefined
       : sql`${transactions.walletId} in (select id from wallets where group_id = ${opts.groupId} and user_id = ${userId})`;
-  return (await getDb())
+  const rows = await (await getDb())
     .select({
       ...viewColumns,
       transactionCount: sql<number>`count(${transactions.id})`.mapWith(Number),
@@ -101,8 +97,8 @@ export async function listCategoriesWithUsage(
     .leftJoin(transactions, and(eq(transactions.categoryId, categories.id), eq(transactions.userId, userId), inGroup))
     .leftJoin(wallets, eq(wallets.id, transactions.walletId))
     .where(eq(categories.userId, userId))
-    .groupBy(categories.id)
-    .orderBy(...categoryOrder);
+    .groupBy(categories.id);
+  return sortCategories(rows);
 }
 
 /** One owned category (archived included) or null. */

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { transactions, walletGroups, wallets, type Wallet } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
@@ -75,17 +75,43 @@ export async function getWallet(userId: number, walletId: number, db?: DBOrTx): 
   return row ?? null;
 }
 
-/** Internal: the owned wallet row or NOT_FOUND. */
-export async function getOwnedWalletRow(userId: number, walletId: number, tx?: DBOrTx, field = "walletId"): Promise<Wallet> {
+/**
+ * Internal: the owned wallet row or NOT_FOUND, with `groupName` and `groupArchived` (its group is archived: the
+ * entry services then refuse new entries on it, as on an archived wallet).
+ */
+export async function getOwnedWalletRow(
+  userId: number,
+  walletId: number,
+  tx?: DBOrTx,
+  field = "walletId",
+): Promise<Wallet & { groupName: string; groupArchived: boolean }> {
   const db = tx ?? (await getDb());
   const [row] = !isPgId(walletId)
     ? []
     : await db
-    .select()
-    .from(wallets)
-    .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)));
+        .select({
+          ...getTableColumns(wallets),
+          groupName: walletGroups.name,
+          groupArchived: sql<boolean>`${walletGroups.archivedAt} is not null`.mapWith(Boolean),
+        })
+        .from(wallets)
+        .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
+        .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)));
   if (!row) throw new ServiceError("NOT_FOUND", "Wallet not found.", field);
   return row;
+}
+
+/**
+ * Internal, for the entry services: why `wallet` takes no new entries (it is archived, or its group is), else null.
+ * `subject` starts the message ("This wallet", "The source wallet").
+ */
+export function closedWalletMessage(
+  wallet: { archivedAt: Date | null; groupArchived: boolean; groupName: string },
+  subject: string,
+): string | null {
+  if (wallet.archivedAt) return `${subject} is archived.`;
+  if (wallet.groupArchived) return `${subject} is in the archived group “${wallet.groupName}”. Unarchive the group first.`;
+  return null;
 }
 
 function assertInitialBalance(value: unknown): number {

@@ -6,7 +6,7 @@ import { categories, transactions, wallets, type CategoryKind, type TransactionK
 import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
-import { getOwnedWalletRow, signedAmountSql } from "./wallets";
+import { closedWalletMessage, getOwnedWalletRow, signedAmountSql } from "./wallets";
 
 export type TransactionView = {
   id: number;
@@ -252,9 +252,10 @@ async function validateInput(
   const note = normalizeNote(input.note);
 
   const wallet = await getOwnedWalletRow(userId, walletId, tx);
-  // An archived wallet only stays valid for a transaction that already belonged to it.
-  if (wallet.archivedAt && wallet.id !== previous?.walletId) {
-    throw new ServiceError("VALIDATION", "This wallet is archived.", "walletId");
+  // An archived wallet (or one in an archived group) only stays valid for a transaction that already belonged to it.
+  const closed = closedWalletMessage(wallet, "This wallet");
+  if (closed && wallet.id !== previous?.walletId) {
+    throw new ServiceError("VALIDATION", closed, "walletId");
   }
   // FOR SHARE: a concurrent kind change (`changeCategoryKind`, FOR UPDATE) waits for this entry, then sees it.
   const [category] = await tx

@@ -370,7 +370,11 @@ function sortByLocation<T extends Loc>(items: T[]): T[] {
 // ---------------------------------------------------------------------------------------------------------
 // Planning: match against the account, find duplicates, apply the archived-wallet rule
 
-type WalletTarget = { id: number | null; archived: boolean };
+/**
+ * `archived`: the account's wallet takes no new entries (it is archived, or its group is: then `archivedGroup` names
+ * the group).
+ */
+type WalletTarget = { id: number | null; archived: boolean; archivedGroup?: string };
 
 type Plan = {
   walletTargets: WalletTarget[]; // per file wallet; id null → created
@@ -402,16 +406,26 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const problems: ImportProblem[] = [];
 
   // Wallets ------------------------------------------------------------------------------------------
+  // A wallet of an archived group counts as archived (as in the entry services): it takes no new entries.
   const existingWallets = await tx
-    .select({ id: wallets.id, name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
+    .select({
+      id: wallets.id,
+      name: wallets.name,
+      currency: wallets.currency,
+      archivedAt: wallets.archivedAt,
+      groupName: walletGroups.name,
+      groupArchivedAt: walletGroups.archivedAt,
+    })
     .from(wallets)
+    .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
     .where(eq(wallets.userId, userId))
     .orderBy(wallets.id);
-  const candidates = new Map<string, { id: number; archived: boolean }[]>();
+  const candidates = new Map<string, (WalletTarget & { id: number })[]>();
   for (const w of existingWallets) {
     const key = walletKey(w.name, w.currency);
     const list = candidates.get(key) ?? [];
-    list.push({ id: w.id, archived: w.archivedAt !== null });
+    const archivedGroup = w.archivedAt === null && w.groupArchivedAt !== null ? w.groupName : undefined;
+    list.push({ id: w.id, archived: w.archivedAt !== null || archivedGroup !== undefined, archivedGroup });
     candidates.set(key, list);
   }
   if (parsed.walletMatching === "merge") {
@@ -429,7 +443,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     const k = used.get(w.key) ?? 0;
     used.set(w.key, k + 1);
     const match = candidates.get(w.key)?.[parsed.walletMatching === "by-position" ? k : 0];
-    if (match) walletTargets.push({ id: match.id, archived: match.archived });
+    if (match) walletTargets.push(match);
     else {
       walletTargets.push({ id: null, archived: false });
       walletsToCreate.push(i);
@@ -538,11 +552,15 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   };
   const archivedProblem = (loc: Loc, fileWallet: number) => {
     const w = parsed.wallets[fileWallet];
+    const group = walletTargets[fileWallet].archivedGroup;
     problems.push({
       ...loc,
       message:
-        `Wallet “${w.name}” (${w.currency}) is archived in your account, so nothing new can be added to it. ` +
-        "Unarchive it first, or remove these rows.",
+        group === undefined
+          ? `Wallet “${w.name}” (${w.currency}) is archived in your account, so nothing new can be added to it. ` +
+            "Unarchive it first, or remove these rows."
+          : `Wallet “${w.name}” (${w.currency}) is in the archived group “${group}” in your account, so nothing new ` +
+            "can be added to it. Unarchive the group first, or remove these rows.",
     });
   };
   // Same rule for categories: an archived category of the account takes no new entries (duplicates still skip).
