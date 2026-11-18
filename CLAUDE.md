@@ -30,7 +30,7 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 ## Commands
 
 ```bash
-npm run db:up                                 # development Postgres in Docker (compose.dev.yaml, 127.0.0.1:5432), waits until healthy
+npm run db:up                                 # development Postgres in Docker (compose.dev.yaml, 127.0.0.1:5433), waits until healthy
 npm run db:down                               # stop it (data stays in the expenses-dev-pg volume)
 npm run dev                                   # dev server on :3000 on database `expenses` (the owner's REAL data — see below); needs db:up
 npm run dev:demo                              # seed database `expenses_demo` if needed, then the dev server on it
@@ -52,7 +52,7 @@ The `Makefile` wraps these (`make` lists the targets; `make check`, `make test F
 demo database). `make dev-real` and `make psql DB=expenses` reach the real data: never run them from an agent.
 
 The database is migrated on first request. `dev:demo` and `demo:reset` put
-`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` inside the npm script, so they never reach
+`DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` inside the npm script, so they never reach
 `expenses`.
 
 `build` and `start` set `NODE_ENV=production` inline on purpose: a globally exported `NODE_ENV=development`
@@ -91,7 +91,7 @@ amounts. A check constraint ties `kind`, `categoryId` and `transferId` together.
 
 **Database (`src/db/index.ts`).** PostgreSQL through `pg` (a `Pool`) and Drizzle; SQLite support is gone.
 `getDb()` is a memoized *promise* on `globalThis`: it connects to `DATABASE_URL` (required in production; in
-development it defaults to `DEFAULT_DEV_DATABASE_URL`, `postgres://expenses:expenses@localhost:5432/expenses`),
+development it defaults to `DEFAULT_DEV_DATABASE_URL`, `postgres://expenses:expenses@localhost:5433/expenses`),
 applies the migrations in `drizzle/` once, then resolves; a failed attempt clears it so the next call retries. DDL is
 transactional and foreign keys are always on; there is no pre-migration copy. Timestamps are `timestamptz`, calendar
 dates stay `text`. Inside `await db.transaction(async (tx) => …)` await every statement and use only `tx`.
@@ -162,7 +162,7 @@ from source. Keep the two Compose files' environment blocks in step.
 - **The `expenses` database on the development Postgres is the developer's real data. Never run a database script
   (`db:seed`, `db:reset`, one-off `tsx` scripts) or a dev server against it from an agent.** Use `expenses_demo`
   (what `dev:demo` / `demo:reset` do) or a throwaway database, with `DATABASE_URL=<url>` inline on the
-  same command every time (`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo npm run db:reset
+  same command every time (`DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo npm run db:reset
   -- --demo --yes`), never via `export` or earlier in a `&&` chain: a failed step before it silently leaves the
   default database as the target. `db:reset --yes` refuses the default database (`DEFAULT_DEV_DATABASE_URL` or an
   unset `DATABASE_URL`) for this reason. There is no file to copy before a reset: take a `pg_dump` or the JSON

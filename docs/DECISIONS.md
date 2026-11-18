@@ -195,6 +195,7 @@ Added 2026-11-08.
 
 | Decision | Why | Decided by |
 |---|---|---|
+| The development Postgres listens on host port **5433** (`127.0.0.1:5433`, still 5432 inside the container); `DEFAULT_DEV_DATABASE_URL`, the npm scripts and `drizzle.config.ts` follow | The owner runs billy alongside, whose dev Postgres publishes 5432; both have to run at the same time (2026-11-17). Deployment is unaffected: there the database is reached as `db:5432` on the Compose network | owner |
 | A `Makefile` of short aliases (`make dev`, `make check`, `make test FILE=… NAME=…`, …) over the npm scripts, modelled on the owner's other project (billy); `make dev` uses the demo database, the real one only via `make dev-real` | The owner asked for less typing when testing; the npm scripts stay the source of truth, so nothing works only through make (2026-11-17) | owner (ask), planner (targets) |
 | *(superseded 2026-11-09 by Postgres)* `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
 | *(superseded 2026-11-09 by Postgres)* The reset writes `<file>.before-reset-<YYYYMMDD-HHMMSS>.bak` of a non-empty database first (`--no-backup` skips it) and refuses with `NODE_ENV=production` | A reset is one typo away from losing real data; the command is a development tool | planner |

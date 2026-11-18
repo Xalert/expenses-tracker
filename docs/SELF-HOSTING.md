@@ -29,7 +29,7 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 
 | variable | default (image) | default (dev) | meaning |
 |---|---|---|---|
-| `DATABASE_URL` | — (required; the Compose files set it) | `postgres://expenses:expenses@localhost:5432/expenses` | PostgreSQL connection URL (`postgres://user:password@host:5432/dbname`); the app migrates it on first use. Unset in production: the app refuses to start using the database |
+| `DATABASE_URL` | — (required; the Compose files set it) | `postgres://expenses:expenses@localhost:5433/expenses` | PostgreSQL connection URL (`postgres://user:password@host:5432/dbname`); the app migrates it on first use. Unset in production: the app refuses to start using the database |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
 | `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
@@ -276,7 +276,7 @@ cd .next/standalone && DATABASE_URL=postgres://expenses:secret@localhost:5432/ex
 ## Database notes
 
 - PostgreSQL 17, through `pg` and Drizzle. `DATABASE_URL` is a `postgres://` or `postgresql://` URL and is required in
-  production; in development it defaults to `postgres://expenses:expenses@localhost:5432/expenses`, the database
+  production; in development it defaults to `postgres://expenses:expenses@localhost:5433/expenses`, the database
   that `npm run db:up` starts (see [`compose.dev.yaml`](../compose.dev.yaml)).
 - Migrations live in `drizzle/` and are applied automatically the first time the app touches the database
   (once per process, in a transaction; foreign keys are always enforced).
@@ -284,5 +284,5 @@ cd .next/standalone && DATABASE_URL=postgres://expenses:secret@localhost:5432/ex
   dev:demo` and `npm run demo:reset` use it and never touch `expenses`. `npm run dev` is on `expenses`, the real
   data. To reset local data, use `npm run db:reset` (see [`DEVELOPMENT.md`](DEVELOPMENT.md#run-it)); it asks first and does not keep a copy, so
   take a backup with the app's JSON export or `pg_dump` before confirming.
-- A scratch database: put `DATABASE_URL=postgres://expenses:expenses@localhost:5432/<scratch>` on the same command line
+- A scratch database: put `DATABASE_URL=postgres://expenses:expenses@localhost:5433/<scratch>` on the same command line
   (never `export` it).

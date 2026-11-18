@@ -13,7 +13,7 @@ export type DB = PgDatabase<PgQueryResultHKT, typeof schema>;
 export type DBOrTx = DB | Parameters<Parameters<DB["transaction"]>[0]>[0];
 
 /** What `npm run dev` connects to when DATABASE_URL is unset outside production (the owner's real dev data). */
-export const DEFAULT_DEV_DATABASE_URL = "postgres://expenses:expenses@localhost:5432/expenses";
+export const DEFAULT_DEV_DATABASE_URL = "postgres://expenses:expenses@localhost:5433/expenses";
 
 /** Migrations folder: `MIGRATIONS_DIR` or `<cwd>/drizzle` (also correct for the standalone server). */
 export function resolveMigrationsDir(): string {

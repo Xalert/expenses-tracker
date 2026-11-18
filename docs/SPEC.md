@@ -11,7 +11,7 @@ this file in the same change and call the deviation out in your final report.
   layouts can `await requireUser()` at the top level without `<Suspense>` boundaries. Don't use `'use cache'`.
 - Tailwind CSS v4
 - PostgreSQL 17 via Drizzle ORM + `pg` (node-postgres, a `Pool` of at most 10). `DATABASE_URL` is a `postgres://`
-  URL (required in production; development defaults to `postgres://expenses:expenses@localhost:5432/expenses`,
+  URL (required in production; development defaults to `postgres://expenses:expenses@localhost:5433/expenses`,
   started with `npm run db:up`). SQLite support was removed on 2026-11-09.
 - Migrations generated with `drizzle-kit` into `drizzle/` and **applied automatically on first DB access**, so
   `npm run db:up && npm run dev` works with no extra step.
@@ -27,9 +27,9 @@ this file in the same change and call the deviation out in your final report.
   file's in-memory PGlite, restarting identities, installs it via `setDb` and returns it) and `await makeUser(db, email)` (user + default categories, `cat(name)` → category id).
 
 - **Development database.** `compose.dev.yaml` runs `postgres:17-alpine` (user, password and database
-  `expenses`; port `127.0.0.1:5432`; named volume `expenses-dev-pg`; an init script creates a second database
+  `expenses`; port `127.0.0.1:5433`; named volume `expenses-dev-pg`; an init script creates a second database
   `expenses_demo`). `npm run db:up` starts it and waits until healthy; `npm run db:down` stops it (the volume stays).
-  `npm run dev` uses the default `postgres://expenses:expenses@localhost:5432/expenses`, which is the owner's REAL
+  `npm run dev` uses the default `postgres://expenses:expenses@localhost:5433/expenses`, which is the owner's REAL
   data from now on.
 - **`npm run db:reset -- --demo`** puts the database into the demo state: every row of every app table is deleted
   (one `TRUNCATE … RESTART IDENTITY CASCADE`), then the demo user and sample data are seeded (same as `db:seed`), and
@@ -42,7 +42,7 @@ this file in the same change and call the deviation out in your final report.
   `reset` — a stray `--yes` or `y` can never wipe it. Not a terminal and no usable `--yes` → refuse. They refuse
   outright when `NODE_ENV=production`. Without `--demo`/`--clean` they print usage and exit 1.
 - **Demo mode on its own database.** `npm run dev:demo` runs `db:seed` and then `next dev`, both with
-  `DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` set inside the script; `npm run
+  `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` set inside the script; `npm run
   demo:reset` runs the reset with `--demo --yes` on that database. Neither can reach `expenses`. `npm run dev` stays on
   the real database. Scratch databases: put `DATABASE_URL=postgres://…/<scratch>` inline on the same command.
 - **Demo login in the terminal.** When the dev server (`next dev`) opens the database and a user with user ID
@@ -231,7 +231,7 @@ retries), `createDatabase(url)` (async, for scripts), `createTestDatabase()` (as
 migrator, for tests), `setDb(db | undefined)` (tests), `describeDatabase(url)` (the URL with the password masked),
 `DEFAULT_DEV_DATABASE_URL`, `type DB` (`PgDatabase<PgQueryResultHKT, typeof schema>`, so node-postgres and PGlite
 both fit) and `type DBOrTx`. `DATABASE_URL` is a `postgres://` / `postgresql://` URL (required in production; the
-development default is `postgres://expenses:expenses@localhost:5432/expenses`). The runtime driver is `pg`'s `Pool`
+development default is `postgres://expenses:expenses@localhost:5433/expenses`). The runtime driver is `pg`'s `Pool`
 (max 10). Migrations folder: `MIGRATIONS_DIR` or `<cwd>/drizzle`; `next.config.ts` traces `drizzle/**` into
 `.next/standalone`, so `node server.js` run from `.next/standalone` auto-migrates without extra copying.
 `.next/standalone` auto-migrates without extra copying.
@@ -1564,7 +1564,7 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   No telemetry (`NEXT_TELEMETRY_DISABLED=1` in the image).
 - **Runtime configuration is environment-only** (documented in `.env.example` and `docs/SELF-HOSTING.md` → Settings):
   - `DATABASE_URL` — a `postgres://` / `postgresql://` URL. **Required in production** (the first DB use throws "DATABASE_URL
-    is not set"); in development it defaults to `postgres://expenses:expenses@localhost:5432/expenses`. The Compose
+    is not set"); in development it defaults to `postgres://expenses:expenses@localhost:5433/expenses`. The Compose
     files build it from `POSTGRES_PASSWORD` (a Compose variable, default `expenses`).
   - `COOKIE_SECURE` — `auto` (default: mark the session cookie `secure` only when the request arrived over
     HTTPS, judged by `x-forwarded-proto`), `true`, or `false`. Many homelabs serve plain HTTP on the LAN; a

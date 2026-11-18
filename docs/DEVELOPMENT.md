@@ -13,7 +13,7 @@ live. To just run the app, use the Compose quick start in the [README](../README
 ## Run it
 
 Requires Node 20.9+ (developed on Node 24) and Docker (for the development database). Install the dependencies and
-start PostgreSQL 17 in Docker (`compose.dev.yaml`, on `127.0.0.1:5432`, data in a named volume):
+start PostgreSQL 17 in Docker (`compose.dev.yaml`, on `127.0.0.1:5433`, data in a named volume):
 
 ```bash
 npm install
@@ -74,7 +74,7 @@ A second server on a scratch database. Keep `DATABASE_URL` on the same command l
 database must exist; `docker compose -f compose.dev.yaml exec db createdb -U expenses scratch`):
 
 ```bash
-DATABASE_URL=postgres://expenses:expenses@localhost:5432/scratch PORT=3001 npm run dev
+DATABASE_URL=postgres://expenses:expenses@localhost:5433/scratch PORT=3001 npm run dev
 ```
 
 Tests (PGlite, no Docker needed): one file, or only the tests whose name matches:

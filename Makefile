@@ -2,7 +2,7 @@
 # The dev targets use the demo database `expenses_demo`; only `make dev-real` touches your real data (`expenses`).
 
 COMPOSE_DEV := docker compose -f compose.dev.yaml
-DEMO_URL := postgres://expenses:expenses@localhost:5432/expenses_demo
+DEMO_URL := postgres://expenses:expenses@localhost:5433/expenses_demo
 # Database for `make psql` (DB=expenses for the real one).
 DB ?= expenses_demo
 
@@ -29,12 +29,12 @@ node_modules: package.json package-lock.json
 
 install: node_modules
 
-## Development database (compose.dev.yaml, 127.0.0.1:5432) -------------------
+## Development database (compose.dev.yaml, 127.0.0.1:5433) -------------------
 
-# Fails early, naming the container, when another one (e.g. billy's Postgres) already publishes 5432.
+# Fails early, naming the container, when another one (e.g. billy's Postgres) already publishes 5433.
 up:
-	@holder=$$(docker ps --filter publish=5432 --format '{{.Names}}' | grep -vx expenses-tracker-dev-db-1 | head -1); \
-	if [ -n "$$holder" ]; then echo "Port 5432 is taken by container $$holder. Stop it with: docker stop $$holder"; exit 1; fi
+	@holder=$$(docker ps --filter publish=5433 --format '{{.Names}}' | grep -vx expenses-tracker-dev-db-1 | head -1); \
+	if [ -n "$$holder" ]; then echo "Port 5433 is taken by container $$holder. Stop it with: docker stop $$holder"; exit 1; fi
 	npm run -s db:up
 
 # Data stays in the expenses-dev-pg volume.
