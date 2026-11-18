@@ -1,0 +1,60 @@
+# End-to-end browser tests (e2e/, Playwright, Chromium) against a production build on a fresh Postgres service
+# container. `npm run test:e2e` (scripts/e2e.mjs) builds, starts .next/standalone/server.js through Playwright's
+# webServer and runs the desktop (1280px) and phone (375px) projects. With E2E_DATABASE_URL set it uses that database
+# instead of starting compose.e2e.yaml. The HTML report and the failure traces are uploaded when a test fails.
+name: E2E tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: expenses
+          POSTGRES_PASSWORD: expenses
+          POSTGRES_DB: expenses_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U expenses -d expenses_e2e"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      E2E_DATABASE_URL: postgres://expenses:expenses@localhost:5432/expenses_e2e
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Run the e2e suite
+        run: npm run test:e2e
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

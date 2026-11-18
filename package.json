@@ -10,6 +10,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
     "db:generate": "drizzle-kit generate",
     "db:up": "docker compose -f compose.dev.yaml up -d --wait",
     "db:down": "docker compose -f compose.dev.yaml down",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",

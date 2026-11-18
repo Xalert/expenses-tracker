@@ -1,0 +1,21 @@
+# Throwaway Postgres for the end-to-end browser tests (`npm run test:e2e` / `make test-e2e`, scripts/e2e.mjs).
+# Its own project and port (127.0.0.1:5434), data on tmpfs: nothing survives `down`, and it never touches the
+# development database (compose.dev.yaml, port 5433).
+name: expenses-tracker-e2e
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: expenses
+      POSTGRES_PASSWORD: expenses
+      POSTGRES_DB: expenses_e2e
+    ports:
+      - "127.0.0.1:5434:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U expenses -d expenses_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
