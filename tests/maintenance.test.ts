@@ -14,7 +14,18 @@ import { createTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
-const DEMO_COUNTS = { users: 1, sessions: 0, wallet_groups: 2, wallets: 6, categories: 8, transfers: 4, transactions: 42 };
+const DEMO_COUNTS = {
+  users: 1,
+  sessions: 0,
+  wallet_groups: 2,
+  wallets: 6,
+  categories: 8,
+  transfers: 4,
+  transactions: 42,
+  exchange_rates: 0,
+  exchange_rate_days: 0,
+  manual_exchange_rates: 0,
+};
 
 async function counts(db: DB) {
   return Object.fromEntries((await countRows(db)).map((t) => [t.table, t.rows]));
@@ -27,7 +38,12 @@ describe("maintenance", () => {
   });
 
   it("lists the app tables but not the migrations table", async () => {
-    expect(await appTables(db)).toEqual(["categories", "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"]);
+    expect(await appTables(db)).toEqual([
+      "categories",
+      "exchange_rate_days",
+      "exchange_rates",
+      "manual_exchange_rates",
+      "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"]);
   });
 
   it("wipes every row in one truncate and restarts the identity counters", async () => {

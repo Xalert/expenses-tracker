@@ -1,6 +1,7 @@
 import { MonthChart } from "@/components/dashboard/month-chart";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
-import { LatestCard, WalletsCard, WalletsViewSwitch } from "@/components/dashboard/overview-lists";
+import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
+import { LatestCard, WalletsCard } from "@/components/dashboard/overview-lists";
 import { PlusIcon, WalletIcon } from "@/components/shell/icons";
 import { TransactionList } from "@/components/transaction-list";
 import { Card, CardHeader, CurrencySwitch, EmptyState, InsightCard, LinkButton, PageHeader } from "@/components/ui";
@@ -8,22 +9,27 @@ import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
 import { currentMonth, formatMonth, isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
-import { convertedTotal } from "@/lib/fx";
+import { convertedTotal, tableFor, tableOn } from "@/lib/fx";
 import { formatMoney } from "@/lib/money";
 import {
+  monthConversionNotes,
   monthName,
   overviewHref,
   paceSummary,
+  ratesHref,
+  ratesNeeded,
+  ratesStateOf,
   resolveOverviewCurrency,
   resolveOverviewView,
   toneOf,
   walletsTotalNotes,
 } from "@/lib/overview";
 import { getDashboard } from "@/server/dashboard";
-import { getDailyRates, getExchangeRates, RATES_SOURCE } from "@/server/exchange-rates";
+import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import {
   getMonthInsights,
   getMonthTimeline,
+  getWalletBalancesOn,
   getWalletMonth,
   listUserCurrencies,
   monthDayN,
@@ -99,46 +105,48 @@ export default async function OverviewPage({ searchParams }: Props) {
   const canSwitchView = held.some((c) => c !== currency);
   const view = canSwitchView ? resolveOverviewView(params.view) : "all";
   const ratesOn = exchangeRatesEnabled();
-  const ratesState = (loaded: boolean, quotesTarget: boolean) =>
-    !ratesOn ? "off" : !loaded ? "unavailable" : quotesTarget ? "loaded" : "no-target";
+  const today = todayISO();
+  // The day the figures run to: today for the current month, the month's last day for a past one. The Wallets card
+  // shows the balances and converts at the rates of that day too.
+  const lastDate = isCurrentMonth ? today : monthRange(month).to;
 
   const convertMonth = view === "all" && canSwitchView;
-  const dailyRates = convertMonth ? await getDailyRates(monthRange(previousMonth).from, monthRange(month).to) : null;
-  const convert = convertMonth ? { rates: dailyRates } : undefined;
+  // One conversion (the provider's days from a week before the previous month to `lastDate`, plus the user's own
+  // rates) serves the month figures and the Wallets total.
+  const convert = convertMonth
+    ? await getConversion(user.id, monthRange(previousMonth).from, monthRange(month).to)
+    : undefined;
   const timeline = await getMonthTimeline(user.id, { month, currency, convert, groupId });
   const insights = await getMonthInsights(user.id, { month, currency, convert, groupId });
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
   const monthMissing = [
     ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
   ].sort();
-  const lastDay = dailyRates?.days.at(-1);
-  const monthNotes = convertMonth
-    ? [
-        ...(dailyRates ? [`All wallets, converted at each day's rate · ${RATES_SOURCE}`] : []),
-        ...walletsTotalNotes({
-          currency,
-          missing: monthMissing,
-          ratesDate: null,
-          source: RATES_SOURCE,
-          ratesState: ratesState(
-            dailyRates !== null,
-            currency === dailyRates?.base || lastDay?.rates[currency] !== undefined,
-          ),
-        }),
-      ]
+  const returnHere = overviewHref(month, explicit ? currency : null, maxMonth, "/", view);
+  const toRates = ratesHref(returnHere);
+  const monthNotes = convert
+    ? monthConversionNotes({ currency, conv: convert, lastDate, held, missing: monthMissing, ratesOn, source: RATES_SOURCE })
     : [];
+  const monthNeed = convert ? ratesNeeded(currency, monthMissing, convert, lastDate) : [];
 
-  // The Wallets card follows the same view.
-  const shownWallets = view === "all" ? data.wallets : data.wallets.filter((w) => w.currency === currency);
+  // The Wallets card follows the same view; for a past month, with the balances at the end of that month.
+  const viewWallets = view === "all" ? data.wallets : data.wallets.filter((w) => w.currency === currency);
+  const balancesThen = isCurrentMonth ? null : await getWalletBalancesOn(user.id, lastDate, { groupId });
+  const shownWallets = balancesThen
+    ? viewWallets.map((w) => ({ ...w, balanceMinor: balancesThen.get(w.id) ?? w.balanceMinor }))
+    : viewWallets;
   const needsRates = shownWallets.some((w) => w.currency !== currency);
-  const rates = needsRates ? await getExchangeRates() : null;
+  const providerTable = needsRates ? tableOn(convert?.rates ?? null, lastDate) : null;
+  const rates = needsRates ? tableFor(convert, lastDate) : null;
   const total = convertedTotal(shownWallets, currency, rates);
   const totalNotes = walletsTotalNotes({
     currency,
     missing: total.missing,
-    ratesDate: total.usedRates && rates ? rates.date : null,
+    ratesDate: total.usedRates && providerTable ? providerTable.date : null,
+    stale: convert?.rates?.incomplete,
+    manual: total.manual,
     source: RATES_SOURCE,
-    ratesState: ratesState(rates !== null, currency === rates?.base || rates?.rates[currency] !== undefined),
+    ratesState: ratesStateOf(ratesOn, providerTable, rates, currency),
   });
   const viewParam: Record<string, string> = view === "only" ? { view } : {};
   const href = (code: string) => overviewHref(month, code, maxMonth, "/", view);
@@ -187,26 +195,17 @@ export default async function OverviewPage({ searchParams }: Props) {
               />
             )}
             {canSwitchView && (
-              <WalletsViewSwitch
-                options={[
-                  { label: `All in ${currency}`, href: overviewHref(month, currency, maxMonth), current: view === "all" },
-                  {
-                    label: `${currency} only`,
-                    href: overviewHref(month, currency, maxMonth, "/", "only"),
-                    current: view === "only",
-                  },
-                ]}
+              <ConvertSwitch
+                currency={currency}
+                view={view}
+                allHref={overviewHref(month, currency, maxMonth)}
+                onlyHref={overviewHref(month, currency, maxMonth, "/", "only")}
+                ratesHref={toRates}
               />
             )}
           </div>
         </div>
-        {monthNotes.length > 0 && (
-          <div className="-mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">
-            {monthNotes.map((n) => (
-              <p key={n}>{n}</p>
-            ))}
-          </div>
-        )}
+        <ConversionNotes notes={monthNotes} need={monthNeed} ratesHref={toRates} className="-mt-2" />
 
         <MonthChart
           month={month}
@@ -256,12 +255,15 @@ export default async function OverviewPage({ searchParams }: Props) {
             totalMinor: total.totalMinor,
             notes: totalNotes,
             approximate: total.usedRates,
+            need: ratesNeeded(currency, total.missing, convert ?? null, lastDate),
+            ratesHref: toRates,
           }}
+          asOf={balancesThen ? lastDate : undefined}
           converted={total.converted}
           changeLabel={isCurrentMonth ? "this month" : `in ${monthName(month)}`}
           hrefFor={(id) => (isCurrentMonth ? `/wallets/${id}` : `/wallets/${id}?month=${month}`)}
         />
-        <LatestCard items={data.recent.slice(0, LATEST_COUNT)} today={todayISO()} />
+        <LatestCard items={data.recent.slice(0, LATEST_COUNT)} today={today} />
       </div>
     </div>
   );

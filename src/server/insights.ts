@@ -5,8 +5,8 @@ import { categories, transactions, wallets } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
-import { convertMinor, tableOn, type DailyRates } from "@/lib/fx";
-import { assertId, isPgId } from "./_validate";
+import { convertMinor, tableFor, type Conversion } from "@/lib/fx";
+import { assertDate, assertId, isPgId } from "./_validate";
 import { signedAmountSql } from "./wallets";
 
 // Per-currency month figures for the redesigned Overview, wallet page and charts. Every figure is for ONE currency
@@ -15,13 +15,14 @@ import { signedAmountSql } from "./wallets";
 // Transactions list. Day N is today's day of the month for the current month, the month's last day for a past
 // month, and 0 for a future month (server local time).
 //
-// The one exception is `convert` (Overview, view "All in <currency>"): the month figures then cover every wallet,
-// each currency converted into `currency` at the rate of the entry's own date (`tableOn`). Amounts are summed per
-// date, kind and currency first and each sum is converted once. A currency without a rate is left out and listed in
+// The one exception is `convert` (view "All in <currency>" on Overview, the /transactions day strip and
+// /categories): the month figures then cover every wallet, each currency converted into `currency` at the rate of
+// the entry's own date (`tableFor`: the provider's rate, else the user's own). Amounts are summed per date, kind and
+// currency first and each sum is converted once. A currency without a rate is left out and listed in
 // `missingCurrencies`.
 
-/** Convert every other currency into the requested one with these daily rates (null: none could be loaded). */
-export type ConvertOption = { rates: DailyRates | null };
+/** Convert every other currency into the requested one with these rates (`getConversion`). */
+export type ConvertOption = Conversion;
 
 export type TimelineDay = { date: string; expenseMinor: number; incomeMinor: number };
 export type MonthTimeline = {
@@ -119,7 +120,7 @@ function currencyConditions(userId: number, currency: string | null, narrow: Nar
  */
 function converter(to: string, convert: ConvertOption | undefined) {
   return (amountMinor: number, from: string, date: string): number | null =>
-    !convert || from === to ? amountMinor : convertMinor(amountMinor, from, to, tableOn(convert.rates, date));
+    !convert || from === to ? amountMinor : convertMinor(amountMinor, from, to, tableFor(convert, date));
 }
 
 /**
@@ -519,4 +520,78 @@ export async function getWalletMonth(
     days: all.slice(0, n),
     projectedDays: all.slice(n),
   };
+}
+
+/**
+ * Expense and income per category in `month` (every wallet of the group, archived included, like
+ * `listCategoriesWithUsage`'s `monthAmountMinor`), for /categories' "All in <currency>": with `convert`, every
+ * currency converted into `currency` at each date's rate (per category, date and currency, each sum converted once),
+ * the currencies without a rate left out and listed; without it, only wallets in `currency`.
+ */
+export async function getCategoryMonthAmounts(
+  userId: number,
+  opts: { month: string; currency: string; groupId?: number; convert?: ConvertOption },
+): Promise<{ amounts: Map<number, number>; missingCurrencies: string[] }> {
+  const month = assertMonth(opts.month);
+  const currency = assertCurrency(opts.currency);
+  const { from, to } = monthRange(month);
+  const { convert } = opts;
+  const narrow: Narrow = opts.groupId === undefined ? {} : { groupId: assertId(opts.groupId, "groupId", "group") };
+  const rows = await (await getDb())
+    .select({
+      categoryId: transactions.categoryId,
+      date: transactions.date,
+      currency: wallets.currency,
+      amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
+    })
+    .from(transactions)
+    .innerJoin(wallets, eq(wallets.id, transactions.walletId))
+    .where(
+      and(
+        ...currencyConditions(userId, convert ? null : currency, narrow),
+        inArray(transactions.kind, ["expense", "income"]),
+        gte(transactions.date, from),
+        lte(transactions.date, to),
+      ),
+    )
+    .groupBy(transactions.categoryId, transactions.date, wallets.currency);
+  const toTarget = converter(currency, convert);
+  const amounts = new Map<number, number>();
+  const missing = new Set<string>();
+  for (const r of rows) {
+    if (r.categoryId === null) continue;
+    const value = toTarget(r.amountMinor, r.currency, r.date);
+    if (value === null) {
+      missing.add(r.currency);
+      continue;
+    }
+    amounts.set(r.categoryId, (amounts.get(r.categoryId) ?? 0) + value);
+  }
+  return { amounts, missingCurrencies: sorted(missing) };
+}
+
+/**
+ * The balance of each of the user's wallets at the end of `date` (initial balance + every entry dated on or before
+ * it, transfers included), by wallet id: the Overview's Wallets card for a past month. Archived wallets included.
+ */
+export async function getWalletBalancesOn(
+  userId: number,
+  date: string,
+  opts: { groupId?: number } = {},
+): Promise<Map<number, number>> {
+  const day = assertDate(date);
+  const groupId = opts.groupId === undefined ? undefined : assertId(opts.groupId, "groupId", "group");
+  const rows = await (await getDb())
+    .select({
+      id: wallets.id,
+      balanceMinor: sql<number>`${wallets.initialBalanceMinor} + coalesce(sum(${signedAmountSql}), 0)`.mapWith(Number),
+    })
+    .from(wallets)
+    .leftJoin(
+      transactions,
+      and(eq(transactions.walletId, wallets.id), eq(transactions.userId, userId), lte(transactions.date, day)),
+    )
+    .where(and(eq(wallets.userId, userId), groupId === undefined ? undefined : eq(wallets.groupId, groupId)))
+    .groupBy(wallets.id);
+  return new Map(rows.map((r) => [r.id, r.balanceMinor]));
 }

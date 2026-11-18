@@ -55,6 +55,9 @@ describe("migrations on an empty database", () => {
     );
     expect(tables.map((t) => t.table_name)).toEqual([
       "categories",
+      "exchange_rate_days",
+      "exchange_rates",
+      "manual_exchange_rates",
       "sessions",
       "transactions",
       "transfers",
