@@ -43,6 +43,13 @@
       "when": 1794997997777,
       "tag": "0005_exchange-rates",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794998090076,
+      "tag": "0006_sessions-devices",
+      "breakpoints": true
     }
   ]
 }

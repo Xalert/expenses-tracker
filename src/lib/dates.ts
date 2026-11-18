@@ -84,6 +84,19 @@ export function formatDate(date: string): string {
   }).format(new Date(Date.UTC(y, m - 1, d)));
 }
 
+/** Display an instant as a date and time in a valid IANA time zone, e.g. "5 Nov 2026, 14:03". */
+export function formatDateTime(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).format(instant);
+}
+
 /** Display a `YYYY-MM` month, e.g. "November 2026". */
 export function formatMonth(month: string): string {
   if (!isValidMonth(month)) return month;

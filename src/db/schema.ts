@@ -61,6 +61,10 @@ export const sessions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
     createdAt: createdAt(),
+    /** The browser's `User-Agent` at sign-in, truncated to 256 characters; null when none was sent. */
+    userAgent: text("user_agent"),
+    /** Last request made with this session; written at most once per `SESSION_TOUCH_INTERVAL_MS` (src/server/users.ts). */
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("sessions_user_idx").on(t.userId)],
 );

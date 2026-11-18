@@ -58,10 +58,28 @@ describe("/account forms", () => {
     expect(html.match(/name="currentPassword"/g)).toHaveLength(3);
   });
 
-  it("says how many other devices are signed in", () => {
-    expect(renderToStaticMarkup(<SessionsForm otherSessions={0} />)).toContain("signed in on this device only");
-    expect(renderToStaticMarkup(<SessionsForm otherSessions={1} />)).toContain("1 other device or browser");
-    expect(renderToStaticMarkup(<SessionsForm otherSessions={3} />)).toContain("3 other devices or browsers");
+  it("lists the devices, marks this one, and offers Sign out on the others only", () => {
+    const device = (id: number, current = false) => ({
+      id,
+      label: current ? "Firefox on macOS" : "Safari on iPhone",
+      signedInAt: "5 Nov 2026, 14:03",
+      lastActiveAt: "18 Nov 2026, 09:10",
+      current,
+    });
+    const only = renderToStaticMarkup(<SessionsForm devices={[device(1, true)]} />);
+    expect(only).toContain("signed in on this device only");
+    expect(only).toContain("This device");
+    expect(only).not.toContain('name="sessionId"');
+
+    const html = renderToStaticMarkup(<SessionsForm devices={[device(1, true), device(7), device(9)]} />);
+    expect(html).toContain("2 other devices or browsers");
+    expect(html).toContain("Firefox on macOS");
+    expect(html).toContain("Signed in 5 Nov 2026, 14:03 · Last active 18 Nov 2026, 09:10");
+    expect(html.match(/This device/g)).toHaveLength(1);
+    expect([...html.matchAll(/name="sessionId" value="(\d+)"/g)].map((m) => m[1])).toEqual(["7", "9"]);
+    expect(html).toContain('aria-label="Sign out Safari on iPhone, signed in 5 Nov 2026, 14:03"');
+    expect(html).toContain("Sign out other devices");
+    expect(renderToStaticMarkup(<SessionsForm devices={[device(1, true), device(2)]} />)).toContain("1 other device or browser");
   });
 
   it("offers a backup before deleting and names the user ID to type", () => {

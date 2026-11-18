@@ -1,10 +1,10 @@
 // The sign-in and /account Server Actions: rate limiting, expired-session cleanup, profile, devices and account
 // deletion. Next's request APIs and the session helpers are mocked; the services and the limiter run for real.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { DB } from "@/db";
 import { sessions, users } from "@/db/schema";
-import { RateLimiter, setPasswordLimiters } from "@/lib/rate-limit";
+import { RateLimiter, passwordLimiters, setPasswordLimiters } from "@/lib/rate-limit";
 import { registerUser } from "@/server/users";
 import { useFreshDb } from "./helpers";
 
@@ -48,7 +48,7 @@ vi.mock("next/navigation", () => ({
 
 const { loginAction } = await import("@/app/(auth)/login/actions");
 const { registerAction } = await import("@/app/(auth)/register/actions");
-const { changePasswordAction, deleteAccountAction, signOutOtherDevicesAction, updateProfileAction } = await import(
+const { changePasswordAction, deleteAccountAction, signOutOtherDevicesAction, signOutSessionAction, updateProfileAction } = await import(
   "@/app/(app)/account/actions"
 );
 
@@ -79,6 +79,7 @@ beforeEach(async () => {
   });
   Object.assign(ctx, { userId: 0, tokenHash: "current", forwardedFor: "203.0.113.7", created: [], cookieCleared: 0, revalidated: [] });
 });
+afterEach(() => vi.unstubAllEnvs());
 
 const login = (identifier: string, password: string, extra: Record<string, string> = {}) =>
   loginAction({}, fd({ identifier, password, ...extra }));
@@ -116,15 +117,30 @@ describe("loginAction rate limiting", () => {
       identifier: new RateLimiter({ limit: 5, windowMs: 15 * 60_000, now: () => clock.t }),
       address: new RateLimiter({ limit: 3, windowMs: 15 * 60_000, now: () => clock.t }),
     });
+    vi.stubEnv("TRUST_PROXY", "1"); // one proxy: the right-most hop is the client
     await registerUser({ username: "ana", password: PW });
     for (let i = 0; i < 3; i++) await login(`ghost${i}`, "wrong-pw");
     expect((await login("ana", PW)).message).toMatch(/^Too many sign-in attempts/);
-    ctx.forwardedFor = "198.51.100.1, 203.0.113.7";
+    ctx.forwardedFor = "6.6.6.6, 203.0.113.7"; // a forged first hop does not escape the limit
+    expect((await login("ana", PW)).message).toMatch(/^Too many sign-in attempts/);
+    ctx.forwardedFor = "203.0.113.7, 198.51.100.1";
     expect(await redirectOf(login("ana", PW))).toBe("/");
 
     ctx.forwardedFor = null;
     for (let i = 0; i < 4; i++) await login(`other${i}`, "wrong-pw");
     expect(await redirectOf(login("ana", PW))).toBe("/");
+  });
+
+  it("ignores X-Forwarded-For without TRUST_PROXY: only the identifier limit applies", async () => {
+    setPasswordLimiters({
+      identifier: new RateLimiter({ limit: 5, windowMs: 15 * 60_000, now: () => clock.t }),
+      address: new RateLimiter({ limit: 3, windowMs: 15 * 60_000, now: () => clock.t }),
+    });
+    vi.stubEnv("TRUST_PROXY", "");
+    await registerUser({ username: "ana", password: PW });
+    for (let i = 0; i < 4; i++) await login(`ghost${i}`, "wrong-pw");
+    expect(await redirectOf(login("ana", PW))).toBe("/");
+    expect(passwordLimiters().address.size).toBe(0);
   });
 
   it("deletes every account's expired sessions at sign-in", async () => {
@@ -230,6 +246,27 @@ describe("/account actions", () => {
     expect(await signOutOtherDevicesAction()).toEqual({ ok: true, message: "Signed out 1 other session." });
     expect((await db.select().from(sessions)).map((s) => s.tokenHash)).toEqual(["current"]);
     expect(await signOutOtherDevicesAction()).toEqual({ ok: true, message: "No other devices were signed in." });
+  });
+
+  it("signs out one other device by id; the current session and other users' sessions stay", async () => {
+    const u = await signedIn();
+    const bob = await registerUser({ username: "bob", password: PW });
+    const later = new Date(Date.now() + 86_400_000);
+    const [current, phone, bobs] = await db
+      .insert(sessions)
+      .values([
+        { userId: u.id, tokenHash: "current", expiresAt: later },
+        { userId: u.id, tokenHash: "phone", expiresAt: later },
+        { userId: bob.id, tokenHash: "bob", expiresAt: later },
+      ])
+      .returning();
+    const gone = { message: "That device is no longer signed in." };
+    expect(await signOutSessionAction({}, fd({ sessionId: String(bobs.id) }))).toEqual(gone);
+    expect(await signOutSessionAction({}, fd({ sessionId: String(current.id) }))).toEqual(gone);
+    expect(await signOutSessionAction({}, fd({ sessionId: "nope" }))).toEqual(gone);
+    expect(await signOutSessionAction({}, fd({ sessionId: String(phone.id) }))).toEqual({ ok: true, message: "Signed out that device." });
+    expect((await db.select().from(sessions)).map((s) => s.tokenHash).sort()).toEqual(["bob", "current"]);
+    expect(ctx.revalidated).toContainEqual(["/account"]);
   });
 
   it("delete account: wrong confirmation keeps everything; the right one deletes, clears the cookie and redirects with a notice", async () => {

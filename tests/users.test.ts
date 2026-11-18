@@ -11,13 +11,17 @@ import {
   adoptTimeZoneIfUnset,
   authenticateUser,
   changePassword,
-  countOtherSessions,
+  SESSION_TOUCH_INTERVAL_MS,
   deleteAccount,
   deleteExpiredSessions,
   getUserTimeZone,
   isWrongPasswordError,
+  listSessions,
   registerUser,
+  sessionTouchDue,
   signOutOtherSessions,
+  signOutSession,
+  touchSession,
   updateProfile,
   userConflictFromError,
 } from "@/server/users";
@@ -467,11 +471,53 @@ describe("sessions", () => {
   }
   const hashes = async () => (await db.select({ h: sessions.tokenHash }).from(sessions)).map((r) => r.h).sort();
 
-  it("counts the other active sessions only", async () => {
+  it("lists the user's active sessions only, the current one first, without token hashes", async () => {
     const { a, b } = await setup();
-    expect(await countOtherSessions(a, "a-current")).toBe(1);
-    expect(await countOtherSessions(a, null)).toBe(2);
-    expect(await countOtherSessions(b, "b-live")).toBe(0);
+    const t = Date.now();
+    await db.update(sessions).set({ lastUsedAt: new Date(t - 60_000), userAgent: "UA phone" }).where(eq(sessions.tokenHash, "a-phone"));
+    await db.update(sessions).set({ lastUsedAt: new Date(t - 3_600_000) }).where(eq(sessions.tokenHash, "a-current"));
+
+    const list = await listSessions(a, "a-current");
+    expect(list.map((s) => [s.current, s.userAgent])).toEqual([
+      [true, null],
+      [false, "UA phone"],
+    ]);
+    expect(Object.keys(list[0]).sort()).toEqual(["createdAt", "current", "id", "lastUsedAt", "userAgent"]);
+    // Without a current session nothing is marked, most recently used first.
+    expect((await listSessions(a, null)).map((s) => s.userAgent)).toEqual(["UA phone", null]);
+    expect((await listSessions(b, "a-current")).map((s) => s.current)).toEqual([false]);
+  });
+
+  it("signs out one other session of the user; never the current one or another user's", async () => {
+    const { a } = await setup();
+    const [phone] = await db.select().from(sessions).where(eq(sessions.tokenHash, "a-phone"));
+    const [current] = await db.select().from(sessions).where(eq(sessions.tokenHash, "a-current"));
+    const [bobs] = await db.select().from(sessions).where(eq(sessions.tokenHash, "b-live"));
+
+    await expect(signOutSession(a, bobs.id, "a-current")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(signOutSession(a, current.id, "a-current")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await signOutSession(a, phone.id, "a-current");
+    await expect(signOutSession(a, phone.id, "a-current")).rejects.toThrow("That device is no longer signed in.");
+    expect(await hashes()).toEqual(["a-current", "a-old", "b-live", "b-old"]);
+  });
+
+  it("marks a session used at most once per interval", async () => {
+    await setup();
+    const [s] = await db.select().from(sessions).where(eq(sessions.tokenHash, "a-current"));
+    const t0 = new Date(s.lastUsedAt.getTime() + SESSION_TOUCH_INTERVAL_MS);
+    const lastUsed = async () => (await db.select().from(sessions).where(eq(sessions.id, s.id)))[0].lastUsedAt.getTime();
+
+    expect(await touchSession(s.id, new Date(t0.getTime() - 1))).toBe(false); // not yet due
+    expect(await touchSession(s.id, t0)).toBe(true);
+    expect(await lastUsed()).toBe(t0.getTime());
+    expect(await touchSession(s.id, new Date(t0.getTime() + 60_000))).toBe(false); // a minute later: no write
+    expect(await lastUsed()).toBe(t0.getTime());
+    const later = new Date(t0.getTime() + SESSION_TOUCH_INTERVAL_MS);
+    expect(await touchSession(s.id, later)).toBe(true);
+    expect(await lastUsed()).toBe(later.getTime());
+
+    expect(sessionTouchDue(t0, new Date(t0.getTime() + SESSION_TOUCH_INTERVAL_MS - 1))).toBe(false);
+    expect(sessionTouchDue(t0, new Date(t0.getTime() + SESSION_TOUCH_INTERVAL_MS))).toBe(true);
   });
 
   it("signs out the other sessions of that user and keeps the current one", async () => {

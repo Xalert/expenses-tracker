@@ -1,5 +1,5 @@
 import "server-only";
-import { and, count, eq, gt, isNull, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lte, ne, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import {
   EMAIL_UNIQUE_INDEX,
@@ -301,15 +301,6 @@ function parseProfileTimeZone(value: string | null | undefined): string | null |
   return zone;
 }
 
-/** Active (unexpired) sessions of the user other than `keepTokenHash` (null counts all of them). */
-export async function countOtherSessions(userId: number, keepTokenHash: string | null): Promise<number> {
-  const [row] = await (await getDb())
-    .select({ n: count() })
-    .from(sessions)
-    .where(and(otherSessions(userId, keepTokenHash), gt(sessions.expiresAt, new Date())));
-  return Number(row?.n ?? 0);
-}
-
 /**
  * "Sign out other devices": delete every session of the user except `keepTokenHash` (null deletes all of them).
  * Returns how many were deleted. Other users' sessions are never touched.
@@ -320,6 +311,76 @@ export async function signOutOtherSessions(userId: number, keepTokenHash: string
     .where(otherSessions(userId, keepTokenHash))
     .returning({ id: sessions.id });
   return deleted.length;
+}
+
+/** One signed-in device on /account. Never carries the token hash. */
+export type SessionView = {
+  id: number;
+  userAgent: string | null;
+  createdAt: Date;
+  lastUsedAt: Date;
+  /** The session making this request. */
+  current: boolean;
+};
+
+/**
+ * The user's active (unexpired) sessions: the current one (`currentTokenHash`) first, then the most recently used.
+ * Other users' sessions are never included.
+ */
+export async function listSessions(
+  userId: number,
+  currentTokenHash: string | null,
+  now: Date = new Date(),
+): Promise<SessionView[]> {
+  const rows = await (await getDb())
+    .select({
+      id: sessions.id,
+      tokenHash: sessions.tokenHash,
+      userAgent: sessions.userAgent,
+      createdAt: sessions.createdAt,
+      lastUsedAt: sessions.lastUsedAt,
+    })
+    .from(sessions)
+    .where(and(eq(sessions.userId, userId), gt(sessions.expiresAt, now)))
+    .orderBy(desc(sessions.lastUsedAt), desc(sessions.id));
+  const views = rows.map(({ tokenHash, ...row }) => ({ ...row, current: tokenHash === currentTokenHash }));
+  return [...views.filter((s) => s.current), ...views.filter((s) => !s.current)];
+}
+
+/**
+ * "Sign out" on one other device: delete the user's session `sessionId`. The current session (`keepTokenHash`) is
+ * not deleted this way (that is the account menu's Sign out). NOT_FOUND when there is no such session of this user,
+ * which includes another user's session and one that already ended.
+ */
+export async function signOutSession(userId: number, sessionId: number, keepTokenHash: string | null): Promise<void> {
+  const deleted = await (await getDb())
+    .delete(sessions)
+    .where(and(otherSessions(userId, keepTokenHash), eq(sessions.id, sessionId)))
+    .returning({ id: sessions.id });
+  if (deleted.length === 0) throw new ServiceError("NOT_FOUND", "That device is no longer signed in.");
+}
+
+/** `sessions.lastUsedAt` is written at most this often per session, so most requests cause no write. */
+export const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Whether a session last marked used at `lastUsedAt` is due another write at `now`. */
+export function sessionTouchDue(lastUsedAt: Date, now: Date): boolean {
+  return now.getTime() - lastUsedAt.getTime() >= SESSION_TOUCH_INTERVAL_MS;
+}
+
+/**
+ * Mark session `sessionId` used at `now`, unless it was marked within `SESSION_TOUCH_INTERVAL_MS` (the condition is
+ * in the UPDATE, so concurrent requests write once). Returns whether a row was written.
+ */
+export async function touchSession(sessionId: number, now: Date = new Date()): Promise<boolean> {
+  const updated = await (await getDb())
+    .update(sessions)
+    .set({ lastUsedAt: now })
+    .where(
+      and(eq(sessions.id, sessionId), lte(sessions.lastUsedAt, new Date(now.getTime() - SESSION_TOUCH_INTERVAL_MS))),
+    )
+    .returning({ id: sessions.id });
+  return updated.length > 0;
 }
 
 /**

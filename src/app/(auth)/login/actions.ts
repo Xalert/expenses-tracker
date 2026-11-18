@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createSession } from "@/lib/auth";
+import { trustProxy } from "@/lib/config";
 import { formValues, zodErrorState, type FormState } from "@/lib/form";
 import { clientAddress, identifierKey, passwordLimiters, tooManyAttemptsMessage } from "@/lib/rate-limit";
 import { adoptTimeZoneIfUnset, authenticateUser, deleteExpiredSessions } from "@/server/users";
@@ -21,7 +22,7 @@ export async function loginAction(_prev: FormState, formData: FormData): Promise
   // Refused before the password is checked, with the same message whether or not the account exists.
   const limits = passwordLimiters();
   const idKey = identifierKey(parsed.data.identifier);
-  const address = clientAddress((await headers()).get("x-forwarded-for"));
+  const address = clientAddress((await headers()).get("x-forwarded-for"), trustProxy());
   const addrKey = address === null ? null : `ip:${address}`;
   const wait = Math.max(limits.identifier.retryAfterMs(idKey), addrKey ? limits.address.retryAfterMs(addrKey) : 0);
   if (wait > 0) return { message: tooManyAttemptsMessage(wait), values };

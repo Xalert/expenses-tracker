@@ -22,5 +22,10 @@ The first tagged release: everything built since 2026-11-05, in short.
 - Operations: an on-demand `backup` Compose service, a Postgres major-upgrade script, a warning line before
   migrations run on an existing database, a release script, a smaller image without `sharp`, signed images with
   SBOM and provenance.
+- `/account` lists your signed-in devices (browser, signed in, last active) with a Sign out for each.
+- New setting `TRUST_PROXY` (default off): set it to `1` behind one reverse proxy so the per-address sign-in limit
+  uses the real client address; unset, `X-Forwarded-For` is no longer trusted.
+- The `backup` Compose service can run on a schedule: set `BACKUP_INTERVAL_HOURS` and start it with
+  `docker compose --profile backup up -d backup`.
 - Each account has a time zone (taken from the browser at registration or sign-in, changeable under Account
   settings); Spendee imports are dated in it, so re-importing from another time zone finds the same duplicates.

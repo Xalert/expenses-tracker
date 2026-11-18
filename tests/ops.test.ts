@@ -2,10 +2,12 @@
  * Operations files: the release script's pure parts (scripts/release.mjs), the two Compose files' backup service
  * staying in step, and the npm scripts that must run on any shell.
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compareVersions, newestTag, releaseChangelog, SEMVER } from "../scripts/release.mjs";
+import { DEFAULT_DEMO_DATABASE_URL, demoDatabaseUrl } from "../scripts/with-demo-db.mjs";
 
 const root = path.resolve(__dirname, "..");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
@@ -59,6 +61,13 @@ describe("Compose files", () => {
     expect(deployed).toContain('profiles: ["backup"]');
     expect(deployed).toContain("pg_dump -Fc");
     expect(deployed).toContain("./backups:/backups");
+    expect(deployed).toContain("BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-}");
+    expect(deployed).toContain('restart: "no"'); // a one-shot `up` must not repeat; the loop is opt-in
+  });
+
+  it("both Compose files pass TRUST_PROXY to the app, off by default", () => {
+    expect(read("deploy/compose.yaml")).toContain("TRUST_PROXY: ${TRUST_PROXY:-false}");
+    expect(read("docker-compose.yml")).toContain('TRUST_PROXY: "false"');
   });
 
   it("the backup service uses the same Postgres image as db", () => {
@@ -71,9 +80,67 @@ describe("Compose files", () => {
 });
 
 describe("npm scripts", () => {
+  const { scripts } = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+
   it("build and start set NODE_ENV without shell syntax (Windows cmd)", () => {
-    const { scripts } = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     expect(scripts.build).toBe("node scripts/next-production.mjs build");
     expect(scripts.start).toBe("node scripts/next-production.mjs start");
+  });
+
+  it("no script sets an environment variable inline (VAR=value is not valid in Windows cmd)", () => {
+    for (const [name, script] of Object.entries(scripts)) expect(script, name).not.toMatch(/(^|\s|&&)[A-Z_]+=/);
+  });
+
+  it("dev:demo and demo:reset run every step through the demo-database wrapper", () => {
+    for (const name of ["dev:demo", "demo:reset"]) {
+      const steps = scripts[name].split("&&").map((s) => s.trim());
+      for (const step of steps) expect(step, name).toMatch(/^node scripts\/with-demo-db\.mjs /);
+    }
+    expect(scripts["demo:reset"]).toContain("scripts/reset.ts --demo --yes");
+  });
+});
+
+describe("scripts/with-demo-db.mjs", () => {
+  it("uses expenses_demo and ignores an inherited DATABASE_URL", () => {
+    expect(demoDatabaseUrl({})).toBe(DEFAULT_DEMO_DATABASE_URL);
+    expect(new URL(DEFAULT_DEMO_DATABASE_URL).pathname).toBe("/expenses_demo");
+    expect(demoDatabaseUrl({ DATABASE_URL: "postgres://expenses:expenses@localhost:5433/expenses" })).toBe(
+      DEFAULT_DEMO_DATABASE_URL,
+    );
+    expect(demoDatabaseUrl({ DEMO_DATABASE_URL: "postgresql://u:p@db.lan:5432/expenses_demo" })).toBe(
+      "postgresql://u:p@db.lan:5432/expenses_demo",
+    );
+  });
+
+  it("refuses any other database in DEMO_DATABASE_URL", () => {
+    for (const url of [
+      "postgres://expenses:expenses@localhost:5433/expenses",
+      "postgres://expenses:expenses@localhost:5433/",
+      "postgres://expenses:expenses@localhost:5433",
+      "postgres://expenses:expenses@localhost:5433/expenses_demo2",
+      "postgres://expenses:expenses@localhost:5433/expenses_demo/x",
+      "mysql://u:p@localhost/expenses_demo",
+      "not a url",
+    ]) {
+      expect(() => demoDatabaseUrl({ DEMO_DATABASE_URL: url }), url).toThrow();
+    }
+  });
+
+  it("refuses in a real run, before starting the command", () => {
+    const run = spawnSync(process.execPath, [path.join(root, "scripts/with-demo-db.mjs"), "node", "-e", "console.log('ran')"], {
+      env: { ...process.env, DEMO_DATABASE_URL: "postgres://expenses:expenses@localhost:5433/expenses" },
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(1);
+    expect(run.stdout).not.toContain("ran");
+    expect(run.stderr).toContain("Refusing");
+
+    const ok = spawnSync(
+      process.execPath,
+      [path.join(root, "scripts/with-demo-db.mjs"), process.execPath, "-e", "console.log(process.env.DATABASE_URL)"],
+      { env: { ...process.env, DATABASE_URL: "postgres://x@localhost/expenses", DEMO_DATABASE_URL: "" }, encoding: "utf8" },
+    );
+    expect(ok.status).toBe(0);
+    expect(ok.stdout.trim()).toBe(DEFAULT_DEMO_DATABASE_URL);
   });
 });
