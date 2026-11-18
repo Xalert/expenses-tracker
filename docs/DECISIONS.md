@@ -90,6 +90,11 @@ section holds what replaced it.
 | Unique indexes on `lower(username)` and `lower(email)` replace the plain unique constraints (migration `0002_lower-unique-users`) | The lookups compare `lower(...)`, which the plain indexes could not serve; the expression indexes do and also make case-only duplicates impossible in the database. The race mapping keys on the new index names, exported from the schema | planner (2026-11-18) |
 | A reverse proxy that drops `Host` is detected by `src/proxy.ts`, which repeats Next.js's Server Action origin check: a log line naming the fix and a 403 with a readable message (`src/app/error.tsx` shows it, or a small HTML page without JavaScript) instead of Next's bare 500 | The 500 comes from Next.js's action handler (`Invalid Server Actions request.`, "`host` header … does not match `origin` header …"); it gave a self-hoster no clue. Repeating the comparison is cheap and the Next.js check still runs after it. `serverActions.allowedOrigins` is not set; if it ever is, the proxy must honour it too | planner (ask), built (approach) |
 | `src/app/error.tsx` (the first app-wide error boundary) shows "Something went wrong" + Try again for every other error | Needed for the host-mismatch message to be visible after a fetch action; before it, an unexpected error showed Next's default "Application error" | built |
+| (2026-11-18) An account has an optional IANA time zone, `users.time_zone` (text, nullable; migration `0004_account-time-zone`), validated with `Intl`: accepted by `Intl.DateTimeFormat` and its canonical name in `Intl.supportedValuesOf("timeZone")` or `UTC`; stored canonical | Spendee's timestamps are UTC, so dating them needs a zone that does not depend on the browser doing the import. No zone database of our own: the runtime's ICU is the list. Offsets (`+02:00`) and `Etc/GMT±N` are refused because they are not in that list (a browser reporting one gets no zone stored) | planner (design), built (canonical check) |
+| The zone is set automatically: the register and login forms post a hidden `timeZone` (filled after hydration; absent without JavaScript). Registration stores it; a successful sign-in stores it only when the account has none; an invalid or absent value leaves it NULL, silently | Nobody has to find a setting for the common case, and a sign-in from a laptop abroad never overwrites a zone that was chosen or adopted earlier. A failed sign-in changes nothing | planner |
+| `/account`'s Profile card has a "Time zone" native select: "Not set (use this browser's)" first, then every zone in `<optgroup>`s by region ("UTC" under "Other", last); changing it needs no password; the list comes from the server as a prop | A native select is keyboard-, screen-reader- and mobile-friendly and type-to-search works in it; ~420 options grouped by region are manageable. Computed on the server because browsers' `Intl` zone lists differ, which would break hydration. A time zone is not an identity change, so no password | planner (select), built (server-side list) |
+| `updateProfile`'s `timeZone` is the one profile field where *omitted* means "unchanged" (`""` / null clear it) | Other callers and older forms that do not send it must not clear it | built |
+| "Today" stays the server's date everywhere; the account's time zone is used only by the Spendee import | Out of scope for this change. A per-account "today" (default dates, the current month) is a possible follow-up | planner |
 
 ### Categories
 
@@ -143,6 +148,7 @@ Added 2026-11-18 (closing the category gaps):
 | Spendee transfers are rebuilt by pairing an outgoing and an incoming row: different wallet, same note, within 10 seconds, same amount when the currency is the same | That is how the owner's real export writes them (24 of 24 paired uniquely, at most 2 seconds apart); anything ambiguous is reported, not guessed | planner |
 | An unpaired Spendee transfer row blocks the import by default, with an opt-in to import such rows as income / expense in a `Transfer` category | Usually it means a wallet's file was left out; the opt-in avoids a dead end when the other wallet no longer exists | planner |
 | Spendee timestamps that carry a UTC offset are converted to the importing browser's time zone to pick the date | Spendee exports UTC; taking the UTC date would put late-evening entries on the wrong day (and sometimes the wrong month) | planner |
+| (2026-11-18) The Spendee import dates timestamps in **the account's time zone** when it has one, else the browser's (as before), else UTC; the time-zone notice says which zone and where it came from ("your account's time zone, …" / "this browser's time zone, … (set one in Account settings …)" / "UTC (…)") | Closes the "re-import from another zone" gap: with an account zone the dates no longer depend on the browser, so the same files re-imported from anywhere are all duplicates. The account's zone is read by `previewImport` / `runImport` themselves, not passed by the action, so the preview and the write cannot disagree | planner |
 | Spendee labels are appended to the note | The app has no labels; this keeps the information and makes it searchable instead of dropping it silently | planner |
 | A backup cannot be combined with other files in one import | Its wallets are identified by position in the file, which cannot be merged with other sources | planner |
 | `previewImport` / `runImport` take either one file's text (as before) or a list of `{ name, text }`; the existing tests were left unchanged | No mechanical migration of ~60 call sites; one file and a one-element list behave the same | built |
@@ -152,7 +158,7 @@ Added 2026-11-18 (closing the category gaps):
 | Spendee notices (time zone, labels, rounding, unpaired rows) are counted over the whole selection, not per file; the time-zone notice also says how many entries changed day | Eight near-identical per-file notices would bury the information | built |
 | A file selected twice is detected by identical text and listed as "same as …"; a backup in a selection with other files is refused before any file is parsed | Cheap and exact; parsing the rest would only add noise to a refusal | built |
 | Toggling the unpaired-transfers option re-runs the preview at once; choosing other files resets it to off | The option changes what is imported, so the preview must always match it | built |
-| (2026-11-18) Spendee dates stay in the browser's time zone; taking "the date as written in the file" was built and reverted | Investigated: Spendee writes every time as `+00:00`, so the file has no local zone and "as written" means the UTC date: an entry made just after local midnight east of UTC (the owner is in one) would land on the previous day. Determinism across browsers is not worth that; the real fix is a per-account time zone | planner (finding: built) |
+| (2026-11-18) Spendee dates stay in the browser's time zone; taking "the date as written in the file" was built and reverted | Investigated: Spendee writes every time as `+00:00`, so the file has no local zone and "as written" means the UTC date: an entry made just after local midnight east of UTC (the owner is in one) would land on the previous day. Determinism across browsers is not worth that; the real fix is a per-account time zone (built the same day, see the row above) | planner (finding: built) |
 | The native CSV carries wallet details as **wallet rows** (`type` = `wallet`; `amount` = initial balance, `group`, `archived` date) plus two optional columns `group` and `archived`, rather than per-row initial-balance columns | A wallet's details are said once, not repeated on every entry; old files (no new columns, no wallet rows) import unchanged; the Statement Importer's CSV needs no change. An older app rejects a file with wallet rows ("not a type") — accepted | planner (design: built) |
 | A CSV `group` cell names the group of the row's `wallet` (not `to_wallet`); the receiving wallet's group comes from its own rows or wallet row | One group per wallet, one column; transfers into a new wallet usually also have a wallet row in an export | built |
 | Wallet rows and `group` cells only apply to wallets the import creates; an existing wallet is never changed (its wallet row is ignored, silently) | "Import adds, never changes" | built |
@@ -467,8 +473,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   the converted figures with a note. There is no second provider and no way to enter a rate by hand.
 - **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
   provider is down then, the total leaves the foreign wallets out until it is back.
-- **Importing the same Spendee files from a browser in another time zone** can shift entries near midnight to a
-  different date, so they would not be recognised as duplicates.
+- **An account without a time zone still dates Spendee imports in the browser's zone**, so re-importing from a
+  browser in another zone can shift entries near midnight and miss them as duplicates. Accounts get a zone at
+  registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
+  since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
+  before an account had its zone keep the dates they got then.
 - **The context export does not flag archived categories**, so the Statement Importer can still suggest one; the
   CSV import then reports those rows as a problem ("archived in your account"). Adding `archived` to the context's
   categories and dropping them in the artifact is left for the artifact's next change.
@@ -556,6 +565,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   archived category, and the page at 375px with the extra controls. The `FOR UPDATE` / `FOR SHARE` pair was not
   exercised with two real concurrent connections (PGlite runs one).
 
+- **Account time zone (2026-11-18) is covered by service, action (mocked Next APIs) and render tests only.** Not
+  tried in a browser: the hidden field being filled after hydration on `/login` and `/register` (and surviving a
+  failed submit), the ~420-option grouped select on `/account` at 375px, on iOS / Android pickers and in dark mode,
+  type-to-search in it, and the import notice text in the panel. The `0004_account-time-zone` migration ran on
+  PGlite only. The zone list and canonical spellings come from Node 24's ICU; another Node / ICU version may spell
+  a few zones differently (`Europe/Kiev` vs `Europe/Kyiv`): a stored zone the runtime does not know counts as not
+  set, and the select shows a stored zone that is missing from its list as an extra option.
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking
   up the new password, and another signed-in browser actually being sent to `/login`. The account menu has no
