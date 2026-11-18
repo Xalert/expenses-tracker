@@ -49,7 +49,13 @@ export type WalletSpec = {
   /** lower(name) + currency: how wallets are matched against the account. */
   key: string;
 };
-export type CategorySpec = { name: string; kind: CategoryKind; key: string };
+export type CategorySpec = {
+  name: string;
+  kind: CategoryKind;
+  key: string;
+  /** Backup only: the category was archived; one the import creates is created archived. */
+  archived?: boolean;
+};
 export type EntrySpec = {
   kind: CategoryKind;
   wallet: number; // index into wallets

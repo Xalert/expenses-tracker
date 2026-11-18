@@ -103,7 +103,12 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         archived: w.archivedAt !== null,
         group: groupName.get(w.groupId),
       })),
-      categories: categoryRows.map((c) => ({ id: categoryRef.get(c.id)!, name: c.name, kind: c.kind })),
+      categories: categoryRows.map((c) => ({
+        id: categoryRef.get(c.id)!,
+        name: c.name,
+        kind: c.kind,
+        archived: c.archivedAt !== null,
+      })),
       transactions: txRows.map((t) => ({
         date: t.date,
         kind: t.kind as "expense" | "income",

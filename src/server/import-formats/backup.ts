@@ -124,7 +124,10 @@ function parseBackup(body: string): ParsedFile {
     if (idx === undefined) {
       idx = out.categories.length;
       categoryByKey.set(key, idx);
-      out.categories.push({ name, kind: c.kind, key });
+      out.categories.push({ name, kind: c.kind, key, archived: c.archived });
+    } else {
+      // Merged with an earlier one: archived only when every file category merged into it is.
+      out.categories[idx].archived = out.categories[idx].archived && c.archived;
     }
     categoryIndex.set(c.id, idx);
   });

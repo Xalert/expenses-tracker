@@ -49,6 +49,8 @@ export const backupCategorySchema = z.object({
   id: localId,
   name: text,
   kind: z.enum(["expense", "income"], { error: "Expected expense or income." }),
+  /** Optional: added after version 1 shipped (old files lack it, and the version stays 1). */
+  archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
 });
 
 export const backupTransactionSchema = z.object({
