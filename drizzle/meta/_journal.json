@@ -22,6 +22,13 @@
       "when": 1794996050126,
       "tag": "0002_lower-unique-users",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794996190543,
+      "tag": "0003_categories-archive",
+      "breakpoints": true
     }
   ]
 }

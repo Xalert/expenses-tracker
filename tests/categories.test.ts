@@ -68,7 +68,7 @@ describe("listCategoriesWithUsage", () => {
     await createCategory(alice.id, { name: "coffee", kind: "expense" });
 
     const list = await listCategoriesWithUsage(alice.id);
-    expect(list.map(({ id, name, kind }) => ({ id, name, kind }))).toEqual(await listCategories(alice.id));
+    expect(list.map(({ id, name, kind, archivedAt }) => ({ id, name, kind, archivedAt }))).toEqual(await listCategories(alice.id));
     // case-insensitive name order: "coffee" sits between Bills and Food
     expect(list.filter((c) => c.kind === "expense").map((c) => c.name)).toEqual([
       "Bills", "coffee", "Food", "Groceries", "Housing", "Transport",
@@ -123,7 +123,7 @@ describe("listCategoriesWithUsage with a month and currency", () => {
 describe("createCategory", () => {
   it("creates a category, trimming and collapsing whitespace", async () => {
     const c = await createCategory(alice.id, { name: "  Eating   out\t ", kind: "expense" });
-    expect(c).toEqual({ id: expect.any(Number), name: "Eating out", kind: "expense" });
+    expect(c).toEqual({ id: expect.any(Number), name: "Eating out", kind: "expense", archivedAt: null });
     expect(await getCategory(alice.id, c.id)).toEqual(c);
     expect(await listCategories(alice.id, "expense")).toContainEqual(c);
   });
@@ -176,7 +176,7 @@ describe("renameCategory", () => {
     const w = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
     const t = await createTransaction(alice.id, expense(w.id, alice.cat("Food"), 1500, "2026-03-02"));
     const r = await renameCategory(alice.id, alice.cat("Food"), { name: "  Eating  out " });
-    expect(r).toEqual({ id: alice.cat("Food"), name: "Eating out", kind: "expense" });
+    expect(r).toEqual({ id: alice.cat("Food"), name: "Eating out", kind: "expense", archivedAt: null });
     expect((await getTransaction(alice.id, t.id))?.categoryName).toBe("Eating out");
     expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: alice.cat("Food"), categoryName: "Eating out", amountMinor: 1500 },
@@ -214,10 +214,11 @@ describe("deleteCategory", () => {
   });
 
   it("deletes an unused category (replacement ignored)", async () => {
-    expect(await deleteCategory(alice.id, alice.cat("Housing"))).toEqual({ movedTransactions: 0 });
+    expect(await deleteCategory(alice.id, alice.cat("Housing"))).toEqual({ movedTransactions: 0, movedTo: null });
     expect(await getCategory(alice.id, alice.cat("Housing"))).toBeNull();
     expect(await deleteCategory(alice.id, alice.cat("Bills"), { moveToCategoryId: alice.cat("Salary") })).toEqual({
       movedTransactions: 0,
+      movedTo: null,
     });
     expect((await listCategories(alice.id, "expense")).map((c) => c.name)).toEqual(["Food", "Groceries", "Transport"]);
   });
@@ -248,7 +249,10 @@ describe("deleteCategory", () => {
       { currency: "EUR", categoryId: alice.cat("Bills"), categoryName: "Bills", amountMinor: 70 },
     ]);
 
-    expect(await deleteCategory(alice.id, food, { moveToCategoryId: groceries })).toEqual({ movedTransactions: 2 });
+    expect(await deleteCategory(alice.id, food, { moveToCategoryId: groceries })).toMatchObject({
+      movedTransactions: 2,
+      movedTo: { id: groceries, name: "Groceries" },
+    });
 
     expect(await getCategory(alice.id, food)).toBeNull();
     for (const t of [t1, t2, t3]) {
@@ -286,8 +290,8 @@ describe("deleteCategory", () => {
     await deleteCategory(alice.id, alice.cat("Refund"));
     await deleteCategory(alice.id, alice.cat("Extra Income"));
     const before = await snapshot();
-    const err = await expectServiceError(() => deleteCategory(alice.id, alice.cat("Salary")), "CONFLICT", "moveToCategoryId");
-    expect(err.message).toMatch(/1 transaction\b.*Create another income category first/);
+    const err = await expectServiceError(() => deleteCategory(alice.id, alice.cat("Salary")), "CONFLICT", "moveToNewCategoryName");
+    expect(err.message).toMatch(/1 transaction\b.*Name a new income category to move them to, or archive/);
     expect(await snapshot()).toEqual(before);
     // a user may end up with no income categories at all once nothing uses them
     const fresh = await makeUser(db, "carol@example.com");

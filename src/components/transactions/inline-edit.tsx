@@ -79,6 +79,7 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
 
   const used = isTransfer ? [entry.fromWalletId, entry.toWalletId] : [entry.walletId];
   const wallets = ctx.wallets.filter((w) => !w.archived || used.includes(w.id));
+  const categories = ctx.categories.filter((c) => !c.archived || (!isTransfer && c.id === entry.categoryId));
   const editHref = isTransfer ? `/transactions/transfers/${boundId}/edit` : `/transactions/${boundId}/edit`;
   const noun = isTransfer ? "transfer" : entry.kind;
 
@@ -88,7 +89,7 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
         variant="inline"
         idPrefix={`edit-${rowKey}-`}
         wallets={wallets}
-        categories={ctx.categories}
+        categories={categories}
         initial={
           isTransfer
             ? {

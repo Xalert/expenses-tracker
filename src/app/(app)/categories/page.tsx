@@ -45,8 +45,8 @@ export default async function CategoriesPage({ searchParams }: Props) {
         title="Categories"
         description={
           selected
-            ? `Add, rename and remove your categories. Amounts and counts are for ${selected.name}.`
-            : "Add, rename and remove the categories you file expenses and income under."
+            ? `Add, rename, archive and remove your categories. Amounts and counts are for ${selected.name}.`
+            : "Add, rename, archive and remove the categories you file expenses and income under."
         }
         actions={
           <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">

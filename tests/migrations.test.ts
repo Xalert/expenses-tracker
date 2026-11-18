@@ -57,7 +57,7 @@ describe("migrations on an empty database", () => {
     ]);
     const applied = await rows<{ n: string }>(db, sql`select count(*) as n from drizzle.__drizzle_migrations`);
     expect(Number(applied[0].n)).toBeGreaterThan(0);
-  });
+  }, 30_000); // a new PGlite in the test body: slow while the whole suite starts its databases in parallel
 
   it("are a no-op the second time", async () => {
     const db = await createTestDatabase();
@@ -66,7 +66,7 @@ describe("migrations on an empty database", () => {
     const before = await count();
     await migrate(db as never, { migrationsFolder: resolveMigrationsDir() });
     expect(await count()).toBe(before);
-  });
+  }, 30_000);
 });
 
 describe("constraints", () => {

@@ -90,7 +90,8 @@ export type ImportPreview = {
    * created by the import, last in the order, with the list's colour and archived state.
    */
   groupsToCreate: string[];
-  categoriesToCreate: { name: string; kind: CategoryKind }[];
+  /** `archived: true` (present only then): a backup's archived category, created archived. */
+  categoriesToCreate: { name: string; kind: CategoryKind; archived?: true }[];
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -318,8 +319,10 @@ type Plan = {
   groupsToCreate: string[];
   /** Colour and archived state of a group to create, by lower-cased name (from the backup's `groups` list). */
   groupDetails: Map<string, GroupSpec>;
-  /** Category key → existing id, or null when it will be created. */
+  /** Per file category: the existing id, or null when it will be created. */
   categoryTargets: (number | null)[];
+  /** Per file category: true when it matched an archived category of the account. */
+  categoryArchived: boolean[];
   categoriesToCreate: number[];
   entriesToAdd: EntrySpec[];
   transfersToAdd: TransferSpec[];
@@ -408,16 +411,17 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   }
 
   // Categories ---------------------------------------------------------------------------------------
-  const existingCategories = new Map<string, number>();
+  const existingCategories = new Map<string, { id: number; archived: boolean }>();
   for (const c of await tx
-    .select({ id: categories.id, name: categories.name, kind: categories.kind })
+    .select({ id: categories.id, name: categories.name, kind: categories.kind, archivedAt: categories.archivedAt })
     .from(categories)
     .where(eq(categories.userId, userId))
     .orderBy(categories.id)) {
     const key = categoryKey(c.kind, c.name);
-    if (!existingCategories.has(key)) existingCategories.set(key, c.id);
+    if (!existingCategories.has(key)) existingCategories.set(key, { id: c.id, archived: c.archivedAt !== null });
   }
-  const categoryTargets = parsed.categories.map((c) => existingCategories.get(c.key) ?? null);
+  const categoryTargets = parsed.categories.map((c) => existingCategories.get(c.key)?.id ?? null);
+  const categoryArchived = parsed.categories.map((c) => existingCategories.get(c.key)?.archived ?? false);
   const categoriesToCreate = categoryTargets.flatMap((id, i) => (id === null ? [i] : []));
 
   // Existing entries as multisets (only needed when skipping duplicates) ------------------------------
@@ -475,6 +479,16 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
         "Unarchive it first, or remove these rows.",
     });
   };
+  // Same rule for categories: an archived category of the account takes no new entries (duplicates still skip).
+  const archivedCategoryProblem = (loc: Loc, fileCategory: number) => {
+    const c = parsed.categories[fileCategory];
+    problems.push({
+      ...loc,
+      message:
+        `Category “${c.name}” (${c.kind}) is archived in your account, so nothing new can be added to it. ` +
+        "Unarchive it first, or remove these rows.",
+    });
+  };
 
   const entriesToAdd: EntrySpec[] = [];
   let duplicateTransactions = 0;
@@ -491,6 +505,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
       continue;
     }
     if (wallet.archived) archivedProblem(e.loc, e.wallet);
+    else if (categoryArchived[e.category]) archivedCategoryProblem(e.loc, e.category);
     entriesToAdd.push(e);
   }
 
@@ -530,6 +545,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     groupsToCreate,
     groupDetails,
     categoryTargets,
+    categoryArchived,
     categoriesToCreate,
     entriesToAdd,
     transfersToAdd,
@@ -567,6 +583,7 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
     categoriesToCreate: (plan?.categoriesToCreate ?? []).map((i) => ({
       name: parsed.categories[i].name,
       kind: parsed.categories[i].kind,
+      ...(parsed.categories[i].archived ? { archived: true as const } : {}),
     })),
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
@@ -642,7 +659,8 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
     const c = parsed.categories[i];
     const [created] = await tx
       .insert(categories)
-      .values({ userId, name: c.name, kind: c.kind, createdAt: now })
+      // A backup's archived category is restored archived, with its history (a restore, as for wallets).
+      .values({ userId, name: c.name, kind: c.kind, archivedAt: c.archived ? now : null, createdAt: now })
       .returning({ id: categories.id });
     categoryIds[i] = created.id;
   }

@@ -30,7 +30,7 @@ import { getGroupScope } from "@/lib/group-scope";
 import { currentMonth, formatMonth, shiftMonth, todayISO } from "@/lib/dates";
 import { resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
-import { toWalletOptions } from "./form-options";
+import { toCategoryOptions, toWalletOptions } from "./form-options";
 import { getMonthTimeline, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
 import { listDayTotals, listTransactions } from "@/server/transactions";
 import { listWallets } from "@/server/wallets";
@@ -77,7 +77,8 @@ export default async function TransactionsPage({
 
   const currentHref = listHref(params);
   const wallets = await listWallets(user.id, { includeArchived: true, groupId });
-  const categories = await listCategories(user.id);
+  // Archived categories included: they filter history, and a row that uses one keeps it in its editor.
+  const categories = await listCategories(user.id, undefined, { includeArchived: true });
   const anyAtAll = total > 0 || (await listTransactions(user.id, { limit: 1, groupId })).total > 0;
   const totals = await listDayTotals(user.id, filters, [...new Set(items.map((t) => t.date))]);
 
@@ -137,7 +138,7 @@ export default async function TransactionsPage({
     selected ? await listWallets(user.id, { includeArchived: true }) : wallets,
     groups.length >= 2,
   );
-  const categoryOptions = categories.map(({ id, name, kind }) => ({ id, name, kind }));
+  const categoryOptions = toCategoryOptions(categories);
 
   // Single-month view: the neighbouring months, for the end-of-list row and the [ / ] keys (not for a day or range).
   const months =

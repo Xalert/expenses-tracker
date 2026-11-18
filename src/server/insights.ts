@@ -331,6 +331,23 @@ export async function getMonthTimeline(
     : { days, previousCumulativeMinor, largestDay };
 }
 
+type TopCategoryRow = { categoryId: number; categoryName: string; amountMinor: number };
+
+/**
+ * The month's top category: the largest amount; on a tie the name compared lower-cased by UTF-16 code units (not
+ * `localeCompare`, not the database collation, so the per-currency and converted views always agree), then the id.
+ * Exported for tests.
+ */
+export function pickTopCategory<T extends TopCategoryRow>(rows: T[]): T | undefined {
+  const name = (r: T) => r.categoryName.toLowerCase();
+  return [...rows].sort(
+    (a, b) =>
+      b.amountMinor - a.amountMinor ||
+      (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0) ||
+      a.categoryId - b.categoryId,
+  )[0];
+}
+
 /** The Overview insight cards for one month and currency (with `convert`: every currency, converted). */
 export async function getMonthInsights(
   userId: number,
@@ -372,24 +389,25 @@ export async function getMonthInsights(
     gte(transactions.date, from),
     lte(transactions.date, to),
   );
-  let top: { categoryId: number; categoryName: string; amountMinor: number } | undefined;
+  let top: TopCategoryRow | undefined;
   if (!convert) {
-    [top] = await (await getDb())
-      .select({
-        categoryId: categories.id,
-        categoryName: categories.name,
-        amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
-      })
-      .from(transactions)
-      .innerJoin(wallets, eq(wallets.id, transactions.walletId))
-      .innerJoin(categories, eq(categories.id, transactions.categoryId))
-      .where(inMonthExpenses)
-      .groupBy(categories.id)
-      .orderBy(desc(sql`sum(${transactions.amountMinor})`), sql`lower(${categories.name})`, asc(categories.id))
-      .limit(1);
+    // One row per expense category of the month, ranked in JS by `pickTopCategory` (the same rule as below).
+    top = pickTopCategory(
+      await (await getDb())
+        .select({
+          categoryId: categories.id,
+          categoryName: categories.name,
+          amountMinor: sql<number>`sum(${transactions.amountMinor})`.mapWith(Number),
+        })
+        .from(transactions)
+        .innerJoin(wallets, eq(wallets.id, transactions.walletId))
+        .innerJoin(categories, eq(categories.id, transactions.categoryId))
+        .where(inMonthExpenses)
+        .groupBy(categories.id),
+    );
   } else {
-    // Per category, date and currency, converted at each date's rate, then added per category; the same tie-break
-    // as the query above (name without case, then id).
+    // Per category, date and currency, converted at each date's rate, then added per category and ranked by
+    // `pickTopCategory`, like the query above.
     const rows = await (await getDb())
       .select({
         categoryId: categories.id,
@@ -412,12 +430,7 @@ export async function getMonthInsights(
       c.amountMinor += value;
       perCategory.set(row.categoryId, c);
     }
-    top = [...perCategory.values()].sort(
-      (a, b) =>
-        b.amountMinor - a.amountMinor ||
-        a.categoryName.toLowerCase().localeCompare(b.categoryName.toLowerCase()) ||
-        a.categoryId - b.categoryId,
-    )[0];
+    top = pickTopCategory([...perCategory.values()]);
   }
 
   return {

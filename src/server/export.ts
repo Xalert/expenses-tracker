@@ -103,7 +103,12 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       })),
       // In display order: the array order is the position on import.
       groups: groupRows.map((g) => ({ name: g.name, color: g.color, archived: g.archivedAt !== null })),
-      categories: categoryRows.map((c) => ({ id: categoryRef.get(c.id)!, name: c.name, kind: c.kind })),
+      categories: categoryRows.map((c) => ({
+        id: categoryRef.get(c.id)!,
+        name: c.name,
+        kind: c.kind,
+        archived: c.archivedAt !== null,
+      })),
       transactions: txRows.map((t) => ({
         date: t.date,
         kind: t.kind as "expense" | "income",

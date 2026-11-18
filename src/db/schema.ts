@@ -108,6 +108,8 @@ export const categories = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     kind: text("kind", { enum: CATEGORY_KINDS }).notNull(),
+    /** Set while archived: hidden from the entry form's pickers, still in reports, history and exports. */
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: createdAt(),
   },
   (t) => [

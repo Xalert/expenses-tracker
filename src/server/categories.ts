@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, eq, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, isNull, ne, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { categories, transactions, wallets, type CategoryKind } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
@@ -7,7 +7,8 @@ import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { MAX_ID, assertId, isPgId, isUniqueViolation, normalizeName } from "./_validate";
 
-export type CategoryView = { id: number; name: string; kind: CategoryKind };
+/** `archivedAt` set: hidden from the entry form's pickers; still in reports, history and exports. */
+export type CategoryView = { id: number; name: string; kind: CategoryKind; archivedAt: Date | null };
 export type CategoryWithUsage = CategoryView & { transactionCount: number };
 export type CategoryWithMonthUsage = CategoryWithUsage & {
   /** Transactions in `opts.month`, every currency (0 without a month). */
@@ -25,24 +26,49 @@ export const DEFAULT_CATEGORIES: Record<CategoryKind, readonly string[]> = {
 
 const KIND_NOUN: Record<CategoryKind, string> = { expense: "expense", income: "income" };
 
-// Expense first, then by name ignoring case (user-entered names are not always capitalised).
-const categoryOrder = [asc(categories.kind), sql`lower(${categories.name})`, asc(categories.id)];
+const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
 
-/** The user's categories, optionally for one kind; ordered expense first, then by name. */
-export async function listCategories(userId: number, kind?: CategoryKind): Promise<CategoryView[]> {
-  const where = kind
-    ? and(eq(categories.userId, userId), eq(categories.kind, kind))
-    : eq(categories.userId, userId);
+// Expense first, active before archived, then by name ignoring case (user-entered names are not always capitalised).
+const categoryOrder = [
+  asc(categories.kind),
+  sql`${categories.archivedAt} is not null`,
+  sql`lower(${categories.name})`,
+  asc(categories.id),
+];
+
+const viewColumns = {
+  id: categories.id,
+  name: categories.name,
+  kind: categories.kind,
+  archivedAt: categories.archivedAt,
+};
+
+/**
+ * The user's categories, optionally for one kind. Archived ones only with `opts.includeArchived` (as `listWallets`):
+ * the entry form's pickers leave them out, history filters keep them. Ordered expense first, active before archived,
+ * then by name.
+ */
+export async function listCategories(
+  userId: number,
+  kind?: CategoryKind,
+  opts: { includeArchived?: boolean } = {},
+): Promise<CategoryView[]> {
   return (await getDb())
-    .select({ id: categories.id, name: categories.name, kind: categories.kind })
+    .select(viewColumns)
     .from(categories)
-    .where(where)
+    .where(
+      and(
+        eq(categories.userId, userId),
+        kind ? eq(categories.kind, kind) : undefined,
+        opts.includeArchived ? undefined : isNull(categories.archivedAt),
+      ),
+    )
     .orderBy(...categoryOrder);
 }
 
 /**
- * All the user's categories with how many transactions use each; same order as `listCategories`. With
- * `opts.month` also the month's count (all currencies) and, with `opts.currency`, the month's amount in it.
+ * All the user's categories, archived included, with how many transactions use each; same order as `listCategories`.
+ * With `opts.month` also the month's count (all currencies) and, with `opts.currency`, the month's amount in it.
  */
 export async function listCategoriesWithUsage(
   userId: number,
@@ -66,9 +92,7 @@ export async function listCategoriesWithUsage(
       : sql`${transactions.walletId} in (select id from wallets where group_id = ${opts.groupId} and user_id = ${userId})`;
   return (await getDb())
     .select({
-      id: categories.id,
-      name: categories.name,
-      kind: categories.kind,
+      ...viewColumns,
       transactionCount: sql<number>`count(${transactions.id})`.mapWith(Number),
       monthCount: sql<number>`coalesce(sum(case when ${inMonth} then 1 else 0 end), 0)`.mapWith(Number),
       monthAmountMinor: sql<number>`coalesce(sum(case when ${inMonth} and ${inCurrency} then ${transactions.amountMinor} else 0 end), 0)`.mapWith(Number),
@@ -81,11 +105,11 @@ export async function listCategoriesWithUsage(
     .orderBy(...categoryOrder);
 }
 
-/** One owned category or null. */
+/** One owned category (archived included) or null. */
 export async function getCategory(userId: number, categoryId: number): Promise<CategoryView | null> {
   if (!isPgId(categoryId)) return null;
   const [row] = await (await getDb())
-    .select({ id: categories.id, name: categories.name, kind: categories.kind })
+    .select(viewColumns)
     .from(categories)
     .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)));
   return row ?? null;
@@ -117,19 +141,32 @@ function assertKind(value: unknown): CategoryKind {
   return value;
 }
 
-async function ownedCategory(tx: DBOrTx, userId: number, categoryId: unknown): Promise<CategoryView> {
-  const [row] = isId(categoryId)
-    ? await tx
-        .select({ id: categories.id, name: categories.name, kind: categories.kind })
-        .from(categories)
-        .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)))
-    : [];
+/**
+ * The owned category or NOT_FOUND. With `lock` the row is locked for the rest of `tx` (`FOR UPDATE`): a kind change
+ * holds it so no transaction can be filed under the category between the usage check and the update
+ * (`createTransaction` reads the category `FOR SHARE`).
+ */
+async function ownedCategory(tx: DBOrTx, userId: number, categoryId: unknown, lock = false): Promise<CategoryView> {
+  if (!isId(categoryId)) throw new ServiceError("NOT_FOUND", "Category not found.");
+  const query = tx
+    .select(viewColumns)
+    .from(categories)
+    .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)));
+  const [row] = lock ? await query.for("update") : await query;
   if (!row) throw new ServiceError("NOT_FOUND", "Category not found.");
   return row;
 }
 
-function duplicateError(name: string, kind: CategoryKind): ServiceError {
-  return new ServiceError("CONFLICT", `You already have an ${KIND_NOUN[kind]} category called “${name}”.`, "name");
+async function usageOf(tx: DBOrTx, userId: number, categoryId: number): Promise<number> {
+  const [row] = await tx
+    .select({ n: count() })
+    .from(transactions)
+    .where(and(eq(transactions.categoryId, categoryId), eq(transactions.userId, userId)));
+  return row?.n ?? 0;
+}
+
+function duplicateError(name: string, kind: CategoryKind, field = "name"): ServiceError {
+  return new ServiceError("CONFLICT", `You already have an ${KIND_NOUN[kind]} category called “${name}”.`, field);
 }
 
 /** CONFLICT when another category of the same user and kind has this name, ignoring case. */
@@ -139,6 +176,7 @@ async function assertNameFree(
   kind: CategoryKind,
   name: string,
   exceptId?: number,
+  field = "name",
 ): Promise<void> {
   const folded = name.toLowerCase();
   const others = await tx
@@ -152,10 +190,16 @@ async function assertNameFree(
       ),
     );
   const clash = others.find((c) => c.name.toLowerCase() === folded);
-  if (clash) throw duplicateError(clash.name, kind);
+  if (clash) throw duplicateError(clash.name, kind, field);
 }
 
-const normalizeCategoryName = (value: unknown) => normalizeName(value, "name", MAX_CATEGORY_NAME_LENGTH);
+const normalizeCategoryName = (value: unknown, field = "name") => normalizeName(value, field, MAX_CATEGORY_NAME_LENGTH);
+
+async function insertCategory(tx: DBOrTx, userId: number, kind: CategoryKind, name: string, field = "name") {
+  await assertNameFree(tx, userId, kind, name, undefined, field);
+  const [row] = await tx.insert(categories).values({ userId, kind, name }).returning(viewColumns);
+  return row;
+}
 
 /** Create a category. Name trimmed, inner whitespace collapsed, 1–40 chars, unique per kind ignoring case. */
 export async function createCategory(userId: number, input: { name: string; kind: CategoryKind }): Promise<CategoryView> {
@@ -163,21 +207,14 @@ export async function createCategory(userId: number, input: { name: string; kind
   const name = normalizeCategoryName(input.name);
   try {
     const db = await getDb();
-    return await db.transaction(async (tx) => {
-      await assertNameFree(tx, userId, kind, name);
-      const [row] = await tx
-        .insert(categories)
-        .values({ userId, kind, name })
-        .returning({ id: categories.id, name: categories.name, kind: categories.kind });
-      return row;
-    });
+    return await db.transaction((tx) => insertCategory(tx, userId, kind, name));
   } catch (err) {
     if (isUniqueViolation(err)) throw duplicateError(name, kind);
     throw err;
   }
 }
 
-/** Rename an owned category (its kind never changes). Changing only the letter case of its own name is allowed. */
+/** Rename an owned category (archived or not). Changing only the letter case of its own name is allowed. */
 export async function renameCategory(
   userId: number,
   categoryId: number,
@@ -205,67 +242,173 @@ export async function renameCategory(
 }
 
 /**
- * Remove an owned category. Unused → deleted (`moveToCategoryId` ignored). In use → its transactions are
- * re-pointed to `moveToCategoryId` (another owned category of the same kind) and the category is deleted, in one
- * DB transaction. Without a replacement: CONFLICT naming the transaction count.
+ * Switch an owned category between expense and income. Only while no transaction uses it: with transactions it is
+ * CONFLICT (field `kind`), since changing it would turn those expenses into income or the other way round. The name
+ * must be free in the new kind (CONFLICT, field `kind`). The same kind is a no-op.
+ */
+export async function changeCategoryKind(
+  userId: number,
+  categoryId: number,
+  input: { kind: CategoryKind },
+): Promise<CategoryView> {
+  const kind = assertKind(input.kind);
+  let name: string | undefined;
+  try {
+    const db = await getDb();
+    return await db.transaction(async (tx) => {
+      const current = await ownedCategory(tx, userId, categoryId, true);
+      name = current.name;
+      if (current.kind === kind) return current;
+      const usage = await usageOf(tx, userId, current.id);
+      if (usage > 0) {
+        throw new ServiceError(
+          "CONFLICT",
+          `“${current.name}” is used by ${plural(usage)}, so it stays an ${KIND_NOUN[current.kind]} category: ` +
+            `changing it would turn ${usage === 1 ? "that entry" : "those entries"} into ${KIND_NOUN[kind]}. ` +
+            `Add a new ${KIND_NOUN[kind]} category instead.`,
+          "kind",
+        );
+      }
+      await assertNameFree(tx, userId, kind, current.name, undefined, "kind");
+      await tx
+        .update(categories)
+        .set({ kind })
+        .where(and(eq(categories.id, current.id), eq(categories.userId, userId)));
+      return { ...current, kind };
+    });
+  } catch (err) {
+    if (name && isUniqueViolation(err)) throw duplicateError(name, kind, "kind");
+    throw err;
+  }
+}
+
+/**
+ * Archive an owned category: it disappears from the entry form's pickers (an entry that already uses it keeps it when
+ * edited) and new entries can't be filed under it, while its transactions stay in reports, history and exports.
+ * Already archived → unchanged (the first date is kept).
+ */
+export async function archiveCategory(userId: number, categoryId: number): Promise<CategoryView> {
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
+    const current = await ownedCategory(tx, userId, categoryId);
+    if (current.archivedAt) return current;
+    const archivedAt = new Date();
+    await tx
+      .update(categories)
+      .set({ archivedAt })
+      .where(and(eq(categories.id, current.id), eq(categories.userId, userId)));
+    return { ...current, archivedAt };
+  });
+}
+
+/** Unarchive an owned category (a no-op when it is not archived). */
+export async function unarchiveCategory(userId: number, categoryId: number): Promise<CategoryView> {
+  const db = await getDb();
+  return await db.transaction(async (tx) => {
+    const current = await ownedCategory(tx, userId, categoryId);
+    if (!current.archivedAt) return current;
+    await tx
+      .update(categories)
+      .set({ archivedAt: null })
+      .where(and(eq(categories.id, current.id), eq(categories.userId, userId)));
+    return { ...current, archivedAt: null };
+  });
+}
+
+/**
+ * Remove an owned category. Unused → deleted (the replacement options are ignored). In use → its transactions are
+ * re-pointed to a replacement of the same kind and the category is deleted, in one DB transaction. The replacement
+ * is either `moveToCategoryId` (another owned, active category of the same kind; VALIDATION otherwise) or
+ * `moveToNewCategoryName` (a string: a new category of the same kind created in the same DB transaction; name rules
+ * as `createCategory`, errors on field `moveToNewCategoryName`). The new name wins when both are given. Without
+ * either: CONFLICT naming the transaction count (field `moveToCategoryId`, or `moveToNewCategoryName` when there is
+ * no other active category of that kind to choose).
  */
 export async function deleteCategory(
   userId: number,
   categoryId: number,
-  opts: { moveToCategoryId?: number | null } = {},
-): Promise<{ movedTransactions: number }> {
-  const db = await getDb();
-  return await db.transaction(async (tx) => {
-    const category = await ownedCategory(tx, userId, categoryId);
-    const [usageRow] = await tx
-      .select({ n: count() })
-      .from(transactions)
-      .where(and(eq(transactions.categoryId, category.id), eq(transactions.userId, userId)));
-    const usage = usageRow?.n ?? 0;
+  opts: { moveToCategoryId?: number | null; moveToNewCategoryName?: string | null } = {},
+): Promise<{ movedTransactions: number; movedTo: CategoryView | null }> {
+  const newName = opts.moveToNewCategoryName;
+  let pendingName: { name: string; kind: CategoryKind } | undefined;
+  try {
+    const db = await getDb();
+    return await db.transaction(async (tx) => {
+      const category = await ownedCategory(tx, userId, categoryId);
+      const usage = await usageOf(tx, userId, category.id);
+      const noun = KIND_NOUN[category.kind];
+      let target: CategoryView | null = null;
 
-    if (usage > 0) {
-      const noun = usage === 1 ? "1 transaction" : `${usage} transactions`;
-      const moveTo = opts.moveToCategoryId;
-      if (moveTo === undefined || moveTo === null) {
-        const [hasOther] = await tx
-          .select({ id: categories.id })
-          .from(categories)
-          .where(
-            and(eq(categories.userId, userId), eq(categories.kind, category.kind), ne(categories.id, category.id)),
-          )
-          .limit(1);
-        throw new ServiceError(
-          "CONFLICT",
-          hasOther
-            ? `“${category.name}” is used by ${noun}. Choose a category to move them to.`
-            : `“${category.name}” is used by ${noun} and is your only ${KIND_NOUN[category.kind]} category. ` +
-                `Create another ${KIND_NOUN[category.kind]} category first, then move them there.`,
-          "moveToCategoryId",
-        );
-      }
-      if (moveTo === category.id) {
-        throw new ServiceError("VALIDATION", "Choose a different category to move the transactions to.", "moveToCategoryId");
-      }
-      const [target] = isId(moveTo)
-        ? await tx
-            .select({ id: categories.id, kind: categories.kind })
+      if (usage > 0) {
+        const moveTo = opts.moveToCategoryId;
+        if (typeof newName === "string") {
+          const name = normalizeCategoryName(newName, "moveToNewCategoryName");
+          pendingName = { name, kind: category.kind };
+          target = await insertCategory(tx, userId, category.kind, name, "moveToNewCategoryName");
+        } else if (moveTo === undefined || moveTo === null) {
+          const [hasOther] = await tx
+            .select({ id: categories.id })
             .from(categories)
-            .where(and(eq(categories.id, moveTo), eq(categories.userId, userId)))
-        : [];
-      if (!target || target.kind !== category.kind) {
-        throw new ServiceError(
-          "VALIDATION",
-          `Choose another ${KIND_NOUN[category.kind]} category to move the transactions to.`,
-          "moveToCategoryId",
-        );
+            .where(
+              and(
+                eq(categories.userId, userId),
+                eq(categories.kind, category.kind),
+                ne(categories.id, category.id),
+                isNull(categories.archivedAt),
+              ),
+            )
+            .limit(1);
+          throw new ServiceError(
+            "CONFLICT",
+            hasOther
+              ? `“${category.name}” is used by ${plural(usage)}. Choose a category to move them to.`
+              : `“${category.name}” is used by ${plural(usage)} and is your only ${noun} category. ` +
+                  `Name a new ${noun} category to move them to, or archive “${category.name}” instead.`,
+            hasOther ? "moveToCategoryId" : "moveToNewCategoryName",
+          );
+        } else {
+          if (moveTo === category.id) {
+            throw new ServiceError(
+              "VALIDATION",
+              "Choose a different category to move the transactions to.",
+              "moveToCategoryId",
+            );
+          }
+          const [row] = isId(moveTo)
+            ? await tx
+                .select(viewColumns)
+                .from(categories)
+                .where(and(eq(categories.id, moveTo), eq(categories.userId, userId)))
+            : [];
+          if (!row || row.kind !== category.kind) {
+            throw new ServiceError(
+              "VALIDATION",
+              `Choose another ${noun} category to move the transactions to.`,
+              "moveToCategoryId",
+            );
+          }
+          if (row.archivedAt) {
+            throw new ServiceError(
+              "VALIDATION",
+              `“${row.name}” is archived. Choose an active category, or unarchive it first.`,
+              "moveToCategoryId",
+            );
+          }
+          target = row;
+        }
+        await tx
+          .update(transactions)
+          .set({ categoryId: target.id })
+          .where(and(eq(transactions.categoryId, category.id), eq(transactions.userId, userId)));
       }
-      await tx
-        .update(transactions)
-        .set({ categoryId: target.id })
-        .where(and(eq(transactions.categoryId, category.id), eq(transactions.userId, userId)));
-    }
 
-    await tx.delete(categories).where(and(eq(categories.id, category.id), eq(categories.userId, userId)));
-    return { movedTransactions: usage };
-  });
+      await tx.delete(categories).where(and(eq(categories.id, category.id), eq(categories.userId, userId)));
+      return { movedTransactions: usage, movedTo: target };
+    });
+  } catch (err) {
+    if (pendingName && isUniqueViolation(err)) {
+      throw duplicateError(pendingName.name, pendingName.kind, "moveToNewCategoryName");
+    }
+    throw err;
+  }
 }

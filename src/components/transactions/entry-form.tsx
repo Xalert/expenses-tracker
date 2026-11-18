@@ -37,7 +37,8 @@ export type WalletOption = {
   /** The wallet's group name; set only when the user has two or more groups (the pickers then group by it). */
   groupName?: string;
 };
-export type CategoryOption = { id: number; name: string; kind: "expense" | "income" };
+/** `archived`: only offered where an entry already uses it (the name then carries "(archived)"). */
+export type CategoryOption = { id: number; name: string; kind: "expense" | "income"; archived?: boolean };
 
 export type EntryInitialValues = {
   kind: EntryKind;
