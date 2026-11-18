@@ -121,6 +121,12 @@ Put the demo database back to its fresh state:
 make demo-reset
 ```
 
+Give a user of the demo database a new random password (printed; their sessions are signed out):
+
+```bash
+make reset-password ID=demo
+```
+
 Open `psql` on the demo database (`DB=expenses` for your real data):
 
 ```bash
@@ -145,6 +151,7 @@ data in `expenses`), `make build`, `make migration` (`db:generate`), `make docke
 | `npm test` | vitest (services run against an in-process PGlite database) |
 | `npm run db:generate` | generate a new migration into `drizzle/` after editing `src/db/schema.ts` |
 | `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
+| `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email> [--stdin]` | set a random (printed) or piped-in password and delete that user's sessions; needs `DATABASE_URL` on the command and refuses the real `expenses` database |
 | `npm run db:reset -- --demo` / `--clean` | real database: delete every row, then seed the demo data / leave it empty; asks first |
 
 ## Layout

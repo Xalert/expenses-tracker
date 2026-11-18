@@ -14,6 +14,7 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Health check and container user](#health-check-and-container-user)
 - [Behind a reverse proxy (HTTPS)](#behind-a-reverse-proxy-https)
 - [Closing registration](#closing-registration)
+- [Accounts: forgotten passwords, sign-in limits](#accounts-forgotten-passwords-sign-in-limits)
 - [Where the data lives](#where-the-data-lives)
 - [Bind mount instead of a named volume](#bind-mount-instead-of-a-named-volume)
 - [Backup](#backup) · [Restore](#restore)
@@ -112,7 +113,10 @@ Put Caddy, Traefik, nginx or similar in front for HTTPS and point it at port 300
 
 - pass the original `Host` header (or set `X-Forwarded-Host`). Server Actions (every form in the app) reject
   requests whose `Origin` does not match the host, so a proxy that rewrites `Host` to `localhost:3000` breaks
-  sign-in and every form;
+  sign-in and every form. The app detects this: the form shows "Request refused" with an explanation (a short
+  page when JavaScript has not loaded yet), the request gets a `403`, and the app's log has a line starting
+  `[origin-check] Refused a form post to …` naming the `Origin` and host it saw. Without the check Next.js
+  would answer with a bare `500`;
 - set `X-Forwarded-Proto` to `https`;
 - accept uploads of 6 MB. Imports on `/data` take up to 5 MB of files; nginx's `client_max_body_size` defaults to
   **1 MB**, and without raising it large imports fail with `413 Request Entity Too Large`.
@@ -149,6 +153,40 @@ Anyone who can reach `/register` can create an account. Once your household's ac
 `docker compose up -d`. `/register` then shows "Registration is disabled", the register action refuses, the
 sign-in page hides the sign-up link, and existing users are unaffected. Flip it back to `true` temporarily to add
 someone.
+
+## Accounts: forgotten passwords, sign-in limits
+
+**Forgotten password.** There is no email-based reset; the sign-in page tells people to ask the administrator.
+Reset it from the host, by user ID or email:
+
+```bash
+docker compose exec app node scripts/reset-password.mjs ana
+```
+
+It sets a random password, prints it (`New password for ana: …`) and signs that user out everywhere (all their
+sessions are deleted). Give them the password; they can change it on **Account settings** (`/account`). To choose
+the password yourself, pipe it in with `--stdin` (`-T` so Compose passes standard input through):
+
+```bash
+printf '%s' 'the new password' | docker compose exec -T app node scripts/reset-password.mjs ana --stdin
+```
+
+The script is plain JavaScript inside the image (`/app/scripts/reset-password.mjs`) and uses the container's
+`DATABASE_URL`. From a standalone build without Docker, run `node scripts/reset-password.mjs <user>` in
+`.next/standalone` with `DATABASE_URL` set.
+
+**Sign-in limits.** After 5 failed sign-ins for one user ID or email within 15 minutes, or 30 from one client
+address, further attempts for it are refused until the 15 minutes are up ("Too many sign-in attempts. Try again in
+N minutes."). The same per-account limit guards the current-password checks on `/account`. The counters live in
+the app's memory: a restart clears them (that is also how an administrator lifts a lockout), and if you run several
+app containers each keeps its own. The client address is the first `X-Forwarded-For` hop, which a client can set
+itself unless the proxy overwrites it, so the per-account limit is the one to rely on; nginx's
+`$proxy_add_x_forwarded_for` appends rather than overwrites (use `proxy_set_header X-Forwarded-For $remote_addr;` if
+the address limit matters to you).
+
+**Account deletion.** Every user can delete their own account and all its data on `/account` (current password
+plus their user ID typed out). It cannot be undone except from a database backup; the page suggests downloading
+the JSON backup first.
 
 ## Where the data lives
 
