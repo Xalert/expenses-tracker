@@ -23,8 +23,10 @@ help:
 
 ## Setup ----------------------------------------------------------------------
 
-node_modules: package.json package-lock.json
-	npm ci
+# `npm install`, not `npm ci`: ci deletes node_modules first, which breaks anything using it meanwhile (a running
+# dev server, or agent worktrees that symlink it). Only a changed lockfile triggers it, not an edited script.
+node_modules: package-lock.json
+	npm install
 	@touch node_modules
 
 install: node_modules

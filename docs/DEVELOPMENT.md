@@ -135,8 +135,8 @@ make psql
 
 The rest: `make up` / `down` / `logs` (the development Postgres), `make dev-real` (the dev server on your **real**
 data in `expenses`), `make build`, `make migration` (`db:generate`), `make docker-up` / `docker-down` / `docker-logs`
-(the source-built Compose stack on :3000). Targets that need dependencies run `npm ci` first when
-`package-lock.json` is newer than `node_modules`.
+(the source-built Compose stack on :3000). Targets that need dependencies run `npm install` first when
+`package-lock.json` is newer than `node_modules` (not `npm ci`, which deletes the folder first).
 
 ## Scripts
 
