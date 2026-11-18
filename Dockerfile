@@ -32,7 +32,12 @@ RUN npm run build \
  && cp -r .next/static .next/standalone/.next/static \
  && cp -r public .next/standalone/public \
  # Migrations are traced in by outputFileTracingIncludes; copy them explicitly so the image never depends on it.
- && rm -rf .next/standalone/drizzle && cp -r drizzle .next/standalone/drizzle
+ && rm -rf .next/standalone/drizzle && cp -r drizzle .next/standalone/drizzle \
+ # The administrator's password reset (`docker compose exec app node scripts/reset-password.mjs <user>`): plain
+ # JavaScript that needs only `pg`, which the standalone output already holds (serverExternalPackages); fail the
+ # build if it ever does not.
+ && mkdir -p .next/standalone/scripts && cp scripts/reset-password.mjs .next/standalone/scripts/ \
+ && test -f .next/standalone/node_modules/pg/package.json
 
 # ---- runner: only the standalone server, as a non-root user ----------------------------------------------
 FROM ${NODE_IMAGE} AS runner

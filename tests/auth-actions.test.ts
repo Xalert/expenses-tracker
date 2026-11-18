@@ -106,15 +106,21 @@ describe("loginAction rate limiting", () => {
     expect(await redirectOf(login("ana", PW))).toBe("/"); // without the reset: 8 failures, refused
   });
 
-  it("refuses a client address after 30 failures across identifiers; without an address only the identifier limit applies", async () => {
+  it("refuses a client address after its limit of failures across identifiers; without an address only the identifier limit applies", async () => {
+    // A small address limit keeps the test fast (every failed sign-in spends one scrypt); the production numbers
+    // (5 and 30) are the constants in src/lib/rate-limit.ts.
+    setPasswordLimiters({
+      identifier: new RateLimiter({ limit: 5, windowMs: 15 * 60_000, now: () => clock.t }),
+      address: new RateLimiter({ limit: 3, windowMs: 15 * 60_000, now: () => clock.t }),
+    });
     await registerUser({ username: "ana", password: PW });
-    for (let i = 0; i < 30; i++) await login(`ghost${i}`, "wrong-pw");
+    for (let i = 0; i < 3; i++) await login(`ghost${i}`, "wrong-pw");
     expect((await login("ana", PW)).message).toMatch(/^Too many sign-in attempts/);
-    ctx.forwardedFor = "198.51.100.1";
+    ctx.forwardedFor = "198.51.100.1, 203.0.113.7";
     expect(await redirectOf(login("ana", PW))).toBe("/");
 
     ctx.forwardedFor = null;
-    for (let i = 0; i < 40; i++) await login(`other${i}`, "wrong-pw");
+    for (let i = 0; i < 4; i++) await login(`other${i}`, "wrong-pw");
     expect(await redirectOf(login("ana", PW))).toBe("/");
   });
 
