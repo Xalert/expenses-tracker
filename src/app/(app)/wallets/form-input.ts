@@ -12,7 +12,7 @@ const nameSchema = z
   .string({ error: "Enter a name." })
   .trim()
   .min(1, "Enter a name.")
-  .max(MAX_NAME, `Keep the name under ${MAX_NAME} characters.`);
+  .max(MAX_NAME, `Keep the name to ${MAX_NAME} characters or fewer.`);
 
 const createSchema = z.object({
   name: nameSchema,

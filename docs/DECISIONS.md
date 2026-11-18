@@ -226,6 +226,7 @@ Added 2026-11-08.
 | An empty optional `DatePicker` (`allowEmpty`, the transaction filters — that form was replaced by the chip row in redesign step 4; `allowEmpty` is kept) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
+| Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
 
@@ -430,8 +431,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - Opening a /transactions row does not move focus into its form (Tab from the row button reaches it next); after a
   Delete from inside a row, or a Save that moves the entry to another page or month, focus falls back to the page.
 - With a day selected in the strip, a capped day's amount pill stays in the accent colour while its bar is muted.
-- The name-length message says "under 40 characters" although exactly 40 is allowed (wallet and category names;
-  first name / surname now say "80 characters or fewer").
 - An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
 - A wallet restored as archived from a backup is marked archived as of the import, not its original date.
 - If the account changes between an import's preview and its confirmation, the confirmed numbers can differ from

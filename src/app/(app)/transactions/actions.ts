@@ -39,7 +39,7 @@ const id = (message: string) =>
 const common = {
   amount: z.string({ error: "Enter an amount." }).trim().min(1, "Enter an amount."),
   date: z.string({ error: "Enter a date." }).refine(isValidDate, "Enter a valid date."),
-  note: z.string().max(500, "Keep the note under 500 characters.").optional(),
+  note: z.string().max(500, "Keep the note to 500 characters or fewer.").optional(),
 };
 
 const transactionSchema = z.object({

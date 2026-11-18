@@ -299,9 +299,9 @@ describe("Spendee rows", () => {
       { line: 15, message: /^Currency: Required/ },
       { line: 16, message: /^Currency: “XXX” is not a supported ISO 4217/ },
       { line: 17, message: /^Category name: Required\.$/ },
-      { line: 18, message: /^Category name: Keep the name under 40/ },
-      { line: 19, message: /^Notes: Keep the note under 500/ },
-      { line: 20, message: /^Wallet: Keep the name under 60/ },
+      { line: 18, message: /^Category name: Keep the name to 40 characters or fewer/ },
+      { line: 19, message: /^Notes: Keep the note to 500 characters or fewer/ },
+      { line: 20, message: /^Wallet: Keep the name to 60 characters or fewer/ },
       { line: 21, message: /^Amount: “-30,50” is not a valid amount/ },
       { line: 22, message: /^Amount: Required\.$/ },
     ]);
