@@ -167,7 +167,8 @@ function OptionList({ groups, onPick }: { groups: OptionGroup[]; onPick: () => v
     const root = ref.current;
     if (!root) return;
     const options = () => [...root.querySelectorAll<HTMLElement>('[role="option"]')];
-    (root.querySelector<HTMLElement>('[aria-selected="true"]') ?? options()[0])?.focus();
+    // No scrolling: this runs before the Popover is placed (see CalendarPanel in date-picker.tsx).
+    (root.querySelector<HTMLElement>('[aria-selected="true"]') ?? options()[0])?.focus({ preventScroll: true });
     function onKeyDown(e: KeyboardEvent) {
       const all = options();
       const i = all.indexOf(document.activeElement as HTMLElement);

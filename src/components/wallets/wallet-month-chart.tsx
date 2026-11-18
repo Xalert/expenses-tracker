@@ -102,31 +102,35 @@ export function WalletMonthChart({
         })}
       </div>
 
-      <table className="sr-only">
-        <caption>
-          Each day of {monthTitle} in {walletName}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Day</th>
-            <th scope="col">Out</th>
-            <th scope="col">In</th>
-            <th scope="col">Balance after</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.days.map((d) => (
-            <tr key={d.date}>
-              <th scope="row">
-                {Number(d.date.slice(8))} {short}
-              </th>
-              <td>{money(d.outMinor)}</td>
-              <td>{money(d.inMinor)}</td>
-              <td>{money(d.closingMinor)}</td>
+      {/* sr-only on a wrapper, not on the <table>: a table ignores the 1px width and, wider than a phone, made the
+          page scroll sideways. */}
+      <div className="sr-only">
+        <table>
+          <caption>
+            Each day of {monthTitle} in {walletName}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
+              <th scope="col">Out</th>
+              <th scope="col">In</th>
+              <th scope="col">Balance after</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.days.map((d) => (
+              <tr key={d.date}>
+                <th scope="row">
+                  {Number(d.date.slice(8))} {short}
+                </th>
+                <td>{money(d.outMinor)}</td>
+                <td>{money(d.inMinor)}</td>
+                <td>{money(d.closingMinor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

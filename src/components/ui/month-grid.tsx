@@ -47,7 +47,8 @@ export function MonthGrid({
   useEffect(() => {
     if (!shouldFocus.current) return;
     shouldFocus.current = false;
-    buttons.current.get(focus)?.focus();
+    // No scrolling: inside a Popover this can run before the panel is placed (see CalendarPanel).
+    buttons.current.get(focus)?.focus({ preventScroll: true });
   }, [focus]);
 
   const year = Number(focus.slice(0, 4));

@@ -181,11 +181,13 @@ export function CalendarPanel({
   const shouldFocus = useRef(true);
   const cells = useRef(new Map<string, HTMLButtonElement>());
 
-  // Roving focus: after a key press (and on open) move DOM focus to the focusable day.
+  // Roving focus: after a key press (and on open) move DOM focus to the focusable day. Without scrolling: on open this
+  // runs before the Popover has re-placed itself above a trigger near the bottom, and the browser would scroll the
+  // page to the panel's first (below) position instead.
   useEffect(() => {
     if (view !== "days" || !shouldFocus.current) return;
     shouldFocus.current = false;
-    cells.current.get(focusDate)?.focus();
+    cells.current.get(focusDate)?.focus({ preventScroll: true });
   }, [focusDate, view]);
 
   const maxMonth = max ? monthOf(max) : MAX_MONTH;

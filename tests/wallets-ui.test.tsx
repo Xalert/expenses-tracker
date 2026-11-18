@@ -226,6 +226,20 @@ describe("wallet chart helpers", () => {
     expect(pill?.[2]).not.toContain("bg-accent");
   });
 
+  it("the wallet chart's day table is hidden by an sr-only wrapper, not on the table (a table ignores the 1px width)", () => {
+    const html = renderToStaticMarkup(
+      <WalletMonthChart
+        walletName="Everyday bank account with a long name"
+        month="2026-11"
+        currency="EUR"
+        data={{ openingMinor: 0, inMinor: 0, outMinor: 0, entryCount: 0, totalEntryCount: 0, days: [], projectedDays: [] }}
+        isCurrentMonth
+      />,
+    );
+    expect(html).toContain('<div class="sr-only"><table>');
+    expect(html).not.toMatch(/<table[^>]*sr-only/);
+  });
+
   it("labels: the month change, entry counts and the day header's balance after", () => {
     expect(changeLabel(289090, "EUR")).toBe("+€2,890.90 this month");
     expect(changeLabel(-1200, "EUR")).toBe("-€12.00 this month");
