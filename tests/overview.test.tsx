@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { DayBars, RunningLine, linePoints } from "@/components/charts";
+import { DayBars, RunningLine, capPillTone, linePoints } from "@/components/charts";
 import { CurrencySwitch, InsightCard } from "@/components/ui";
 import { axisTicks, cumulative, median, pickScale } from "@/lib/chart-scale";
 import {
@@ -183,6 +183,32 @@ describe("chart and card components", () => {
     expect(html).toContain("Rent €50.00");
     expect(html).toContain("height:max(100%, 3px)");
     expect(html).toContain("height:max(83.33333333333334%, 3px)");
+  });
+
+  it("DayBars mutes the capped day's pill like its bar while another day is selected", () => {
+    const cap = { date: "2026-11-02", label: "Rent €50.00" };
+    const props = { days: bars, max: 120, cap, hrefFor: (d: string) => `/t?d=${d}`, ariaLabelFor: () => "" };
+    const pill = (html: string) => html.match(/<span data-cap-tone="([a-z]+)" class="([^"]*)"/);
+    const plain = pill(renderToStaticMarkup(<DayBars {...props} />));
+    expect(plain?.[1]).toBe("accent");
+    expect(plain?.[2]).toContain("bg-accent");
+    const other = pill(renderToStaticMarkup(<DayBars {...props} selectedDate="2026-11-01" />));
+    expect(other?.[1]).toBe("muted");
+    expect(other?.[2]).toContain("bg-border-strong");
+    expect(other?.[2]).not.toContain("bg-accent");
+    // The capped day itself selected: it stays the accent, like its bar.
+    expect(pill(renderToStaticMarkup(<DayBars {...props} selectedDate="2026-11-02" />))?.[1]).toBe("accent");
+    expect(capPillTone({ date: "2026-11-02", tone: "income" }, "2026-11-01")).toBe("muted");
+    expect(capPillTone({ date: "2026-11-02", tone: "income" })).toBe("income");
+  });
+
+  it("DayBars as links tile the row: no grid gap, each link fills its column, the gap is drawn inside", () => {
+    const html = renderToStaticMarkup(<DayBars days={bars} hrefFor={(d) => `/t?d=${d}`} ariaLabelFor={() => "x"} />);
+    expect(html).toContain('class="grid min-h-0 flex-1 gap-0"');
+    expect(html).toMatch(/<a [^>]*class="relative block h-full /);
+    expect(html).toContain("inset-x-px sm:inset-x-[2.5px]");
+    // Without links (the Overview) the bars keep the grid gap.
+    expect(renderToStaticMarkup(<DayBars days={bars} ariaLabelFor={() => "x"} />)).toContain("gap-[2px] sm:gap-[5px]");
   });
 
   it("RunningLine is an image with its summary", () => {

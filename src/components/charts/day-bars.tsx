@@ -14,6 +14,12 @@ export type DayBar = {
   base?: { value: number; tone: DayBarTone };
 };
 
+/**
+ * The capped day's label pill: `accent` (the default, spending) or a direction — `income` / `expense` (the wallet
+ * chart's "In …" / "Out …"). With a selected day other than the capped one the pill is muted, like its bar.
+ */
+export type CapTone = "accent" | "income" | "expense";
+
 export type DayBarsProps = {
   /** One entry per day, in order; `value` in minor units (or any non-negative number). */
   days: DayBar[];
@@ -24,7 +30,7 @@ export type DayBarsProps = {
    * `pickScale` (`lib/chart-scale.ts`) to decide it and the `max` for the other days. The bar row then leaves room
    * for the label at the top.
    */
-  cap?: { date: string; label: string };
+  cap?: { date: string; label: string; tone?: CapTone };
   /** A selected day: it is drawn in the accent colour and every other bar in `--border-strong`. */
   selectedDate?: string;
   /** With it, every bar is a link (`aria-label` from `ariaLabelFor`); without it the bars are `aria-hidden`. */
@@ -42,10 +48,24 @@ const toneClass: Record<DayBarTone, string> = {
   future: "bg-chart-future",
 };
 
+const capToneClass: Record<CapTone | "muted", string> = {
+  accent: "bg-accent text-accent-foreground",
+  income: "bg-income text-surface",
+  expense: "bg-expense text-surface",
+  muted: "bg-border-strong text-foreground",
+};
+
+/** The cap pill's tone: muted when another day is selected, else the cap's own tone (accent by default). */
+export function capPillTone(cap: { date: string; tone?: CapTone }, selectedDate?: string): CapTone | "muted" {
+  return selectedDate && cap.date !== selectedDate ? "muted" : (cap.tone ?? "accent");
+}
+
 /**
  * A row of per-day bars on a CSS grid (one column per day). Server-renderable: no client JS. Days with a value of 0
  * show a 2px stub so the month's shape stays readable. The parent supplies the text alternative unless `hrefFor`
- * makes the bars links.
+ * makes the bars links. As links the columns touch (no grid gap): each link fills its whole column and the full
+ * height of the bar row, so the hit areas tile the row without holes, and the visible gap between bars is an inset
+ * of the bar inside its link.
  */
 export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, height, className }: DayBarsProps) {
   const scaleMax = max ?? days.reduce((m, d) => Math.max(m, d.value), 0);
@@ -62,7 +82,11 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
       {capIndex >= 0 && cap && (
         <div className="relative h-6 shrink-0">
           <span
-            className="absolute top-0 z-10 max-w-[60%] truncate rounded-full bg-accent px-2 py-[3px] text-[11px] leading-none font-bold text-accent-foreground"
+            data-cap-tone={capPillTone(cap, selectedDate)}
+            className={cn(
+              "absolute top-0 z-10 max-w-[60%] truncate rounded-full px-2 py-[3px] text-[11px] leading-none font-bold",
+              capToneClass[capPillTone(cap, selectedDate)],
+            )}
             style={
               capIndex < n / 2
                 ? { left: `${(capIndex / n) * 100}%` }
@@ -74,7 +98,7 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
         </div>
       )}
       <div
-        className="grid min-h-0 flex-1 gap-[2px] sm:gap-[5px]"
+        className={cn("grid min-h-0 flex-1", interactive ? "gap-0" : "gap-[2px] sm:gap-[5px]")}
         style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))`, gridTemplateRows: "minmax(0, 1fr)" }}
       >
         {days.map((d, i) => {
@@ -91,7 +115,9 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
           const bar = (
             <span
               className={cn(
-                "absolute inset-x-0 bottom-0",
+                "absolute bottom-0",
+                // As links, the 2px / 5px gap between bars is drawn inside each link (1px / 2.5px a side).
+                interactive ? "inset-x-px sm:inset-x-[2.5px]" : "inset-x-0",
                 d.value > 0 ? toneClass[tone] : tone === "future" ? "bg-chart-future" : "bg-border",
                 capped ? "rounded-none" : "rounded-t-[3px] sm:rounded-t-[4px]",
               )}
@@ -116,7 +142,7 @@ export function DayBars({ days, max, cap, selectedDate, hrefFor, ariaLabelFor, h
               scroll={false}
               aria-label={ariaLabelFor(d.date, d.value)}
               aria-current={d.date === selectedDate ? "date" : undefined}
-              className="relative rounded-[4px] hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="relative block h-full rounded-[4px] hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               {bar}
             </Link>
