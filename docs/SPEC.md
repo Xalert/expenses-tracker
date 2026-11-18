@@ -506,6 +506,14 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     `z-50`). **It renders nothing once `usePathname()` differs from the path it opened at**: a parallel slot keeps
     its last content on a soft navigation to a URL it does not match, so a form that redirects on success, or a
     link inside the dialog, would otherwise leave it open over the next page.
+    **Drag to close (bottom sheet, below `sm`):** the handle and the header row are one drag area (`touch-action:
+    none` there only, so the body keeps scrolling and the gesture never fights it). A primary-button pointer-down
+    there that is not on a button / link / field captures the pointer; the panel follows it downwards
+    (`translateY`, never upwards). On release `sheetDragOutcome({ dy, height, velocity })` (exported, pure)
+    decides: close when pulled more than a third of the panel's height, or on a flick faster than 0.5 px/ms that
+    moved at least 24px; otherwise it springs back. Closing slides the panel out (200ms) and then calls the same
+    close as ✕; with `prefers-reduced-motion: reduce` neither the slide-out nor the spring-back animates. A
+    `pointercancel` springs back. From `sm` up the area does nothing.
   - `Segmented` (client) `{ name; options: { value; label }[]; value?; defaultValue?; onChange?(value);
     'aria-label'?; 'aria-labelledby'?; fullWidth?; className? }` — radio group drawn as a pill track (type
     switches, currency switch). Controlled with `value` + `onChange`, else uncontrolled with `defaultValue`;
