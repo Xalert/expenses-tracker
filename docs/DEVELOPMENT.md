@@ -87,6 +87,50 @@ npx vitest run tests/money.test.ts -t "JPY"
 The Statement Importer page can be tried locally: the `statement-importer-harness` entry in
 `.claude/launch.json` serves `tools/statement-importer/` on http://127.0.0.1:8765.
 
+## End-to-end tests
+
+Browser tests in `e2e/` (Playwright, Chromium only) run against a production build on a throwaway database, never on
+the development one. `scripts/e2e.mjs` starts its own Postgres (`compose.e2e.yaml`: project `expenses-tracker-e2e`,
+`127.0.0.1:5434`, data on tmpfs), runs `npm run build`, starts `.next/standalone/server.js` on it with
+`EXCHANGE_RATES=false` (no network), wipes the database, runs the tests and removes the container again, also when a
+test fails or the run is interrupted. Each test makes its own user through the app's services
+(`e2e/support/seed.ts`), so the tests run in parallel. Two projects: `desktop` (1280px) runs every test, `phone`
+(375px, touch) the ones tagged `@phone` / `@phone-only`; every test fails on a console error.
+
+Once, to download the browser:
+
+```bash
+npx playwright install chromium
+```
+
+The whole suite (needs Docker):
+
+```bash
+make test-e2e
+```
+
+One file or one project; the arguments go to `playwright test`:
+
+```bash
+make test-e2e ARGS="e2e/transactions.spec.ts --project=desktop"
+```
+
+Without `make`, again without the build (reusing the last one):
+
+```bash
+E2E_SKIP_BUILD=1 npm run test:e2e -- e2e/auth.spec.ts
+```
+
+The report of the last run, with traces of the failed tests:
+
+```bash
+npx playwright show-report
+```
+
+`E2E_DATABASE_URL` points the suite at an existing database instead of starting one (CI's service container); its
+name must contain `e2e`, since the suite empties it. CI runs the suite in `.github/workflows/e2e.yml` and uploads the
+report when a test fails.
+
 ## Make shortcuts
 
 A `Makefile` wraps the scripts below so day-to-day work is a few keystrokes. `make` on its own lists the targets.
@@ -150,6 +194,7 @@ data in `expenses`), `make build`, `make migration` (`db:generate`), `make docke
 | `npm run build` / `npm start` | production build / server (both force `NODE_ENV=production` through `scripts/next-production.mjs`, so they also work in Windows `cmd`) |
 | `npm run lint` / `npm run typecheck` | ESLint / `tsc --noEmit` |
 | `npm test` | vitest (services run against an in-process PGlite database) |
+| `npm run test:e2e` | Playwright browser tests on a production build and a throwaway Postgres ([End-to-end tests](#end-to-end-tests)) |
 | `npm run db:generate` | generate a new migration into `drizzle/` after editing `src/db/schema.ts` |
 | `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
 | `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email> [--stdin]` | set a random (printed) or piped-in password and delete that user's sessions; needs `DATABASE_URL` on the command and refuses the real `expenses` database |
@@ -194,12 +239,13 @@ src/app/api/               health check + export downloads
 src/server/                service layer: domain rules, every query scoped by userId
 src/db/  drizzle/          Drizzle schema + PostgreSQL connection (auto-migrate); SQL migrations
 src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell (top menu, account menu, Add button)
-scripts/  compose.dev.yaml    db:seed, db:reset, release, the build/start wrapper; development PostgreSQL
+scripts/  compose.dev.yaml    db:seed, db:reset, release, the build/start wrapper, e2e runner; development PostgreSQL
+e2e/  compose.e2e.yaml     Playwright browser tests (playwright.config.ts) and their throwaway PostgreSQL
 tools/statement-importer/  the claude.ai Statement Importer page
-deploy/  .github/          Compose file for the prebuilt image, Postgres major-upgrade script; CI workflow that tests and publishes it
+deploy/  .github/          Compose file for the prebuilt image, Postgres major-upgrade script; CI workflows (tests + image, e2e)
 tests/  docs/              vitest suites; spec, decisions, self-hosting, development, statement importer
 ```
 
 Next.js 16 (App Router, Server Components + Server Actions), PostgreSQL via Drizzle + node-postgres, Tailwind CSS v4,
-zod, vitest. The build contract is [`SPEC.md`](SPEC.md); the reasons and known gaps are in
+zod, vitest, Playwright. The build contract is [`SPEC.md`](SPEC.md); the reasons and known gaps are in
 [`DECISIONS.md`](DECISIONS.md).

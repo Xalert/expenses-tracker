@@ -131,29 +131,33 @@ export function MonthChart({
         })}
       </div>
 
-      <table className="sr-only">
-        <caption>
-          Each day of {monthName(month)} {month.slice(0, 4)} in {currency}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Day</th>
-            <th scope="col">Spent</th>
-            <th scope="col">Income</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tableDays.map((d) => (
-            <tr key={d.date}>
-              <th scope="row">
-                {Number(d.date.slice(8))} {short}
-              </th>
-              <td>{money(d.expenseMinor)}</td>
-              <td>{money(d.incomeMinor)}</td>
+      {/* sr-only on a wrapper, not on the <table>: a table ignores the 1px width and, wider than a phone, made the
+          page scroll sideways. */}
+      <div className="sr-only">
+        <table>
+          <caption>
+            Each day of {monthName(month)} {month.slice(0, 4)} in {currency}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
+              <th scope="col">Spent</th>
+              <th scope="col">Income</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {tableDays.map((d) => (
+              <tr key={d.date}>
+                <th scope="row">
+                  {Number(d.date.slice(8))} {short}
+                </th>
+                <td>{money(d.expenseMinor)}</td>
+                <td>{money(d.incomeMinor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -51,3 +51,9 @@ next-env.d.ts
 
 # database dumps written by the Compose `backup` service (docs/SELF-HOSTING.md#backup)
 /backups/
+
+# end-to-end tests (Playwright, e2e/)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

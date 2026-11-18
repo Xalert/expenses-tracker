@@ -121,6 +121,7 @@ section holds what replaced it.
 | `/account`'s Profile card has a "Time zone" native select: "Not set (use this browser's)" first, then every zone in `<optgroup>`s by region ("UTC" under "Other", last); changing it needs no password; the list comes from the server as a prop | A native select is keyboard-, screen-reader- and mobile-friendly and type-to-search works in it; ~420 options grouped by region are manageable. Computed on the server because browsers' `Intl` zone lists differ, which would break hydration. A time zone is not an identity change, so no password | planner (select), built (server-side list) |
 | `updateProfile`'s `timeZone` is the one profile field where *omitted* means "unchanged" (`""` / null clear it) | Other callers and older forms that do not send it must not clear it | built |
 | "Today" stays the server's date everywhere; the account's time zone is used only by the Spendee import | Out of scope for this change. A per-account "today" (default dates, the current month) is a possible follow-up | planner |
+| **Fix (2026-11-18, found by the e2e suite): the hidden `timeZone` field on `/login` and `/register` keeps the browser's zone after a refused submit** | It was written into the DOM after hydration, and React writes an uncontrolled input's `defaultValue` again on every re-render, so a failed first attempt emptied it and the account was created (or signed in) without a zone. It is now state passed as `defaultValue` | built |
 
 ### Categories
 
@@ -132,6 +133,7 @@ section holds what replaced it.
 | *(superseded 2026-11-18)* A category's kind (expense / income) is fixed at creation | Changing it would invalidate its transactions | planner |
 | All categories of a kind may be removed; the transaction form then shows an empty state | "Add or remove as they wish"; no artificial minimum | planner |
 | Rename and the replacement picker are inline, with no modal library | Works at phone width, keyboard-usable, no new dependency | built |
+| **Fix (2026-11-18, found by the e2e suite): the "Remove, moving its entries to" form is keyed on each action result** | React resets a form after its action; the reset put the controlled replacement select's DOM back on its first category while React still held "A new … category" and showed the name field, so a corrected second submit moved the entries into that first category instead of creating the named one. Remounting the form per result (the codebase's pattern for selects after a failed action) shows the choice again | built |
 
 Added 2026-11-18 (closing the category gaps):
 
@@ -310,6 +312,7 @@ Added 2026-11-08.
 | The README has a short "Development" section with the six everyday `make` commands (dev, check, test, watch, demo-reset, down), one-line blocks; everything else stays in `docs/DEVELOPMENT.md` | The owner wants them runnable straight from the README (2026-11-17); this relaxes the earlier "no dev commands in the README" rule for these only | owner |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
+| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433 | planner (ask), built |
 | README reduced to a landing page (2026-11-10): what the app is, the Docker quick start, a self-hosting pointer and links. "Run it", "Debugging", "Scripts" and "Layout" moved unchanged to `docs/DEVELOPMENT.md`; the import/export, statement importer and accounts paragraphs were dropped because `docs/SPEC.md`, `docs/STATEMENT-IMPORTER.md` and `docs/SELF-HOSTING.md` already hold them. Supersedes the "five-minute path" README above; the one-line `bash` block rule now applies to `docs/DEVELOPMENT.md` | The owner found the README had too many commands and wants only a quick Docker start, a short description and the self-hosting pointer there | owner |
 
 ### Interface
@@ -341,6 +344,8 @@ Added 2026-11-08.
 | The bottom sheet closes on a drag down from its handle or header (more than a third of its height, or a fast flick of at least 24px); the body is not a drag area | Dragging from the scrolling body would fight its scroll (and pull-to-refresh); handle + header is what sheet UIs use. The drag is a pointer-only shortcut, so the handle stays `aria-hidden`; ✕ and Escape remain the accessible ways to close | planner (gesture), built (thresholds) |
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 | *(2026-11-18)* Without JavaScript the /transactions Month chip's popover button is hidden like the other popover chips and a `<noscript>` link with the same label jumps to the no-JS filter form's Month select (`#no-script-month`) | The label looked like a button that did nothing; the ‹ › links keep working, and the form below is where a month is chosen without scripts. With scripts nothing changes | planner |
+| **Fix (2026-11-18, found by the e2e suite): pickers focus their first item with `preventScroll`** (date picker days, month grid, the /transactions filter chips' options) | On open the focus ran before the Popover had re-placed itself above a trigger near the bottom, so the browser scrolled the page to the panel's first, below position and the panel never flipped | built |
+| **Fix (2026-11-18, found by the e2e suite): the charts' screen-reader day tables are hidden by an `sr-only` wrapper, not by `sr-only` on the `<table>`** | A table does not shrink to the 1px width: on the wallet page with a long wallet name the hidden table was 470px wide and the page scrolled sideways at 375px | built |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
 
@@ -546,69 +551,76 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Not verified
 
-- **Exchange rates in the database, manual rates and the converted strip / categories (2026-11-18) are covered by
-  service, unit and render tests only** (the provider is a stub: no test reaches the network). Not tried against the
-  live Frankfurter API: that a range made only of weekend days or holidays comes back as an empty `rates` object or
-  as the previous business day (both are accepted), and the size of a long range response. Not tried in a browser:
-  `/rates` at 375px and in dark mode (three fields in one row from `sm`), the date picker inside several forms on
-  one page, the "Rates" link next to the switch on phones, the notes under the day strip and above the split card,
-  and the Overview's past-month Wallets card. The `0005_exchange-rates` migration also ran on a populated
-  Postgres 17 (see "Operations on real Postgres 17 and Docker" below).
+- **End-to-end browser suite (2026-11-18): what it does and does not cover.** `e2e/` (Playwright, Chromium,
+  production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in a real
+  browser what the entries below list as covered. It runs in headless Chromium only: no Safari / Firefox, no real
+  touch device (the phone project emulates a 375px touch viewport), no screen reader (announcements and labels are
+  checked through the accessibility tree, not heard), no real clipboard, file picker (files are set on the input) or
+  password manager, and the 375px / dark-mode checks are for sideways overflow and the scheme's background, not a
+  visual review.
+- **Exchange rates in the database, manual rates and the converted strip / categories (2026-11-18).** A manual rate
+  entered on `/rates` feeding the "All in" views of Overview (total and month spending, "EUR only"), Transactions
+  and Categories with `EXCHANGE_RATES=false`, and its removal, are covered by `e2e/rates.spec.ts`; `/rates` at
+  375px in both schemes by `e2e/layout.spec.ts`. Not tried against the live Frankfurter API: that a range made only
+  of weekend days or holidays comes back as an empty `rates` object or as the previous business day (both are
+  accepted), and the size of a long range response. Not checked in a browser: the date picker inside several forms
+  on one page, the notes under the day strip and above the split card, and the Overview's past-month Wallets card.
+  The `0005_exchange-rates` migration ran on PGlite, the e2e suite's empty Postgres 17 and a populated Postgres 17 (see "Operations on real Postgres 17 and Docker" below).
 
-- **The /transactions and wallet-page fixes of 2026-11-18 are covered by render and service tests only**, not yet
-  tried in a browser: focus moving into an opened row's form and, after a Delete or a Save that moves the entry
-  away, to the next row / previous row / list heading with its announcement (the logic relies on a layout-effect
-  cleanup running before React detaches the row, and on `setTimeout(0)` landing after the refreshed list commits);
-  the `<noscript>` filter form and the `<style>` hiding the popover chips with scripts off; the "Pick a day"
-  calendar at 360–375px; the cap pill colours in both themes.
-- **Entry form, dialogs and pickers gap fixes (2026-11-18) are covered by tests only** (pure functions, static
-  render, the new action against PGlite). Not tried in a browser: the popover flipping above near the bottom of the
-  viewport and of the Add sheet's scrolling body (and re-placing on scroll / resize / month view), the date
-  picker's "Back to days" focus, the sheet's drag-to-close on a real touch screen (iOS Safari's own gestures, the
-  slide-out timing, reduced motion), the "±" toggle keeping the iOS keyboard open, "+ New category" end to end
-  (the layout refresh while the dialog is open keeping typed values), the "Manage categories" draft round trip
-  through /categories in the dialog and on the full page, and the amount / note surviving a Transfer ↔ Expense
-  switch.
-- **Accounts and security (2026-11-18): profile editing, devices, account deletion, rate limiting, the reset script
-  and the host check** are covered by service, action (mocked Next APIs), render and unit tests. The standalone
-  server behind real proxies, the reset script in the built image and the `0002` migration on a populated Postgres 17
-  were checked on 2026-11-18 (see "Operations on real Postgres 17 and Docker" below). Still not checked in a
-  browser: the four `/account` cards at 375px and in dark mode; the account menu showing a changed name after
-  saving; the redirect to `/login?deleted=1` and its notice; that the hydrated Next.js client really shows the 403
-  text through `src/app/error.tsx` (the 403 `text/plain` answer to a `Next-Action` POST was seen with a script);
-  `src/proxy.ts` under `next dev` behind a proxy.
-- **Category kind change, archive and removal into a new category (2026-11-18) are covered by service and render
-  tests only.** Not yet tried in a browser: the row leaving its list and focus landing on the heading after a kind
-  change or (un)archive, the controlled replacement select keeping "A new … category" (and its name field) after a
-  refused removal, the entry form and the inline row editors showing "Food (archived)" for an entry that has an
-  archived category, and the page at 375px with the extra controls. The `FOR UPDATE` / `FOR SHARE` pair was not
-  exercised with two real concurrent connections (PGlite runs one).
+- **The /transactions and wallet-page fixes of 2026-11-18.** Focus moving into an opened row's form, back to the
+  row on Escape, and after a Delete / a Save that moves the entry to another month to the next row, the previous
+  row or the list heading; the `<noscript>` filter form with scripts off (the chips hidden, empty fields dropped);
+  clean URLs for an empty `q=`; the "Pick a day" calendar at 375px (44px targets, inside the viewport); the wallet
+  page's "Balance after" and projected "· projected" day headers: covered by `e2e/transactions.spec.ts` and
+  `e2e/wallets.spec.ts`. Not checked: the announcement being read by a screen reader, and the cap pill colours by
+  eye in both themes.
+- **Entry form, dialogs and pickers gap fixes (2026-11-18).** The popover flipping above near the bottom of the
+  viewport and re-placing on scroll, staying inside the Add sheet at 375px, the date picker's "Back to days" and
+  Escape focus, "+ New category" end to end (typed values kept, a duplicate refused in place, Escape closing only
+  the field), the "Manage categories" draft round trip in the dialog and on the full page, the amount / note
+  surviving a Transfer ↔ Expense switch, and adding an expense / income / transfer through the N shortcut's dialog
+  and the full page: covered by `e2e/entries.spec.ts` (which found the picker bug noted in the Interface table).
+  Not checked: the sheet's drag-to-close on a real touch screen (iOS Safari's own gestures, the slide-out timing,
+  reduced motion) and the "±" toggle keeping the iOS keyboard open, which need a real iPhone.
+- **Accounts and security (2026-11-18).** Profile editing with the account menu showing the new name, the
+  per-device Sign out, account deletion with the redirect to `/login?deleted=1` and its notice, the sign-in limit's
+  message after five failures, and the four `/account` cards at 375px in both schemes: covered by
+  `e2e/account.spec.ts`, `e2e/auth.spec.ts` and `e2e/layout.spec.ts`. `src/proxy.ts` on the standalone server: the
+  oversized-import refusal reaching the import panel as the app's message is covered by `e2e/import.spec.ts`. Checked on 2026-11-18 (see "Operations on real Postgres 17 and Docker" below): the host check behind real
+  proxies (the 403 answers seen with a script), `x-forwarded-for` behind Caddy and nginx, the reset script in a
+  built image and `0002_lower-unique-users` on a populated Postgres 17. Not checked: the hydrated Next.js client
+  showing the 403 text through `src/app/error.tsx`, and `src/proxy.ts` under `next dev` behind a proxy.
+- **Category kind change, archive and removal into a new category (2026-11-18).** The row moving to the other card
+  with focus on it after a kind change, archive / unarchive (the "Archived · N" list, the entry form leaving it out,
+  the inline editor showing "Food (archived)"), and a refused removal into a new category keeping "A new …
+  category" and its name: covered by `e2e/categories.spec.ts` (which found the select bug noted in the Categories
+  table); the page at 375px by `e2e/layout.spec.ts`. Not checked: the `FOR UPDATE` / `FOR SHARE` pair with two real
+  concurrent connections.
 
-- **Devices list, `TRUST_PROXY`, scheduled backups and the demo wrapper (2026-11-18) are covered by tests only**
-  (services and actions on PGlite, render to static markup, the wrapper run as a child process, the backup script
-  run by hand under macOS `sh` with a fake `pg_dump`). Checked for real on 2026-11-18 (see "Operations on real
-  Postgres 17 and Docker" below): the `0006` migration with existing sessions, `last_used_at` advancing on a running
-  server, `TRUST_PROXY=1` behind Caddy and nginx, the backup loop in `postgres:17-alpine`, and `dev:demo` /
-  `demo:reset` on macOS. Not checked: the Devices card in a browser (375px, dark mode, the per-row Sign out and its
-  pending state, real user agents), Traefik, and the wrapper on Windows `cmd`.
-- **Leftover data and UI gaps (2026-11-18) are covered by service, import / export round-trip, render and pure-helper
-  tests only.** Not tried in a browser: the kind change's focus landing on the moved row in the other card (the
-  window event, then the refreshed list's effect; a slow refresh leaves focus on that card's heading meanwhile) and
-  its announcement being read; the archived group's Edit toggle and form inside the closed `<details>` at 375px and
-  in dark mode (focus into the name, back to the toggle); the no-JS Month link jumping to the select (fragment
-  navigation scrolls to it but does not focus it in every browser) with scripts off. The Statement Importer change
-  was checked through `tests/statement-importer-csv.test.ts` only, not in the published artifact.
-- **Account time zone (2026-11-18) is covered by service, action (mocked Next APIs) and render tests only.** Not
-  tried in a browser: the hidden field being filled after hydration on `/login` and `/register` (and surviving a
-  failed submit), the ~420-option grouped select on `/account` at 375px, on iOS / Android pickers and in dark mode,
-  type-to-search in it, and the import notice text in the panel. The `0004_account-time-zone` migration ran on
-  PGlite and, on 2026-11-18, on a populated Postgres 17. The zone list and canonical spellings come from Node 24's ICU; another Node / ICU version may spell
-  a few zones differently (`Europe/Kiev` vs `Europe/Kyiv`): a stored zone the runtime does not know counts as not
-  set, and the select shows a stored zone that is missing from its list as an extra option.
-- **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
-  menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking
-  up the new password, and another signed-in browser actually being sent to `/login`. The account menu has no
-  render test for the link (the closed `Popover` renders nothing under `renderToStaticMarkup`).
+- **Devices list, `TRUST_PROXY`, scheduled backups and the demo wrapper (2026-11-18).** The Devices card (two
+  sessions with real user-agent strings, "This device", the per-row Sign out signing the other browser out) is
+  covered by `e2e/account.spec.ts`, at 375px in both schemes by `e2e/layout.spec.ts`. Checked on 2026-11-18 (see "Operations on real Postgres 17 and Docker" below): the `0006_sessions-devices`
+  migration with existing sessions, `last_used_at` advancing on a running server, `TRUST_PROXY=1` behind Caddy and
+  nginx, the backup loop in `postgres:17-alpine`, and `dev:demo` / `demo:reset` on macOS. Not checked: the per-row
+  pending state, Traefik, and the wrapper on Windows `cmd`.
+- **Leftover data and UI gaps (2026-11-18).** The kind change's focus landing on the moved row and the archived
+  group's Edit toggle and form inside the closed `<details>` (focus into the name, back to the toggle) are covered
+  by `e2e/categories.spec.ts` and `e2e/wallets.spec.ts`; the import of a CSV with wallet and archived-category rows
+  by `e2e/import.spec.ts`. Not checked: the announcement being read, the no-JS Month link jumping to the select
+  (fragment navigation scrolls to it but does not focus it in every browser), and the Statement Importer change in
+  the published artifact (only through `tests/statement-importer-csv.test.ts`).
+- **Account time zone (2026-11-18).** The hidden field filled after hydration on `/register` and surviving a refused
+  submit (it did not: fixed, see the Accounts table), the zone reaching the new account, and the grouped select on
+  `/account` saving a zone: covered by `e2e/auth.spec.ts` and `e2e/account.spec.ts`; `/account` at 375px in both
+  schemes by `e2e/layout.spec.ts`. Not checked: iOS / Android pickers, type-to-search in the select, and the import
+  notice text in the panel. The `0004_account-time-zone` migration ran on PGlite, the e2e suite's empty Postgres
+  and a populated Postgres 17 (see "Operations on real Postgres 17 and Docker" below). The zone list and canonical spellings come from Node 24's ICU; another Node / ICU version may spell a few
+  zones differently (`Europe/Kiev` vs `Europe/Kyiv`): a stored zone the runtime does not know counts as not set, and
+  the select shows a stored zone that is missing from its list as an extra option.
+- **Password change (2026-11-17).** The account menu's "Account settings" link closing the popover, the form
+  clearing after success, another signed-in browser being sent to `/login` while this one stays, and the new
+  password signing in: covered by `e2e/account.spec.ts`. Not checked: a password manager picking up the new
+  password (Playwright's Chromium has none).
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
@@ -629,12 +641,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   button, focus after a group rename / delete, the `<optgroup>` pickers on a real phone, and the Overview with the
   group name in the heading.
 
-- **Wallet group order, colour and archive** were covered by tests (services, the `0001` back-fill on PGlite, render to
-  static markup, actions with mocked Next APIs) and typecheck / lint only; not checked in a browser: the colour dots
-  in both themes, the Move up / down buttons beside an open row at 375px, the colour radios' focus ring
-  (`has-focus-visible`), the no-JS Move submit (a bound Server Action in a client component) and the closed
-  "Archived groups" section. The migration has not been run on the real development database; it ran on a
-  populated Postgres 17 on 2026-11-18 (positions came out by name ignoring case, then id).
+- **Wallet group order, colour and archive.** Move up / down (also at 375px), recolouring, archiving into the
+  closed "Archived groups" section, renaming there and unarchiving: covered by `e2e/wallets.spec.ts`; the group
+  switcher scoping the Overview too. Not checked: the colour dots by eye in both themes, the colour radios' focus
+  ring (`has-focus-visible`), the no-JS Move submit, and the `0001` migration on the real development database (it ran on a populated
+  Postgres 17 on 2026-11-18: positions came out by name ignoring case, then id).
 
 - **Bind mounts on a real Linux host.** The "folder must be owned by uid 1000" failure and its fixes were only
   simulated on Docker Desktop.

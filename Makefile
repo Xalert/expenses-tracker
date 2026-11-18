@@ -11,13 +11,14 @@ LAN_HOST ?= $(shell ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1
 phone-hint = @if [ -n "$(LAN_HOST)" ]; then echo "Phone on the same network: open http://$(LAN_HOST):3000"; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs psql dev dev-real demo-reset reset-password check test watch typecheck lint build migration docker-up docker-down docker-logs release
+.PHONY: help install up down logs psql dev dev-real demo-reset reset-password check test test-e2e watch typecheck lint build migration docker-up docker-down docker-logs release
 
 help:
 	@echo "Fast path:  make dev     (dev Postgres + demo data if missing + dev server on :3000; user ID demo / demo-password)"
 	@echo "Dev:        make up | down | logs | psql [DB=expenses] | demo-reset | reset-password ID=demo | dev-real (your REAL data)"
 	@echo "Checks:     make check   (typecheck + lint + tests)"
 	@echo "            make test [FILE=tests/money.test.ts] [NAME=JPY] | watch | typecheck | lint"
+	@echo "            make test-e2e [ARGS=\"e2e/auth.spec.ts --project=desktop\"]   (browser tests: own Postgres on 5434, build)"
 	@echo "Build:      make build | migration | docker-up | docker-down | docker-logs"
 	@echo "Release:    make release VERSION=x.y.z [DRY_RUN=1] [PUSH=1]   (from a clean, up-to-date main)"
 	@echo "Details: docs/DEVELOPMENT.md"
@@ -82,6 +83,12 @@ check: node_modules
 # One file and/or the tests whose name matches: make test FILE=tests/users.test.ts NAME=changePassword
 test: node_modules
 	npx vitest run $(FILE) $(if $(NAME),-t "$(NAME)")
+
+# End-to-end browser tests (e2e/, Playwright): a throwaway Postgres (compose.e2e.yaml, 127.0.0.1:5434, tmpfs), a
+# production build, the tests, then everything torn down. Never touches the dev database. First time:
+# `npx playwright install chromium`. ARGS go to `playwright test`; E2E_SKIP_BUILD=1 reuses the last build.
+test-e2e: node_modules
+	npm run -s test:e2e -- $(ARGS)
 
 watch: node_modules
 	npx vitest $(FILE) $(if $(NAME),-t "$(NAME)")

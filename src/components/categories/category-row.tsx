@@ -354,6 +354,18 @@ function RemoveUnusedButton({
   );
 }
 
+// A small stable id per action result, to key the replacement form on (see MoveAndRemoveForm).
+const resultIds = new WeakMap<object, number>();
+let nextResultId = 0;
+function resultId(state: object): number {
+  let id = resultIds.get(state);
+  if (id === undefined) {
+    id = nextResultId++;
+    resultIds.set(state, id);
+  }
+  return id;
+}
+
 /**
  * Remove a category in use, moving its entries. With other active categories of its kind: a select of them plus "A
  * new category…", which shows a name field; without any: only the name field. Either way one server call creates (if
@@ -416,7 +428,14 @@ function MoveAndRemoveForm({
   );
 
   return (
-    <form action={formAction} noValidate className="space-y-1.5">
+    <form
+      // React resets the form after the action, which puts the select's DOM back on its first option while `choice`
+      // (and the name field it shows) stays: remount the form per result so the select shows `choice` again.
+      key={resultId(state)}
+      action={formAction}
+      noValidate
+      className="space-y-1.5"
+    >
       {hasSelect ? (
         <>
           <Label htmlFor={selectId}>Remove, moving its {plural(category.transactionCount)} to</Label>

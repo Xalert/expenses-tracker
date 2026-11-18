@@ -43,6 +43,7 @@ npm run db:reset -- --demo | --clean          # REAL DB: wipe every row, then de
 npm run typecheck                             # tsc --noEmit
 npm run lint                                  # eslint
 npm test                                      # vitest run (whole suite, a few seconds; PGlite, no Docker or Postgres needed)
+npm run test:e2e                              # Playwright browser tests: own Postgres (5434, tmpfs), build, run, teardown (docs/DEVELOPMENT.md)
 npx vitest run tests/money.test.ts            # one file
 npx vitest run tests/money.test.ts -t "JPY"   # tests whose name matches
 npm run build                                 # production build → .next/standalone (forces NODE_ENV=production)
