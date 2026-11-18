@@ -45,3 +45,6 @@ next-env.d.ts
 
 # IDE project files
 /.idea/
+
+# Agent worktrees
+/.claude/worktrees/
