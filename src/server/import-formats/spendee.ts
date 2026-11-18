@@ -463,11 +463,14 @@ function addNotices(combined: ParsedFile, ctx: ImportContext): void {
   const converted = t.get("tz-converted") ?? 0;
   if (converted > 0) {
     const shifted = t.get("tz-shifted") ?? 0;
-    const zone = ctx.timeZoneFallback
-      ? "UTC (your browser's time zone was not recognised)"
-      : ctx.timeZone === "UTC"
-        ? "UTC"
-        : `your time zone, ${ctx.timeZone}`;
+    const zone =
+      ctx.timeZoneSource === "account"
+        ? `your account's time zone, ${ctx.timeZone}`
+        : ctx.timeZoneSource === "browser"
+          ? `this browser's time zone, ${ctx.timeZone} (set one in Account settings so every browser dates them alike)`
+          : ctx.timeZoneFallback
+            ? "UTC (this browser's time zone was not recognised; set one in Account settings)"
+            : "UTC (set a time zone in Account settings)";
     combined.notices.push({
       code: "time-zone",
       count: converted,

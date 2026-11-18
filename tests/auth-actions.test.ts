@@ -47,6 +47,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const { loginAction } = await import("@/app/(auth)/login/actions");
+const { registerAction } = await import("@/app/(auth)/register/actions");
 const { changePasswordAction, deleteAccountAction, signOutOtherDevicesAction, updateProfileAction } = await import(
   "@/app/(app)/account/actions"
 );
@@ -79,7 +80,9 @@ beforeEach(async () => {
   Object.assign(ctx, { userId: 0, tokenHash: "current", forwardedFor: "203.0.113.7", created: [], cookieCleared: 0, revalidated: [] });
 });
 
-const login = (identifier: string, password: string) => loginAction({}, fd({ identifier, password }));
+const login = (identifier: string, password: string, extra: Record<string, string> = {}) =>
+  loginAction({}, fd({ identifier, password, ...extra }));
+const zoneOf = async (id: number) => (await db.select().from(users).where(eq(users.id, id)))[0].timeZone;
 
 describe("loginAction rate limiting", () => {
   it("refuses an identifier after 5 failures, for an existing account and an unknown one alike, until the window ends", async () => {
@@ -137,6 +140,28 @@ describe("loginAction rate limiting", () => {
   });
 });
 
+describe("time zone from the sign-in and registration forms", () => {
+  it("a successful sign-in stores the browser's zone only when the account has none; a failed one never", async () => {
+    const ana = await registerUser({ username: "ana", password: PW });
+    await login("ana", "wrong-pw", { timeZone: "Europe/Bucharest" });
+    expect(await zoneOf(ana.id)).toBeNull();
+    await redirectOf(login("ana", PW, { timeZone: "Not/AZone" }));
+    expect(await zoneOf(ana.id)).toBeNull();
+    await redirectOf(login("ana", PW));
+    expect(await zoneOf(ana.id)).toBeNull();
+    await redirectOf(login("ana", PW, { timeZone: "Europe/Bucharest" }));
+    expect(await zoneOf(ana.id)).toBe("Europe/Bucharest");
+    await redirectOf(login("ana", PW, { timeZone: "America/New_York" }));
+    expect(await zoneOf(ana.id)).toBe("Europe/Bucharest");
+  });
+
+  it("registration stores the hidden field's zone", async () => {
+    expect(await redirectOf(registerAction({}, fd({ username: "cat", password: PW, timeZone: "Asia/Tokyo" })))).toBe("/");
+    const [row] = await db.select().from(users).where(eq(users.username, "cat"));
+    expect(row.timeZone).toBe("Asia/Tokyo");
+  });
+});
+
 describe("/account actions", () => {
   async function signedIn() {
     const u = await registerUser({ username: "ana", password: PW, email: "ana@example.com" });
@@ -149,6 +174,16 @@ describe("/account actions", () => {
     const state = await updateProfileAction({}, fd({ username: "ana", email: "ana@example.com", firstName: " Ana ", lastName: "Pop" }));
     expect(state).toMatchObject({ ok: true, values: { username: "ana", firstName: "Ana", lastName: "Pop" } });
     expect(ctx.revalidated).toContainEqual(["/", "layout"]);
+  });
+
+  it("profile: sets and clears the time zone without a password, echoing it back", async () => {
+    const u = await signedIn();
+    const base = { username: "ana", email: "ana@example.com" };
+    expect(await updateProfileAction({}, fd({ ...base, timeZone: "Europe/Bucharest" }))).toMatchObject({ ok: true, values: { timeZone: "Europe/Bucharest" } });
+    expect(await zoneOf(u.id)).toBe("Europe/Bucharest");
+    expect((await updateProfileAction({}, fd({ ...base, timeZone: "Nowhere/Land" }))).fieldErrors).toEqual({ timeZone: "Choose a time zone from the list." });
+    expect(await updateProfileAction({}, fd({ ...base, timeZone: "" }))).toMatchObject({ ok: true, values: { timeZone: "" } });
+    expect(await zoneOf(u.id)).toBeNull();
   });
 
   it("profile: errors land on the field and the password is never echoed", async () => {

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { createSession } from "@/lib/auth";
 import { formValues, zodErrorState, type FormState } from "@/lib/form";
 import { clientAddress, identifierKey, passwordLimiters, tooManyAttemptsMessage } from "@/lib/rate-limit";
-import { authenticateUser, deleteExpiredSessions } from "@/server/users";
+import { adoptTimeZoneIfUnset, authenticateUser, deleteExpiredSessions } from "@/server/users";
 
 const schema = z.object({
   identifier: z.string().trim().min(1, "Enter your user ID or email."),
@@ -34,6 +34,8 @@ export async function loginAction(_prev: FormState, formData: FormData): Promise
   }
 
   limits.identifier.reset(idKey);
+  // The browser's zone (hidden field) becomes the account's only when it has none yet; invalid values are ignored.
+  await adoptTimeZoneIfUnset(user.id, formData.get("timeZone"));
   await deleteExpiredSessions(); // every account's; createSession then only adds one
   await createSession(user.id);
   redirect("/");

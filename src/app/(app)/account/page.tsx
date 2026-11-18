@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui";
 import { currentSessionTokenHash, requireUser } from "@/lib/auth";
-import { countOtherSessions } from "@/server/users";
+import { groupedTimeZones } from "@/lib/time-zone";
+import { countOtherSessions, getUserTimeZone } from "@/server/users";
 import { ChangePasswordForm } from "./change-password-form";
 import { DeleteAccountForm } from "./delete-account-form";
 import { ProfileForm } from "./profile-form";
@@ -12,6 +13,7 @@ export const metadata: Metadata = { title: "Account settings" };
 export default async function AccountPage() {
   const user = await requireUser();
   const otherSessions = await countOtherSessions(user.id, await currentSessionTokenHash());
+  const timeZone = await getUserTimeZone(user.id);
   return (
     <>
       <PageHeader title="Account settings" />
@@ -24,6 +26,8 @@ export default async function AccountPage() {
               email={user.email}
               firstName={user.firstName}
               lastName={user.lastName}
+              timeZone={timeZone}
+              timeZones={groupedTimeZones()}
             />
           </CardBody>
         </Card>

@@ -83,6 +83,8 @@ const profileSchema = z.object({
   email: optional,
   firstName: optional,
   lastName: optional,
+  // Not defaulted: a form without the field leaves the time zone as it is ("" clears it).
+  timeZone: z.string().optional(),
   currentPassword: optional,
 });
 
@@ -92,7 +94,7 @@ export async function updateProfileAction(_prev: FormState, formData: FormData):
   const parsed = profileSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return zodErrorState(parsed.error, values);
 
-  let saved: { username: string; email: string | null; firstName: string | null; lastName: string | null };
+  let saved: Awaited<ReturnType<typeof updateProfile>>;
   try {
     // The limit only applies when a password was given (a names-only change checks none).
     const result = parsed.data.currentPassword
@@ -113,6 +115,7 @@ export async function updateProfileAction(_prev: FormState, formData: FormData):
       email: saved.email ?? "",
       firstName: saved.firstName ?? "",
       lastName: saved.lastName ?? "",
+      timeZone: saved.timeZone ?? "",
     },
   };
 }

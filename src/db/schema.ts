@@ -34,6 +34,11 @@ export const users = pgTable(
     firstName: text("first_name"),
     lastName: text("last_name"),
     passwordHash: text("password_hash").notNull(),
+    /**
+     * The account's IANA time zone (canonical spelling, e.g. "Europe/Bucharest"), or NULL when not set. Checked by
+     * src/lib/time-zone.ts; used by the Spendee import to date UTC timestamps.
+     */
+    timeZone: text("time_zone"),
     createdAt: createdAt(),
   },
   // Unique on lower(...): sign-in and the duplicate checks compare `lower(username)` / `lower(email)`, so these

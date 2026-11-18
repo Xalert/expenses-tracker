@@ -22,3 +22,5 @@ The first tagged release: everything built since 2026-11-05, in short.
 - Operations: an on-demand `backup` Compose service, a Postgres major-upgrade script, a warning line before
   migrations run on an existing database, a release script, a smaller image without `sharp`, signed images with
   SBOM and provenance.
+- Each account has a time zone (taken from the browser at registration or sign-in, changeable under Account
+  settings); Spendee imports are dated in it, so re-importing from another time zone finds the same duplicates.

@@ -117,7 +117,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 
 | table | columns |
 |---|---|
-| `users` | `id`, `username` (the "user ID": stored lowercased, required), `email` (nullable; stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt`; unique expression indexes `users_username_lower_uq` on `lower(username)` and `users_email_lower_uq` on `lower(email)` (migration `0002_lower-unique-users`; NULL emails never collide) |
+| `users` | `id`, `username` (the "user ID": stored lowercased, required), `email` (nullable; stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `timeZone` (`time_zone`, nullable: the account's IANA time zone, canonical spelling; migration `0004_account-time-zone`), `createdAt`; unique expression indexes `users_username_lower_uq` on `lower(username)` and `users_email_lower_uq` on `lower(email)` (migration `0002_lower-unique-users`; NULL emails never collide) |
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
 | `wallet_groups` | `id`, `userId` → users (cascade), `name`, `position` (int, display order), `color` (nullable, a palette key), `archivedAt` (nullable), `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
 | `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
@@ -149,6 +149,21 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
     (when it differs from the display name), then the email (when there is one), one per line, then Sign out. Long
     values truncate with an ellipsis and a tooltip; between them and Sign out, an **Account settings** link to
     `/account`.
+- **Time zone.** An account may have an IANA time zone (`users.time_zone`); it is used only to date Spendee's UTC
+  timestamps on import (Import / export → Spendee). Valid means: `Intl.DateTimeFormat` accepts it and its canonical
+  name (`resolvedOptions().timeZone`) is in `Intl.supportedValuesOf("timeZone")` or is `UTC` — offsets such as
+  `+02:00` and `Etc/GMT+5` are refused; at most 100 characters; stored in the canonical spelling (`europe/bucharest`
+  → `Europe/Bucharest`, `Etc/UTC` → `UTC`). It is set automatically: the `/register` and `/login` forms post a
+  hidden `timeZone` (the browser's `Intl.DateTimeFormat().resolvedOptions().timeZone`, filled after hydration by
+  `BrowserTimeZoneInput` in `src/app/(auth)/browser-time-zone-input.tsx`; absent without JavaScript). Registration
+  stores it; a **successful** sign-in stores it only when the account has none yet (`update … where time_zone is
+  null`), so it never overrides a zone chosen on `/account`. An invalid or absent value is ignored (no error; the
+  zone stays NULL). On `/account` it can be chosen or cleared without the password. A stored zone the runtime no
+  longer recognises counts as not set. "Today" elsewhere in the app is still the server's date (not per account).
+  - As built: `src/lib/time-zone.ts` (`canonicalTimeZone(value): string | null`, `listTimeZones()`,
+    `groupedTimeZones()` for the select); services `adoptTimeZoneIfUnset(userId, browserTimeZone): Promise<boolean>`
+    and `getUserTimeZone(userId, conn?): Promise<string | null>`; `registerUser` takes `timeZone?`; `UserView` has
+    `timeZone`.
 - **Profile (`/account`).** The user ID, email (add, change, remove) and first name / surname can be changed with
   the registration rules above. Changing the user ID or the email (an email added, changed or removed) needs the
   current password; the names alone do not. A change of letter case only is no change (values are stored
@@ -157,8 +172,10 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   "Enter your current password to change your user ID or email." when empty, "That is not your current
   password." when wrong). Sessions stay valid (they reference the numeric id); the account menu updates on every
   page (`revalidatePath("/", "layout")`).
-  - Service: `updateProfile(userId, { username, email?, firstName?, lastName?, currentPassword? }): Promise<UserView>`
-    — the whole profile, empty optional fields become NULL; NOT_FOUND for an unknown user; a unique violation from a
+  - Service: `updateProfile(userId, { username, email?, firstName?, lastName?, timeZone?, currentPassword? }): Promise<UserView>`
+    — the whole profile, empty optional fields become NULL, except `timeZone`: undefined leaves it unchanged, `""` /
+    null clear it, an invalid zone is VALIDATION on `timeZone` ("Choose a time zone from the list."); no password
+    needed for it; NOT_FOUND for an unknown user; a unique violation from a
     lost race is mapped to the field by `userConflictFromError(err)` (shared with `registerUser`, keyed on the index
     names `USERNAME_UNIQUE_INDEX` / `EMAIL_UNIQUE_INDEX` exported by `src/db/schema.ts`).
   - Action: `updateProfileAction` (`requireUser()`, zod shape, service, `serviceErrorState`); never echoes the
@@ -1216,7 +1233,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 - **/account** ("Account settings") — not in `NAV_ITEMS`; reached from the account menu. `PageHeader` "Account
   settings", then four cards in one column (`max-w-xl`):
   1. **Profile** ("Signed in as <display name>."): user ID (with `USER_ID_HINT`), email (optional), first name /
-     surname (optional, side by side from `sm`), current password (hint "Needed only when you change your user ID or
+     surname (optional, side by side from `sm`), **Time zone** (a native `Select` named `timeZone`: first "Not set
+     (use this browser's)" with value `""`, then every zone of `groupedTimeZones()` in `<optgroup>`s by the part
+     before the first `/` — "Africa", "America", …, "UTC" under "Other" last — labelled by the rest of the name with
+     spaces for `_`; the account's zone preselected; the list is computed on the server and passed in as a prop so
+     server HTML and hydration agree; hint "Used to date imported Spendee entries, whose times are in UTC, so every
+     browser dates them alike."), current password (hint "Needed only when you change your user ID or
      email."), "Save profile". Prefilled from the account; after a result the inputs show the echoed / saved values.
   2. **Change password**: the form described in Auth → "Changing the password".
   3. **Devices** ("Sessions last 30 days unless you sign out."): "You are signed in on this device only." or "You are
@@ -1400,13 +1422,14 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
 - `,`-separated, LF, cells quoted only when needed, UTF-8. The note column is `Note` (older dialect: `Notes`);
   accept either. `Labels` and `Author` are new; `Author` is ignored.
 - `Type` is `Expense`, `Income`, `Outgoing Transfer` or `Incoming Transfer` (compare case-insensitively).
-- `Date` is an ISO timestamp **with a UTC offset**. A timestamp with an offset is converted to the importing
-  user's time zone and that local calendar date is used (an entry made at 00:30 local time must not land on the
-  previous day, or the previous month). The browser sends its IANA time zone with the upload; if it is missing or
-  invalid, UTC is used. A timestamp without an offset (the older dialect) is still taken as written. The preview
-  carries a notice naming the time zone used. *(2026-11-18: taking the date as written in the file — UTC — was tried
-  and reverted: it moved entries made just after local midnight to the previous day. Re-imports from a browser in
-  another zone are the remaining gap; a per-account time zone is the planned fix.)*
+- `Date` is an ISO timestamp **with a UTC offset**. A timestamp with an offset is converted to a time zone and
+  that local calendar date is used (an entry made at 00:30 local time must not land on the previous day, or the
+  previous month). The zone is, in order: **the account's time zone** (Auth → "Time zone") when set; else the
+  importing browser's IANA zone, sent with the upload; else (missing or invalid) UTC. Because the account's zone wins,
+  re-importing the same files from a browser in another zone dates every entry the same way and finds them all as
+  duplicates. A timestamp without an offset (the older dialect) is still taken as written. The preview carries a
+  notice naming the time zone used and where it came from. *(2026-11-18: taking the date as written in the file —
+  UTC — was tried and reverted: it moved entries made just after local midnight to the previous day.)*
 - `Amount` has 8 decimals; trailing zeros are not "rounding". Genuinely over-precise amounts (currency
   conversions) are rounded as before, with the notice.
 - `Labels`: this app has no labels. They are kept by appending them to the note (`note · labels`, or just the
@@ -1454,11 +1477,11 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
   - Both Spendee dialects accept all four types; `Note` is used when present, else `Notes`; problem messages use the
     column name as written (`Note: …`). A note that exceeds 500 characters only once the labels are added is a
     problem ("… (with the labels added)"). Labels are trimmed with inner whitespace collapsed and kept as written.
-  - Timestamps: `YYYY-MM-DD`, then optionally `[ T]HH:MM[:SS[.fraction]]`, then optionally `Z` or `±HH[:]MM`. The date
-    is always the written one; with an offset, `shifted` = the instant's date in the browser's zone
-    (`dateInTimeZone`) differs from it (counted for the notice only). The zone is validated with `Intl`
-    (`resolveTimeZone`: canonical name, ≤ 100 chars; missing → UTC; invalid → UTC and the notice says the browser's
-    zone was not recognised).
+  - Timestamps: `YYYY-MM-DD`, then optionally `[ T]HH:MM[:SS[.fraction]]`, then optionally `Z` or `±HH[:]MM`. With
+    an offset the date is the instant's date in the import's zone (`dateInTimeZone`) and `shifted` = that differs
+    from the written date (counted for the notice); without one, the written date. The zone: `getUserTimeZone(userId)`
+    (read by `previewImport` / `runImport`), else the browser's validated with `Intl` (`resolveTimeZone`: canonical
+    name, ≤ 100 chars; missing → UTC; invalid → UTC and the notice says the browser's zone was not recognised).
   - Pairing: the "same note" is the `Note` cell (trimmed) **without labels**; the transfer's note is the outgoing
     row's note + its labels, or + the incoming row's labels when the outgoing row has none. Offset-less times are
     read as written for pairing; a bare date counts as 00:00. The window is inclusive (10 s pairs, 11 s does not).
@@ -1479,8 +1502,11 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
     like any category), the row's note; notice `unpaired-transfers`. `ImportPreview.unpairedTransfers` counts such
     rows either way, so the UI can offer the option.
   - Spendee notices are selection-wide (no `file`), in this order: `time-zone` (count = rows with an offset;
-    "Spendee records the time of each entry; dates are taken in your time zone, Europe/Brussels. 5 entries fall on
-    a different day than the UTC date in the file."), `labels` (rows with labels), `amounts-rounded` (per currency,
+    "Spendee records the time of each entry; dates are taken in <zone>. 5 entries fall on a different day than the
+    UTC date in the file." / "… No entry changes day because of that.", where <zone> is "your account's time zone,
+    Europe/Bucharest", "this browser's time zone, Europe/Brussels (set one in Account settings so every browser dates
+    them alike)", "UTC (this browser's time zone was not recognised; set one in Account settings)" or "UTC (set a
+    time zone in Account settings)"), `labels` (rows with labels), `amounts-rounded` (per currency,
     as before), `unpaired-transfers`. A file selected twice adds `duplicate-file` first, with `file` set.
   - Selection checks, in order: no files → "No file was received."; more than 50 files; total UTF-8 size over 5 MB
     ("The selected files are larger than 5 MB in total."; one file keeps the old message); identical texts are
@@ -1565,15 +1591,17 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   groupsToCreate: string[]; categoriesToCreate: { name; kind }[];
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
-previewImport(userId, input: ImportInput, opts?): ImportPreview
+previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
 runImport(userId, input: ImportInput, opts?): ImportPreview & { imported: boolean }   // never throws for bad files
-parseImportFiles(input, opts?): { file: ParsedFile /* the merged selection */; files: ImportFileSummary[] }
+parseImportFiles(input, opts?, accountTimeZone?: string | null): { file: ParsedFile /* the merged selection */; files: ImportFileSummary[] }
 
 // src/server/import-formats/shared.ts — the seam between formats and the shared planner
 type ImportFormat = { id: ImportFormatId; label: string; detect(source: ImportSource): boolean;
   parse(source: ImportSource, ctx: ImportContext): ParsedFile;
   finalize?(combined: ParsedFile, ctx: ImportContext): void /* once per selection containing this format, after merging */ }
-type ImportContext = { timeZone /* validated */; timeZoneFallback: boolean; unpairedTransfersAsEntries: boolean }
+type ImportContext = { timeZone /* validated: account's, else browser's, else UTC */;
+  timeZoneSource: 'account' | 'browser' | 'none'; timeZoneFallback: boolean /* browser sent an invalid zone */;
+  unpairedTransfersAsEntries: boolean }
 type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, non-empty */; csvHeader(): string[] /* lower-cased, lazy */ }
 type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[];
   entries: EntrySpec[]; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;

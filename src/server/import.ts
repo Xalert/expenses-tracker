@@ -7,6 +7,7 @@ import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/const
 import { resolveTimeZone } from "@/lib/dates";
 import { listTransferRows } from "./export";
 import { assertId } from "./_validate";
+import { getUserTimeZone } from "./users";
 import { getDefaultGroupId, getOpenGroupRow, nextGroupPosition } from "./wallet-groups";
 import { backupFormat } from "./import-formats/backup";
 import {
@@ -44,8 +45,8 @@ export type ImportOptions = {
   /** Skip entries that already exist in the account (multiset comparison). Default true. */
   skipDuplicates?: boolean;
   /**
-   * The importing browser's IANA time zone. Dates never depend on it (Spendee timestamps keep the date written in the
-   * file); it only lets the time-zone notice say how many entries fall on another day there. Missing or invalid → UTC.
+   * The importing browser's IANA time zone. Spendee's UTC timestamps are dated in the account's time zone when it has
+   * one, else in this one; missing or invalid (and no account zone) → UTC.
    */
   timeZone?: string;
   /** Import transfer rows that have no partner as income / expense in a "Transfer" category. Default false. */
@@ -116,7 +117,7 @@ export type ImportInput = string | ImportFileInput[];
 
 /** Parse, validate and plan an import without writing anything. */
 export async function previewImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportPreview> {
-  const parsed = parseImportFiles(input, opts);
+  const parsed = parseImportFiles(input, opts, await getUserTimeZone(userId));
   if (parsed.file.problems.length) return summarize(parsed, null);
   const db = await getDb();
   // A transaction only so the read-only plan sees one consistent snapshot of the account.
@@ -128,7 +129,7 @@ export async function previewImport(userId: number, input: ImportInput, opts: Im
  * problems, write everything in one DB transaction. With problems nothing is written and `imported` is false.
  */
 export async function runImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportResult> {
-  const parsed = parseImportFiles(input, opts);
+  const parsed = parseImportFiles(input, opts, await getUserTimeZone(userId));
   if (parsed.file.problems.length) return { ...summarize(parsed, null), imported: false };
   const db = await getDb();
   return await db.transaction(async (tx) => {
@@ -152,9 +153,15 @@ const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 
 type ParsedSelection = { file: ParsedFile; files: ImportFileSummary[] };
 
-function importContext(opts: ImportOptions): ImportContext {
+/** The account's zone (already checked) wins over the browser's; with neither, UTC. */
+function importContext(opts: ImportOptions, accountTimeZone: string | null): ImportContext {
+  const unpairedTransfersAsEntries = opts.unpairedTransfersAsEntries === true;
+  if (accountTimeZone) {
+    return { timeZone: accountTimeZone, timeZoneSource: "account", timeZoneFallback: false, unpairedTransfersAsEntries };
+  }
+  const sent = typeof opts.timeZone === "string" && opts.timeZone.trim() !== "";
   const { timeZone, fallback } = resolveTimeZone(opts.timeZone);
-  return { timeZone, timeZoneFallback: fallback, unpairedTransfersAsEntries: opts.unpairedTransfersAsEntries === true };
+  return { timeZone, timeZoneSource: sent && !fallback ? "browser" : "none", timeZoneFallback: fallback, unpairedTransfersAsEntries };
 }
 
 function makeSource(fileText: string): ImportSource | null {
@@ -172,16 +179,21 @@ function makeSource(fileText: string): ImportSource | null {
 const detectFormat = (source: ImportSource) => FORMATS.find((f) => f.detect(source)) ?? transactionsCsvFormat;
 
 /** Parse one file on its own (no selection-wide steps). Kept for callers that only need the parsed form. */
-export function parseImportFile(fileText: string, opts: ImportOptions = {}): ParsedFile {
-  return parseImportFiles(fileText, opts).file;
+export function parseImportFile(fileText: string, opts: ImportOptions = {}, accountTimeZone: string | null = null): ParsedFile {
+  return parseImportFiles(fileText, opts, accountTimeZone).file;
 }
 
 /**
  * Parse a selection into one `ParsedFile`: limits on the whole selection, identical files used once, a backup only
  * on its own, each file parsed by its detected format, then merged (wallets by name + currency, categories by
  * kind + name) and finished by each format's `finalize` (Spendee pairs transfer rows across files here).
+ * `accountTimeZone` is the account's zone (`getUserTimeZone`), which takes precedence over `opts.timeZone`.
  */
-export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): ParsedSelection {
+export function parseImportFiles(
+  input: ImportInput,
+  opts: ImportOptions = {},
+  accountTimeZone: string | null = null,
+): ParsedSelection {
   const fail = (message: string, files: ImportFileSummary[] = []): ParsedSelection => ({
     file: emptyParsed(null, [{ message }]),
     files,
@@ -201,7 +213,7 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
         : `The selected files are larger than ${MB} MB in total. Import them in smaller groups.`,
     );
   }
-  const ctx = importContext(opts);
+  const ctx = importContext(opts, accountTimeZone);
 
   // Classify every file; identical content is used once.
   const firstByText = new Map<string, string>();

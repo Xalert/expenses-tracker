@@ -102,10 +102,14 @@ single-file Spendee export works too.
 - If one row of a transfer has its own problem (a bad amount, say), only that problem is shown, not a second one for
   its partner.
 - **Dates and time zones.** Spendee stores a time with each entry, written in UTC (`+00:00`). The import converts
-  it to your browser's time zone and keeps that local date, so an entry made at 00:30 stays on its day. The preview
-  says which time zone it used and how many entries landed on a different day than the UTC date in the file.
-  Importing the same files again from a browser in **another** time zone can date a few entries near midnight
-  differently, so those are not recognised as duplicates. The time of day is not kept.
+  it to **your account's time zone** and keeps that local date, so an entry made at 00:30 stays on its day. Your
+  account gets the time zone of the browser you register or next sign in with; you can change it, or clear it, under
+  **Account settings → Profile → Time zone**. Because the account's zone is used, importing the same files again
+  from a browser in another time zone dates every entry the same way, and they are all recognised as duplicates.
+  If the account has no time zone, the browser's is used (and then a re-import from another zone can date a few
+  entries near midnight differently). The preview says which time zone it used, where it came from, and how many
+  entries landed on a different day than the UTC date in the file. The time of day is not kept. Set the time zone
+  before your first Spendee import: changing it later does not change entries already imported.
 - **Labels** are added to the note (`note · labels`), since this app has no labels.
 - **Rounding.** Spendee can write more decimals than a currency has (converted foreign purchases). Such amounts are
   rounded half away from zero to the currency's decimals; the preview counts them.
