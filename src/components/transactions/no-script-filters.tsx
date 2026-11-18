@@ -118,6 +118,7 @@ export function NoScriptFilters({
         )}
         {params.q && <input type="hidden" name="q" value={params.q} />}
         {params.currency && <input type="hidden" name="currency" value={params.currency} />}
+        {params.view && <input type="hidden" name="view" value={params.view} />}
         <button type="submit" className={cn(buttonClasses({ variant: "secondary" }), "sm:h-10")}>
           Apply
         </button>

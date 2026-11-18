@@ -422,6 +422,7 @@ export function FilterChips({
               ["from", params.from],
               ["to", params.to],
               ["currency", params.currency],
+              ["view", params.view],
             ] as const
           ).map(([name, value]) =>
             value !== undefined ? <input key={name} type="hidden" name={name} value={String(value)} /> : null,

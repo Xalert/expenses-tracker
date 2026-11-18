@@ -8,7 +8,18 @@ import { seedDefaultGroup } from "@/server/wallet-groups";
 // One in-process Postgres (PGlite) per test file: created and migrated once, lazily, then emptied before each test.
 let shared: Promise<DB> | undefined;
 
-const APP_TABLES = ["categories", "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"];
+const APP_TABLES = [
+  "categories",
+  "exchange_rate_days",
+  "exchange_rates",
+  "manual_exchange_rates",
+  "sessions",
+  "transactions",
+  "transfers",
+  "users",
+  "wallet_groups",
+  "wallets",
+];
 
 /**
  * The file's PGlite database, emptied (every app table truncated, ids restarting at 1) and installed as the

@@ -27,6 +27,7 @@ export function DayStrip({
   hrefFor,
   monthHref,
   currencySwitch,
+  notes,
 }: {
   month: string;
   currency: string;
@@ -38,6 +39,8 @@ export function DayStrip({
   /** The list for the whole month (the selected bar's link and "Show all of …"). */
   monthHref: string;
   currencySwitch?: ReactNode;
+  /** Under the heading: what a converted strip was converted with, and what it left out (`ConversionNotes`). */
+  notes?: ReactNode;
 }) {
   const money = (minor: number) => formatMoney(minor, currency);
   const bars: DayBar[] = timeline.days.map((d) => ({
@@ -80,6 +83,7 @@ export function DayStrip({
         </div>
         {currencySwitch}
       </div>
+      {notes}
 
       <div role="group" aria-label={`Each day of ${monthLabel}: select a day to list only that day`} className="mt-3">
         <DayBars

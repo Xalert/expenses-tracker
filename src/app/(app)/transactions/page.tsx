@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
 import { DayList } from "@/components/transactions/day-list";
 import { DayStrip } from "@/components/transactions/day-strip";
 import { FilterChips } from "@/components/transactions/filter-chips";
@@ -26,11 +27,13 @@ import {
 } from "@/components/transactions/list-params";
 import { Card, CurrencySwitch, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
-import { currentMonth, formatMonth, shiftMonth, todayISO } from "@/lib/dates";
-import { resolveOverviewCurrency } from "@/lib/overview";
+import { currentMonth, formatMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { monthConversionNotes, ratesHref, ratesNeeded, resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
 import { toCategoryOptions, toWalletOptions } from "./form-options";
+import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import { getMonthTimeline, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
 import { listDayTotals, listTransactions } from "@/server/transactions";
 import { listWallets } from "@/server/wallets";
@@ -93,15 +96,38 @@ export default async function TransactionsPage({
       : (await resolveOverviewCurrency(params.currency, held, () => pickDefaultCurrency(user.id, strip.month, { groupId })))
           .currency;
     if (currency) {
+      // "All in <currency>" (default) or "<currency> only", as on the Overview: offered when no wallet filter pins
+      // the strip to one wallet and the user holds a wallet (archived included) in another currency.
+      const canConvert = !walletFilter && held.some((c) => c !== currency);
+      const convertView = canConvert ? (params.view ?? "all") : "all";
+      const convert =
+        canConvert && convertView === "all"
+          ? await getConversion(user.id, monthRange(shiftMonth(strip.month, -1)).from, monthRange(strip.month).to)
+          : undefined;
       const timeline = await getMonthTimeline(user.id, {
         month: strip.month,
         currency,
         walletId: walletFilter?.id,
         categoryId: params.category,
         groupId,
+        convert,
       });
       const activeCurrencies = await listUserCurrencies(user.id, { groupId });
       const showSwitch = !walletFilter && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
+      const lastDate = strip.month === thisMonth ? today : monthRange(strip.month).to;
+      const missing = timeline.missingCurrencies ?? [];
+      const toRates = ratesHref(currentHref);
+      const notes = convert
+        ? monthConversionNotes({
+            currency,
+            conv: convert,
+            lastDate,
+            held,
+            missing,
+            ratesOn: exchangeRatesEnabled(),
+            source: RATES_SOURCE,
+          })
+        : [];
       stripNode = (
         <DayStrip
           month={strip.month}
@@ -112,13 +138,34 @@ export default async function TransactionsPage({
           hrefFor={(date) => dayHref(params, strip.month, date, thisMonth)}
           monthHref={dayHref(params, strip.month, null, thisMonth)}
           currencySwitch={
-            showSwitch ? (
-              <CurrencySwitch
-                currencies={activeCurrencies}
-                value={currency}
-                hrefFor={(code) => listHref(params, { currency: code })}
-              />
+            showSwitch || canConvert ? (
+              <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
+                {showSwitch && (
+                  <CurrencySwitch
+                    currencies={activeCurrencies}
+                    value={currency}
+                    hrefFor={(code) => listHref(params, { currency: code })}
+                  />
+                )}
+                {canConvert && (
+                  <ConvertSwitch
+                    currency={currency}
+                    view={convertView}
+                    allHref={listHref(params, { currency, view: undefined })}
+                    onlyHref={listHref(params, { currency, view: "only" })}
+                    ratesHref={toRates}
+                  />
+                )}
+              </div>
             ) : undefined
+          }
+          notes={
+            <ConversionNotes
+              notes={notes}
+              need={convert ? ratesNeeded(currency, missing, convert, lastDate) : []}
+              ratesHref={toRates}
+              className="mt-1"
+            />
           }
         />
       );

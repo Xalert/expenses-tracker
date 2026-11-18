@@ -89,9 +89,10 @@ names so errors land on the right control.
 **Money.** Integer minor units everywhere (`amountMinor`), never floats; decimals come from the currency
 (`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored as `bigint` (`mode: "number"`). Stored amounts are positive and the transaction kind gives the sign.
 User input goes through `parseAmount(value, currency)` with the currency of the wallet looked up server-side.
-There is no currency conversion except the Overview's "All in <currency>" view (`src/lib/fx.ts`, rates from
-`src/server/exchange-rates.ts`, the `convert` option of the month services); every other total is grouped per
-currency and nothing converted is stored.
+Currency conversion exists only in the "All in <currency>" views of the Overview, the /transactions day strip and
+/categories (`src/lib/fx.ts`, provider rates stored in `exchange_rates` by `src/server/exchange-rates.ts`, manual
+rates from `/rates` in `src/server/manual-rates.ts`, the `convert` option of the month services); wallet pages and
+every other total stay per currency, and nothing converted is stored.
 
 **Transfers** are one `transfers` row plus two `transactions` legs (`transfer_out`, `transfer_in`) written in
 one DB transaction; legs are only edited or deleted through the transfer. Cross-currency transfers store both

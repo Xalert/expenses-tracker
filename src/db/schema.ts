@@ -4,7 +4,9 @@ import {
   check,
   index,
   integer,
+  numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -172,9 +174,71 @@ export const transactions = pgTable(
   ],
 );
 
+// Exchange rates (src/server/exchange-rates.ts, src/server/manual-rates.ts). Rates are exact decimals (`numeric`, read
+// back as strings): what the provider published or the user typed, never a binary float. They are only ever used to
+// show a converted figure; no converted amount is stored.
+
+/**
+ * The provider's daily reference rates (Frankfurter / ECB), shared by every user: `rate` units of `quote` for one
+ * `base` on the publication day `rate_date` (`YYYY-MM-DD`). Weekends and holidays have no rows.
+ */
+export const exchangeRates = pgTable(
+  "exchange_rates",
+  {
+    base: text("base").notNull(),
+    quote: text("quote").notNull(),
+    rateDate: text("rate_date").notNull(),
+    rate: numeric("rate").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.base, t.quote, t.rateDate] }),
+    check("exchange_rates_rate_positive", sql`${t.rate} > 0`),
+  ],
+);
+
+/**
+ * Every calendar day the provider has been asked about, and when: tells a day with no rates (weekend, holiday) from
+ * one not fetched yet, so a stored range is never fetched again (see `isFinal` in src/server/exchange-rates.ts).
+ */
+export const exchangeRateDays = pgTable(
+  "exchange_rate_days",
+  {
+    base: text("base").notNull(),
+    date: text("date").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.base, t.date] })],
+);
+
+/**
+ * A user's own rate for a currency the provider does not quote: 1 `currency` = `rate` `base` from `effective_date`
+ * on (the latest one on or before a date applies). One per currency and date.
+ */
+export const manualRates = pgTable(
+  "manual_exchange_rates",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    base: text("base").notNull(),
+    effectiveDate: text("effective_date").notNull(),
+    rate: numeric("rate").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("manual_exchange_rates_user_currency_date_uq").on(t.userId, t.currency, t.effectiveDate),
+    check("manual_exchange_rates_rate_positive", sql`${t.rate} > 0`),
+    check("manual_exchange_rates_currencies", sql`length(${t.currency}) = 3 and length(${t.base}) = 3 and ${t.currency} <> ${t.base}`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type WalletGroup = typeof walletGroups.$inferSelect;
 export type Wallet = typeof wallets.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type Transfer = typeof transfers.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type ManualRateRow = typeof manualRates.$inferSelect;

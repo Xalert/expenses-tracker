@@ -38,10 +38,23 @@ section holds what replaced it.
 |---|---|---|
 | Amounts are integer minor units; decimals come from the currency (JPY 0, EUR 2, KWD 3) | No floating-point drift; correct for every ISO currency | planner |
 | Stored amounts are always positive; the kind gives the sign | One representation, no sign bugs | planner |
-| No currency conversion, except the Overview "All in <currency>" view; other pages group totals per currency | The owner asked for one figure over all wallets, on the Overview; the other pages stay exact | owner |
-| The Overview month figures convert each day at that day's ECB rate; the Wallets total converts today's balances at the latest rate | A past expense is worth what it was worth that day; a balance is worth what it is worth now | planner |
+| *(superseded 2026-11-18 by the row below)* No currency conversion, except the Overview "All in <currency>" view; other pages group totals per currency | The owner asked for one figure over all wallets, on the Overview; the other pages stay exact | owner |
+| The "All in <currency>" view (default, `?view=only` to turn it off) is on the Overview, the /transactions day strip and /categories, with the same switch, notes and mechanism (`convert` / `getConversion`); every other total stays per currency | One figure over all wallets was asked for on the Overview; the strip sits over a list that already mixes currencies and the category split is incomplete without the other wallets, so both read better converted. The same default everywhere means one rule to learn | planner (2026-11-18) |
+| **Deliberate:** wallet pages never convert | A wallet is one currency, so there is nothing to convert; its page's figures are exact | planner (2026-11-18) |
+| The month figures convert each day at that day's rate; the Overview Wallets total converts the balances of the day it shows — today for the current month at the latest rate, a past month's last day at that day's rate (`getWalletBalancesOn`) | A past expense is worth what it was worth that day; a balance is worth what it was worth on the day it is shown for. Before 2026-11-18 a past month showed today's balances at the latest rate, which mixed two dates | planner (2026-11-18) |
+| The past-month Wallets card lists the wallets that are active now (with their balance at that month's end), not the wallets that were active then | Wallets have no history of archiving; the card's rows stay the same when stepping through months | planner (2026-11-18) |
 | One `?view=` for the whole Overview, its switch next to the currency switch | The chart, the cards and the Wallets total then always agree on what they include | planner |
-| The converted total uses ECB reference rates from Frankfurter (`api.frankfurter.dev`), cached in memory, with `EXCHANGE_RATES=false` to turn it off | Free, no API key, no account for self-hosters; one request per 6 h for the whole instance; a self-hoster can keep the server offline | planner |
+| The converted figures use ECB reference rates from Frankfurter (`api.frankfurter.dev`), with `EXCHANGE_RATES=false` to turn it off | Free, no API key, no account for self-hosters; a self-hoster can keep the server offline | planner |
+| *(superseded 2026-11-18)* The rates were cached in memory, per process | — | planner |
+| Fetched rates are stored in the database (`exchange_rates`, plus `exchange_rate_days` for every calendar day asked about) and shared by every user; the database is looked up first and only the missing days are fetched; a day is final once fetched after it ended (UTC), today is refetched after 6 h | A restart or a second container no longer refetches; past months are fetched once ever; recording the days asked about tells a weekend or holiday from a gap, so a stored range is never asked about again | planner (2026-11-18) |
+| During a provider outage the most recent stored day on or before each date stands in, and the note says "rates from <date>"; the retry wait (10 min) stays in memory per process | An outage should cost precision, not the whole converted view; the date makes it visible how old the rate is. A lost wait after a restart costs one extra request | planner (2026-11-18) |
+| Rates are stored as `numeric` (exact decimal, read back as a string), not `double precision` or `text` | `numeric` keeps the decimal exactly as the provider wrote it or the user typed it (a binary float cannot hold 1.0866 or 0.000087 exactly) and the database can still check `rate > 0`; `text` would lose that check. The maths converts to a JS number only to compute a figure that is then rounded to minor units, and nothing converted is stored | planner (2026-11-18) |
+| Users can enter their own rate per currency ("1 KWD = 3.25 EUR from 1 Nov 2026", `/rates`); the latest one on or before a date applies; it is used **only where the provider has no rate** that day, never to override it | Frankfurter quotes about 30 currencies; an effective date keeps past months at the rate of their time. Overriding the provider was not asked for and would make two sources disagree silently | planner (2026-11-18) |
+| A manual rate's base is EUR or another currency the user holds; it resolves through the provider's rate of that base (or another manual rate) on the date; without any provider table only rates against EUR resolve | Users think in the currencies they hold; EUR is the provider's base, so it always resolves, also offline | planner (2026-11-18) |
+| Manual rates apply also with `EXCHANGE_RATES=false`; stored provider rates do not | "Off" means no provider; a self-hoster who keeps the server offline can still convert with rates of their own | planner (2026-11-18) |
+| `/rates` is not in the main menu; it is linked from the "All in" switch ("Rates") and from a note that leaves a currency out ("Enter a rate for KWD", with `returnTo`) | It is needed rarely and only in the context of a converted view | planner (2026-11-18) |
+| The rates page lists the held currencies (archived wallets included) the provider's latest stored day does not quote, plus any with own rates; with nothing quoted (off or never loaded) every held currency but EUR | What needs a rate is exactly what the provider leaves out; listing everything when nothing is known lets an offline instance convert at all | planner (2026-11-18) |
+| **Deliberate: no second rate provider** | The manual rates cover the currencies Frankfurter does not quote; a second provider would need an API key or an account for most currencies and a rule for when the two disagree | planner (2026-11-18) |
 | "All in EUR" (converted, default) and "EUR only" are a `?view=` link switch | The owner asked for both; links keep it working without JavaScript and in the URL like `?currency=` | planner |
 | A transfer is one `transfers` row plus two transaction legs, written atomically | Each wallet's history shows its own side; legs can never drift apart | planner |
 | Cross-currency transfers ask for both the amount sent and the amount received | Records what actually happened without needing a rate | planner |
@@ -464,20 +477,21 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Features not built
 
-- **Conversion is only on Overview.** The Transactions strip, Categories and wallet pages stay per currency. The
-  Overview Wallets card uses today's balances and the latest rates also for a past month.
 - **Category lists are ordered by SQL `lower(name)`**, whose order for non-ASCII names depends on the database's
   collation. (The Overview's "Top category" tie-break no longer does: since 2026-11-18 both its views use
   `pickTopCategory` in JS.)
-- **Frankfurter quotes about 30 currencies (the ECB list).** Wallets in other currencies (e.g. KWD) are left out of
-  the converted figures with a note. There is no second provider and no way to enter a rate by hand.
-- **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
-  provider is down then, the total leaves the foreign wallets out until it is back.
 - **An account without a time zone still dates Spendee imports in the browser's zone**, so re-importing from a
   browser in another zone can shift entries near midnight and miss them as duplicates. Accounts get a zone at
   registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
+- **Manual exchange rates are not in the JSON backup** (nor the CSV): restoring an account onto another instance
+  loses them, they have to be entered again on `/rates`. The backup format is versioned and strict; adding them is
+  a format change for its own step.
+- **A manual rate with a base other than EUR does not resolve without provider rates** (switched off, or nothing
+  ever stored), unless that base itself has a manual rate against EUR.
+- **The provider's rates are never pruned** (about 30 rows per business day, some 8,000 a year): small, but they
+  grow with every month anyone looks at.
 - **The context export does not flag archived categories**, so the Statement Importer can still suggest one; the
   CSV import then reports those rows as a problem ("archived in your account"). Adding `archived` to the context's
   categories and dropping them in the artifact is left for the artifact's next change.
@@ -532,6 +546,14 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   when it does).
 
 ### Not verified
+
+- **Exchange rates in the database, manual rates and the converted strip / categories (2026-11-18) are covered by
+  service, unit and render tests only** (the provider is a stub: no test reaches the network). Not tried against the
+  live Frankfurter API: that a range made only of weekend days or holidays comes back as an empty `rates` object or
+  as the previous business day (both are accepted), and the size of a long range response. Not tried in a browser:
+  `/rates` at 375px and in dark mode (three fields in one row from `sm`), the date picker inside several forms on
+  one page, the "Rates" link next to the switch on phones, the notes under the day strip and above the split card,
+  and the Overview's past-month Wallets card. The `0005_exchange-rates` migration ran on PGlite only.
 
 - **The /transactions and wallet-page fixes of 2026-11-18 are covered by render and service tests only**, not yet
   tried in a browser: focus moving into an opened row's form and, after a Delete or a Save that moves the entry

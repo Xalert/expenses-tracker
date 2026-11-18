@@ -36,6 +36,13 @@
       "when": 1794996818127,
       "tag": "0004_account-time-zone",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794997997777,
+      "tag": "0005_exchange-rates",
+      "breakpoints": true
     }
   ]
 }

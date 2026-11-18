@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { transactionLabel } from "@/components/transaction-list";
 import { cn } from "@/lib/cn";
+import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { shortDateLabel } from "@/lib/overview";
 import type { TransactionView } from "@/server/transactions";
 import type { WalletView } from "@/server/wallets";
+import { ConversionNotes } from "./conversion";
 
 const cardClass = "min-w-0 rounded-[18px] border border-border bg-surface py-2";
 const rowClass = "flex min-h-11 items-center gap-3 border-t border-surface-muted px-4 py-3 text-sm sm:px-5";
@@ -17,16 +19,21 @@ export type WalletsTotal = {
   notes: string[];
   /** True when the total includes converted amounts (it is then shown with "≈"). */
   approximate: boolean;
+  /** Currencies left out for want of a rate: a link to /rates (`ratesHref`) offers to set one. */
+  need?: readonly string[];
+  ratesHref?: string;
 };
 
-/** The "All in EUR · EUR only" links of the Wallets card (the view lives in the URL, `?view=only`). */
+/** The "All in EUR · EUR only" links (the view lives in the URL, `?view=only`); see also `ConvertSwitch`. */
 export function WalletsViewSwitch({
   options,
+  label = "Wallets shown",
 }: {
   options: { label: string; href: string; current: boolean }[];
+  label?: string;
 }) {
   return (
-    <nav aria-label="Wallets shown" className="max-w-full overflow-x-auto">
+    <nav aria-label={label} className="max-w-full overflow-x-auto">
       <ul className="inline-flex gap-1 rounded-full bg-surface-muted p-1">
         {options.map((o) => (
           <li key={o.href} className="flex">
@@ -61,6 +68,7 @@ export function WalletsCard({
   total,
   converted,
   viewSwitch,
+  asOf,
 }: {
   wallets: WalletView[];
   /** Month change per wallet id. */
@@ -72,13 +80,18 @@ export function WalletsCard({
   /** Balance in `total.currency` per wallet id, for wallets in another currency. */
   converted?: Map<number, number>;
   viewSwitch?: React.ReactNode;
+  /** A past month: the balances are those at the end of this day (`YYYY-MM-DD`), said under the heading. */
+  asOf?: string;
 }) {
   return (
     <section aria-labelledby="overview-wallets" className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-3 sm:px-5">
-        <h2 id="overview-wallets" className="text-[15px] font-bold text-foreground">
-          Wallets
-        </h2>
+        <div className="min-w-0">
+          <h2 id="overview-wallets" className="text-[15px] font-bold text-foreground">
+            Wallets
+          </h2>
+          {asOf && <p className="text-xs text-muted-foreground">Balances at the end of {formatDate(asOf)}</p>}
+        </div>
         <div className="flex min-w-0 items-center gap-3">
           {viewSwitch}
           <Link href="/wallets" className="text-[13px] font-semibold text-accent-hover hover:underline">
@@ -105,11 +118,12 @@ export function WalletsCard({
               {formatMoney(total.totalMinor, total.currency)}
             </span>
           </p>
-          {total.notes.map((n) => (
-            <p key={n} className="mt-1 text-xs text-muted-foreground">
-              {n}
-            </p>
-          ))}
+          <ConversionNotes
+            notes={total.notes}
+            need={total.need ?? []}
+            ratesHref={total.ratesHref ?? "/rates"}
+            className="mt-1 gap-1"
+          />
         </div>
       )}
       {wallets.length === 0 ? (

@@ -34,7 +34,7 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 | `DATABASE_URL` | — (required; the Compose files set it) | `postgres://expenses:expenses@localhost:5433/expenses` | PostgreSQL connection URL (`postgres://user:password@host:5432/dbname`); the app migrates it on first use. Unset in production: the app refuses to start using the database |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
-| `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
+| `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the converted "All in" views (Overview, Transactions day strip, Categories); fetched rates are kept in the database, and each user's own rates on `/rates` still apply |
 | `PORT` | `3000` | `3000` | listen port inside the container |
 | `HOSTNAME` | `0.0.0.0` | — | listen address (keep `0.0.0.0` in a container) |
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | folder the SQL migrations are read from; leave as is |

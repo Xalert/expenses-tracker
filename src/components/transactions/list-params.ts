@@ -2,7 +2,8 @@
 //
 // `month` is what the URL says (`YYYY-MM` or `all`); absent means the default, the current month — unless `from` or
 // `to` is given, which override the month (the service ignores `month` then). `resolveView` turns that into what the
-// list shows. `currency` only picks the day strip's currency and is not a filter.
+// list shows. `currency` only picks the day strip's currency and `view=only` turns its conversion off ("EUR only"
+// instead of the default "All in EUR"); neither is a filter.
 
 import { isValidCurrency } from "@/lib/currencies";
 import { currentMonth, formatDate, formatMonth, isValidDate, isValidMonth } from "@/lib/dates";
@@ -25,6 +26,8 @@ export type ListParams = {
   q?: string;
   /** The day strip's currency (`?currency=`); not a filter. */
   currency?: string;
+  /** `?view=only`: the day strip counts only `currency` instead of converting every wallet; not a filter. */
+  view?: "only";
   page: number;
 };
 
@@ -54,6 +57,7 @@ export function parseListParams(sp: SearchParams): ListParams {
     to: isValidDate(to) ? to : undefined,
     q: q || undefined,
     currency: currency !== undefined && isValidCurrency(currency) ? currency : undefined,
+    view: first(sp.view) === "only" ? "only" : undefined,
     page,
   };
 }
@@ -84,7 +88,7 @@ function monthIsFilter(p: ListParams, thisMonth: string): boolean {
   return p.month !== undefined && p.month !== thisMonth;
 }
 
-/** Any filter set besides the default month (the currency and the page are not filters). */
+/** Any filter set besides the default month (the currency, the view and the page are not filters). */
 export function hasFilters(p: ListParams, thisMonth: string = currentMonth()): boolean {
   return Boolean(monthIsFilter(p, thisMonth) || p.wallet || p.kind || p.category || p.from || p.to || p.q);
 }
@@ -120,6 +124,7 @@ export function listHref(p: ListParams, overrides: Partial<ListParams> = {}): st
   if (merged.to) qs.set("to", merged.to);
   if (merged.q) qs.set("q", merged.q);
   if (merged.currency) qs.set("currency", merged.currency);
+  if (merged.view) qs.set("view", merged.view);
   if (merged.page > 1) qs.set("page", String(merged.page));
   const s = qs.toString();
   return s ? `/transactions?${s}` : "/transactions";
@@ -156,6 +161,7 @@ export function exportCsvHref(p: ListParams, thisMonth: string = currentMonth(),
   const qs = listHref(p, {
     month: view.type === "month" ? view.month : undefined,
     currency: undefined,
+    view: undefined,
     page: 1,
   }).split("?")[1];
   const all = new URLSearchParams(qs ?? "");
