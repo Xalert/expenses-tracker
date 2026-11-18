@@ -1,6 +1,8 @@
 // Pure helpers for the /categories "Spending split": which ramp colour each expense category gets and its share of
 // the month's expenses. No React, no DB, so they are unit-tested directly.
 
+import { compareCategoryNames } from "./category-order";
+
 /** Number of `--chart-ramp-*` tokens; the 6th and later categories reuse the last one. */
 export const RAMP_SIZE = 5;
 
@@ -47,7 +49,7 @@ export function spendingSplit(categories: readonly SplitInput[]): SpendingSplit 
     .sort(
       (a, b) =>
         b.monthAmountMinor - a.monthAmountMinor ||
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" }) ||
+        compareCategoryNames(a.name, b.name) ||
         a.id - b.id,
     );
   const totalMinor = spent.reduce((s, c) => s + c.monthAmountMinor, 0);

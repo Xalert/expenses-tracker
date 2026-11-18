@@ -2,6 +2,7 @@ import "server-only";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/db";
 import { categories, transactions, wallets } from "@/db/schema";
+import { compareCategoryNames } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
@@ -335,16 +336,15 @@ export async function getMonthTimeline(
 type TopCategoryRow = { categoryId: number; categoryName: string; amountMinor: number };
 
 /**
- * The month's top category: the largest amount; on a tie the name compared lower-cased by UTF-16 code units (not
- * `localeCompare`, not the database collation, so the per-currency and converted views always agree), then the id.
- * Exported for tests.
+ * The month's top category: the largest amount; on a tie the category order's name rule (`compareCategoryNames`:
+ * lower-cased, by code point; not `localeCompare`, not the database collation, so the per-currency and converted
+ * views always agree), then the id. Exported for tests.
  */
 export function pickTopCategory<T extends TopCategoryRow>(rows: T[]): T | undefined {
-  const name = (r: T) => r.categoryName.toLowerCase();
   return [...rows].sort(
     (a, b) =>
       b.amountMinor - a.amountMinor ||
-      (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0) ||
+      compareCategoryNames(a.categoryName, b.categoryName) ||
       a.categoryId - b.categoryId,
   )[0];
 }

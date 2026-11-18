@@ -70,9 +70,15 @@ export type CategorySpec = {
   name: string;
   kind: CategoryKind;
   key: string;
-  /** Backup only: the category was archived; one the import creates is created archived. */
+  /** The file says the category is archived (backup flag, CSV category row): one the import creates is created archived. */
   archived?: boolean;
+  /** When it was archived (ISO timestamp); absent → archived as of the import. */
+  archivedAt?: string;
+  /** CSV: the `category` row that describes it, to report a second one. */
+  detailsLoc?: Loc;
 };
+/** Backup only: one of the user's own exchange rates (validated; `rate` normalised as `parseRateInput` gives it). */
+export type ManualRateSpec = { currency: string; base: string; effectiveDate: string; rate: string; loc: Loc };
 export type EntrySpec = {
   kind: CategoryKind;
   wallet: number; // index into wallets
@@ -141,6 +147,8 @@ export type ParsedFile = {
   /** Backup only: the file's `groups` list (normalized, one per name ignoring case); absent in older backups. */
   groups?: GroupSpec[];
   categories: CategorySpec[];
+  /** Backup only: the file's `manualRates` (absent in older backups); imported additively. */
+  manualRates?: ManualRateSpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];
   /** Unpaired transfer halves; a format's `finalize` turns them into `transfers` (or entries / problems). */

@@ -18,7 +18,14 @@ import type { CategoryWithMonthUsage, CategoryWithUsage } from "@/server/categor
 
 export const MAX_CATEGORY_NAME = 40;
 
-export type Announce = (message: string | undefined, opts?: { focusHeading?: boolean }) => void;
+/**
+ * A success message for the card's status line. `focusHeading`: the row left the list (removal, (un)archive), so focus
+ * goes to the card's heading. `movedTo`: the row moved to the other kind's card, which announces it and focuses it.
+ */
+export type Announce = (
+  message: string | undefined,
+  opts?: { focusHeading?: boolean; movedTo?: { kind: "expense" | "income"; id: number } },
+) => void;
 
 
 const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
@@ -89,8 +96,8 @@ export function CategorySummary({
  * The open row: the rename form; then (under a divider) the kind and archive controls; then the remove flow — an
  * unused category is removed after a confirm(); one with transactions needs a replacement of the same kind first (an
  * existing one or a new one named here). Focus goes into the name on open; Escape and Cancel close the row and
- * return focus to it (`ExpandableRow`); after a removal, a kind change or (un)archiving the row leaves its list, so
- * focus goes to the section heading.
+ * return focus to it (`ExpandableRow`); after a removal or (un)archiving the row leaves its list, so focus goes to the
+ * section heading; after a kind change the other kind's card announces it and focuses the row there.
  */
 export function CategoryPanel({
   category,
@@ -119,7 +126,13 @@ export function CategoryPanel({
         }}
       />
       <div className="mt-4 space-y-3 border-t border-border pt-3">
-        <KindControls category={category} onChanged={leave} />
+        <KindControls
+          category={category}
+          onChanged={(message) => {
+            row.close({ restoreFocus: false });
+            announce(message, { movedTo: { kind: OTHER_KIND[category.kind], id: category.id } });
+          }}
+        />
         <ArchiveControls category={category} onChanged={leave} />
       </div>
       <div className="mt-4 border-t border-border pt-3">

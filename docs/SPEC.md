@@ -425,7 +425,7 @@ deleteWallet(userId, walletId): void                                           /
 
 // categories.ts
 type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null }
-listCategories(userId, kind?, opts?: { includeArchived?: boolean }): CategoryView[]   // archived excluded by default; kind asc (expense first), active before archived, then name (case-insensitive)
+listCategories(userId, kind?, opts?: { includeArchived?: boolean }): CategoryView[]   // archived excluded by default; `sortCategories` (src/lib/category-order.ts): expense first, active before archived, then name lower-cased by code point, then id — sorted in JS, never SQL lower(name)
 getCategory(userId, categoryId): CategoryView | null                           // archived included
 seedDefaultCategories(userId, tx?)                                             // called inside registration's DB transaction; idempotent
 DEFAULT_CATEGORIES: Record<'expense' | 'income', string[]>
@@ -469,8 +469,9 @@ getTransaction(userId, id): TransactionView | null                              
 createTransaction(userId, TransactionInput): TransactionView
 updateTransaction(userId, id, TransactionInput): TransactionView   // rejects transfer legs (VALIDATION)
 deleteTransaction(userId, id): void                                // rejects transfer legs (VALIDATION)
-// Rules: wallet owned (NOT_FOUND) and not archived (VALIDATION) — except that an existing transaction may stay on the
-// archived wallet it already belongs to when edited; category owned (NOT_FOUND) with kind === transaction kind
+// Rules: wallet owned (NOT_FOUND) and not archived, nor in an archived group (VALIDATION: "This wallet is archived." /
+// "This wallet is in the archived group “X”. Unarchive the group first.") — except that an existing transaction may stay
+// on the wallet it already belongs to when edited (`closedWalletMessage` in wallets.ts); category owned (NOT_FOUND) with kind === transaction kind
 // (VALIDATION, field categoryId) and not archived (VALIDATION, field categoryId) — except that an existing
 // transaction may keep the archived category it already has when edited; amountMinor safe integer > 0; valid date; note trimmed, ≤ 500 chars, '' → null.
 
@@ -927,8 +928,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   says its own rates are only used on days the provider has none. No currency needing a rate → "The provider
   quotes every currency you hold". Actions `setManualRateAction` / `deleteManualRateAction` (`requireUser`, zod
   shape, service, `serviceErrorState`, `revalidatePath("/", "layout")`; success messages "Saved: from 1 Nov 2026,
-  1 KWD = 3.25 EUR." / "Rate removed."). `@modal/rates/page.tsx` returns null. Manual rates are not in the JSON
-  backup (see DECISIONS → Known gaps).
+  1 KWD = 3.25 EUR." / "Rate removed."). `@modal/rates/page.tsx` returns null. Manual rates travel in the JSON
+  backup (`manualRates`, imported additively; see "Import / export"), not in the CSV.
   - As built (step 3; `page.tsx`, `components/dashboard/month-chart.tsx`, `overview-lists.tsx`):
     - **Currency**: `?currency=` is used when it is a valid code (`isValidCurrency`, uppercase only) of a wallet the
       user holds, archived included; anything else falls back to `pickDefaultCurrency(userId, month)`
@@ -1016,7 +1017,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       as the empty default, the 24 before it, the month in view if older, "All time"), Wallet ("All wallets", archived
       marked), Type, Category (`<optgroup>` Expense / Income) — with hidden `q` and `currency` and an "Apply" button;
       a selected day or range is replaced by the chosen month. A `<style>` in it hides the Wallet / Type / Category
-      chips (`data-needs-js`); the Month chip and its ‹ › links stay.
+      chips and the Month chip's popover button (`data-needs-js`); the Month chip's ‹ › links stay, and in place of
+      its button a `<noscript>` link with the same label (`#no-script-month`, the id of the form's Month select)
+      jumps to that select.
       **Month stepper**: when the view is a single month (not all time, a range or a single day), the Month chip is
       one bordered control with a ‹ link before and a › link after it (plain `next/link`s, `scroll={false}`,
       `aria-label` "Previous month, October 2026 ([)" / "Next month, December 2026 (])", also the `title`), all
@@ -1325,10 +1328,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       "Remove, moving its N transactions to a new expense category named". For an active category a muted line adds
       "(It is your only active expense category.) To keep its entries where they are, archive it instead." The
       action reads `parseReplacement` (select "new" or no select → the name). A rename closes the row (focus back to
-      its button) and announces in the section's status line; a removal, a kind change and (un)archiving move the
-      row out of its list, so they close it without restoring focus, focus the section heading and announce
-      ("Archived “Food”.", "“Food” is now an income category.", "Removed “Food” and moved 3 transactions to the new
-      category “Meals”."). If an "unused" category gained transactions meanwhile, the refusal shows above the
+      its button) and announces in the section's status line; a removal and (un)archiving move the row out of its
+      list, so they close it without restoring focus, focus the section heading and announce ("Archived “Food”.",
+      "Removed “Food” and moved 3 transactions to the new category “Meals”."). A kind change moves the row to the
+      other kind's card: the row closes, that card is told through a window event (`categories:moved`,
+      `components/categories/category-move.ts`), announces "“Food” is now an income category." in its own status
+      line, focuses its heading at once and the row's button as soon as the refreshed list has it. If an "unused" category gained transactions meanwhile, the refusal shows above the
       replacement form that now replaces the button (the action revalidates), and its field takes focus.
     - **Archived**: after the add row, when the kind has any, a muted `<h3>` "Archived · 2 categories" with "Hidden
       from the entry form; their entries stay in reports and history." and the archived rows (same summary, month
@@ -1380,20 +1385,32 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   1) and an optional `archivedAt` (ISO timestamp of when an archived wallet was archived; restored on import, absent
   in older files, which then archive as of the import); an optional top-level `groups[]` (name, colour, archived flag, in display order; absent in older files — see
   "Wallet groups"); categories name + kind and an optional `archived` flag (written since 2026-11-18, always as `true` / `false`;
-  absent in older files, which import as active; the version stays 1); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
-  transfers date, note, from/to wallet refs, amount sent, amount received. References use ids local to the file.
+  absent in older files, which import as active; the version stays 1) and an optional `archivedAt` (as for wallets:
+  written for an archived category, restored on import; absent → archived as of the import); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
+  transfers date, note, from/to wallet refs, amount sent, amount received; an optional top-level `manualRates[]`
+  (the user's own exchange rates from `/rates`: `{ currency, base, effectiveDate, rate }`, `rate` the exact decimal
+  string stored, by currency then date; absent in older files). References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
-  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived`.
-  `type` is `expense` | `income` | `transfer` | `wallet`; `amount` is positive, plain decimal with a dot, no thousands
+  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind`.
+  `type` is `expense` | `income` | `transfer` | `wallet` | `category`; `amount` is positive, plain decimal with a dot, no thousands
   separator, in the wallet's currency; a transfer is **one** row (`wallet` → `to_wallet`, `to_amount` = amount
   received). `group` (optional) names the group of the row's `wallet`.
   **Wallet rows** (`type` = `wallet`, written first by the export) describe a wallet: `wallet`, `currency`, `amount` =
   its initial balance (may be negative; empty = 0), `group`, `archived` = the date it was archived (`YYYY-MM-DD` or
   `DD.MM.YYYY`, empty = active); `date` is ignored and `category`, `note`, `to_*` must be empty. `group` and
   `archived` are optional columns, so files from before they existed import unchanged (an older app rejects a file
-  with wallet rows: "not a type"). RFC 4180 quoting, UTF-8 with BOM (so Excel opens it correctly), CRLF line endings, ISO dates.
+  with wallet rows: "not a type").
+  **Category rows** (`type` = `category`, written after the wallet rows, before the entries) describe a category:
+  `category` = its name, `kind` = `expense` | `income` (required on these rows; the `kind` column is optional and
+  must be empty on every other row), `archived` = the date it was archived (`YYYY-MM-DD` or `DD.MM.YYYY`, empty =
+  active); `date` is ignored and `wallet`, `currency`, `amount`, `note`, `to_*`, `group` must be empty. The export
+  writes one for each **archived** category the exported rows use (in creation order); active categories need none.
+  An import uses a category row only when it creates that category (created archived on that date at 00:00 UTC, or
+  active; an unused described category is created too); an existing category's row is ignored, and a second row for
+  the same kind + name is a problem ("already described on line N"; across files, one that differs is a problem at
+  the later file). RFC 4180 quoting, UTF-8 with BOM (so Excel opens it correctly), CRLF line endings, ISO dates.
   Text cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` on export (spreadsheet formula
   injection) and that prefix is removed again on import, so export → import round-trips exactly.
 
@@ -1414,9 +1431,9 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   `/api/export/transactions` still exports everything.
 - `GET /api/export/context` → `expenses-tracker-context-YYYY-MM-DD.json`: the account's **wallets and
   categories only** — `{ app: "expenses-tracker", kind: "context", version: 1, exportedAt, wallets: [{ name,
-  currency, archived, group }], categories: [{ name, kind }] }` (`group`, the wallet group's name, was added later and
-  is optional in the schema; the version stays 1; archived categories are included, unflagged — see DECISIONS
-  "Known gaps") — small and free of transactions, so it can be handed
+  currency, archived, group }], categories: [{ name, kind, archived }] }` (`group`, the wallet group's name, and the
+  categories' `archived` flag were added later and are optional in the schema; the version stays 1; archived
+  categories are included and flagged, and the Statement Importer leaves them out) — small and free of transactions, so it can be handed
   to companion tools (the Statement Importer artifact) that need to know the user's wallets and categories
   without receiving their history. Same auth and headers as the other exports. The `/data` page offers it as a
   third download, "Wallets & categories (JSON)", with one sentence saying what it is for, next to a "Copy to clipboard"
@@ -1450,8 +1467,16 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
     for it. Across the files of one selection, wallet rows / groups are merged; two files that disagree are a problem
     at the later one.
   - Categories are matched by kind + name (ignoring case); missing ones are created (from a backup with its
-    archived flag; the preview's `categoriesToCreate` entry then carries `archived: true`). An existing category's
-    archived state is left untouched.
+    archived flag and `archivedAt`, from a CSV with its category row's archived date; the preview's
+    `categoriesToCreate` entry then carries `archived: true` and the preview card says "(archived)" after its name).
+    An existing category's archived state is left untouched.
+  - **Manual exchange rates** (backup `manualRates`): each one the account lacks (by currency + effective date) is
+    added; one the account already has for that currency and date is kept as it is (import adds, never changes),
+    with a notice `manual-rates-kept` when the file's rate or base differs. Validated like `setManualRate` (ISO
+    currencies, not EUR as the currency, a base other than the currency, a valid date, a positive decimal rate; two
+    for the same currency and date in one file is a problem), except that the currencies need not be held: a wallet
+    may have been deleted since. The preview counts them (`manualRatesToAdd`, "Your own exchange rates: N to add to
+    the Rates page."; also in the confirmation differences and the success line).
   - **Duplicates are skipped by default** (checkbox "Skip transactions that already exist", on): entries are
     compared on (wallet, kind, category, date, amount, note) — transfers on (from, to, date, both amounts, note) —
     as a multiset: if the file has 3 identical entries and the account already has 1, 2 are added. Importing the
@@ -1681,7 +1706,7 @@ escapeFormula(v) / unescapeFormula(v)
 
 // src/server/export.ts
 buildBackup(userId, now?): Backup
-buildContext(userId, now?): ContextExport   // every wallet (incl. archived, flagged) + category, creation order; no ids
+buildContext(userId, now?): ContextExport   // every wallet + category (archived ones included, flagged), creation order; no ids
 buildTransactionsCsv(userId, filters?: Omit<TransactionFilters, 'limit' | 'offset'>): string   // uses filterConditions
 // src/server/import.ts
 type ImportOptions = { skipDuplicates?: boolean /* default true */; timeZone?: string /* IANA, from the browser */;
@@ -1696,7 +1721,7 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   formatLabel: string | null /* "Spendee export"; "Spendee export + Transactions (CSV)" */; files: ImportFileSummary[];
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
   walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
-  groupsToCreate: string[]; categoriesToCreate: { name; kind }[];
+  groupsToCreate: string[]; categoriesToCreate: { name; kind; archived?: true }[]; manualRatesToAdd: number /* backup */;
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
@@ -1711,7 +1736,8 @@ type ImportContext = { timeZone /* validated: account's, else browser's, else UT
   timeZoneSource: 'account' | 'browser' | 'none'; timeZoneFallback: boolean /* browser sent an invalid zone */;
   unpairedTransfersAsEntries: boolean }
 type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, non-empty */; csvHeader(): string[] /* lower-cased, lazy */ }
-type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[];
+type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc? */;
+  manualRates?: ManualRateSpec[] /* backup: { currency; base; effectiveDate; rate; loc } */;
   entries: EntrySpec[]; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
   problems: ImportProblem[]; notices: ImportNotice[]; unpairedTransferRows: number; rowCount: number;
   tallies: Map<string, number> /* per-format counters summed over the selection, e.g. "rounded:RON" */ }
@@ -1758,8 +1784,10 @@ type BrokenTransferRow = { direction; walletKey | null; currency | null; amountM
   proxy upload limit)…". The panel's file input accepts `.zip` too, and the "What can be imported" disclosure links
   to the user guide `docs/IMPORTING.md` (on GitHub: the app does not serve its docs).
 - Rules settled while building:
-  - **Archived wallets**: an import never adds a *new* entry to a wallet that is archived in the account (backup or
-    CSV, either side of a transfer) — that is a line-numbered problem ("unarchive it first"), mirroring the services.
+  - **Archived wallets**: an import never adds a *new* entry to a wallet that is archived in the account, or that is
+    in an archived group (backup or CSV, either side of a transfer) — that is a line-numbered problem ("unarchive it
+    first" / "is in the archived group “X” … Unarchive the group first"), mirroring the services. A wallet the import
+    *creates* is never treated so, even when it goes into an existing archived group (its rows are a restore).
     Entries on it that are duplicates are skipped silently, so re-importing an export of an account with archived
     wallets still works and adds nothing. A wallet the import *creates* from a backup with `archived: true` (or a CSV wallet row with an `archived` date) gets
     its history inserted and is then archived — a restore, not new activity — on the file's date (`archivedAt` / the
@@ -1767,22 +1795,24 @@ type BrokenTransferRow = { direction; walletKey | null; currency | null; amountM
   - **Archived categories** follow the same rule: a new entry for a category that is archived in the account (backup,
     CSV or Spendee) is a problem at its line / path ("Category “Bills” (expense) is archived in your account, so
     nothing new can be added to it. Unarchive it first, or remove these rows."); duplicates are skipped silently;
-    a category the import creates from a backup with `archived: true` gets its history and is archived. When the
+    a category the import creates archived (backup `archived: true`, CSV category row with a date) gets its history
+    and is then archived on the file's date (backup `archivedAt`, the CSV date at 00:00 UTC) or as of the import. When the
     wallet is archived too, only the wallet problem is reported for that entry. Two backup categories merged by case
-    are archived only if both are.
+    are archived only if both are (on the later date).
   - **Same-named wallets**: in a backup, the k-th file wallet with a given name + currency matches the k-th such
     wallet in the account (by id), so two "Cash · EUR" wallets survive a round trip. In a CSV a wallet *is* its name
     + currency: rows go to the matching active wallet (else the oldest archived one), and duplicate detection treats
     all same-named wallets of that currency as one, so re-importing the CSV of such an account adds nothing.
   - Categories in a backup that differ only by case are merged into one. Unused categories travel in the backup
-    (they are created), never in the CSV. Unused wallets travel in both (the CSV as wallet rows, in an unfiltered
+    (they are created); the CSV export writes category rows only for archived categories its rows use, but an import
+    creates any category a (hand-written) category row describes. Unused wallets travel in both (the CSV as wallet rows, in an unfiltered
     export).
   - Decimal strings in a backup are optional; when present they must parse (`parseAmount`, wallet currency) to the
     minor units, otherwise the file is rejected at that path.
   - Transfers: same currency ⇒ the received amount may be omitted (backup `receivedAmountMinor`, CSV `to_amount`) and,
     if given, must equal the amount sent; different currencies ⇒ required. CSV `to_currency` defaults to `currency`.
     A category on a transfer row is a problem.
-  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount,group,archived`
+  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount,group,archived,kind`
     optional); `type` and header names are case-insensitive; rows whose cells are all blank are skipped; negative
     amounts are rejected with "amounts are positive; the type says which way the money goes".
   - Formula guard: export prefixes `'` to `wallet`, `category`, `note`, `to_wallet` cells starting with `=`, `+`, `-`,
@@ -1833,8 +1863,12 @@ Purpose: keep personal and business money apart in one account and look at each 
     past total;
   - a selected scope pointing at a group that is archived falls back to **All** (`getGroupScope`, and
     `selectGroupAction` refuses one);
+  - its wallets take **no new entries**: `createTransaction` / `createTransfer` (and moving an entry onto such a
+    wallet) are VALIDATION exactly as for an archived wallet ("This wallet is in the archived group “Business”.
+    Unarchive the group first."; an entry already on it keeps it when edited), and an import treats them as archived
+    (new rows are a problem naming the group, duplicates still skip);
   - the Wallets page lists archived groups (with All) in a closed "Archived groups" section, each with its wallets,
-    Unarchive and, when empty, Delete.
+    Edit (rename / recolour without unarchiving), Unarchive and, when empty, Delete.
 - A wallet's group can be changed at any time (wallet edit form); it moves the wallet with all its history.
   Nothing else about a transaction depends on the group.
 - **Categories stay shared** by all groups. **Transfers between groups are allowed** (a business wallet paying a
@@ -2019,8 +2053,10 @@ As built (order, colour, archive):
   each unarchived group with its colour dot, wallet count and Move up / Move down, inline rename / colour, archive
   and delete in the style of the Categories rows (archive and delete only offered when allowed), and a "New group"
   input with colour radios. With All, below it a closed `<details>` "Archived groups · N" (`ArchivedGroups`, server):
-  each archived group by position with its dot, wallet count, Move up / down among the archived groups, Unarchive,
-  Delete when empty (a `confirm()`), and its wallets (links to the wallet page, currency, entries, balance,
+  each archived group by position with its dot, wallet count, Move up / down among the archived groups, Edit
+  (`ArchivedGroupEditor` from `groups-card.tsx`, client: a toggle that mounts the Groups card's rename / colour form on
+  a line of its own; focus into the name on open and back to the toggle on Cancel / Save, a save announced next to
+  it; needs JavaScript), Unarchive, Delete when empty (a `confirm()`), and its wallets (links to the wallet page, currency, entries, balance,
   "archived" for a wallet that is archived itself). Group actions live in
   `src/app/(app)/wallets/actions.ts` and call `revalidatePath("/", "layout")` (the switcher is in the layout).
 - **Overview / Transactions / Categories**: as in the scope table. When a group is selected and it has no

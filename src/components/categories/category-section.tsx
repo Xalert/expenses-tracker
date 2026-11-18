@@ -7,6 +7,7 @@ import { ExpandableList, ExpandableRow } from "@/components/ui/expandable-row";
 import { rowShare, type SplitSegment } from "@/lib/category-split";
 import { initialFormState, type FormState } from "@/lib/form";
 import type { CategoryWithMonthUsage } from "@/server/categories";
+import { CATEGORY_MOVED_EVENT, announceCategoryMoved, isMovedInto, movedRowButton } from "./category-move";
 import { CategoryPanel, CategorySummary, MAX_CATEGORY_NAME, type Announce } from "./category-row";
 
 const TITLE = { expense: "Expense", income: "Income" } as const;
@@ -29,15 +30,43 @@ export function CategorySection({
   segments: SplitSegment[];
 }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const [status, setStatus] = useState("");
   const headingId = `${kind}-categories-heading`;
   const byId = new Map(segments.map((s) => [s.id, s]));
+  /** A category that moved into this card (kind change) whose row should take the focus once it is here. */
+  const pendingFocus = useRef<number | null>(null);
 
-  /** Show + announce a success message; after a removal the row is gone, so focus moves to the heading. */
+  /**
+   * Show + announce a success message; after a removal the row is gone, so focus moves to the heading. After a kind
+   * change (`movedTo`) the other card announces it and takes the focus (its heading at once, then the moved row).
+   */
   const announce: Announce = (message, opts = {}) => {
+    if (opts.movedTo) {
+      setStatus("");
+      announceCategoryMoved({ ...opts.movedTo, message: message ?? "" });
+      return;
+    }
     setStatus(message ?? "");
     if (opts.focusHeading) headingRef.current?.focus();
   };
+
+  useEffect(() => {
+    function onMoved(e: Event) {
+      const detail = (e as CustomEvent<unknown>).detail;
+      if (!isMovedInto(detail, kind)) return;
+      setStatus(detail.message);
+      pendingFocus.current = detail.id;
+      headingRef.current?.focus();
+      // The refreshed list may already be here, or arrive with the next render (the effect below).
+      window.setTimeout(() => focusPendingRow(sectionRef.current, pendingFocus), 0);
+    }
+    window.addEventListener(CATEGORY_MOVED_EVENT, onMoved);
+    return () => window.removeEventListener(CATEGORY_MOVED_EVENT, onMoved);
+  }, [kind]);
+
+  // Each new list from the server: focus the moved row if it has arrived.
+  useEffect(() => focusPendingRow(sectionRef.current, pendingFocus), [categories]);
 
   const active = categories.filter((c) => c.archivedAt === null);
   const archived = categories.filter((c) => c.archivedAt !== null);
@@ -65,7 +94,7 @@ export function CategorySection({
   );
 
   return (
-    <section aria-labelledby={headingId} className="min-w-0 rounded-[20px] border border-border bg-surface">
+    <section ref={sectionRef} aria-labelledby={headingId} className="min-w-0 rounded-[20px] border border-border bg-surface">
       <div className="px-4 pt-4 pb-3 sm:px-[18px]">
         <h2
           id={headingId}
@@ -114,6 +143,15 @@ export function CategorySection({
       </ExpandableList>
     </section>
   );
+}
+
+/** Focus the row `pending` names once it is inside `root`, then forget it. */
+function focusPendingRow(root: HTMLElement | null, pending: { current: number | null }) {
+  if (pending.current === null) return;
+  const button = movedRowButton(root, pending.current);
+  if (!button) return;
+  pending.current = null;
+  button.focus();
 }
 
 function AddCategoryForm({ kind, onAdded }: { kind: "expense" | "income"; onAdded: (message?: string) => void }) {

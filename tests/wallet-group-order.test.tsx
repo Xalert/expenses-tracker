@@ -16,7 +16,8 @@ import { resolveGroupScope } from "@/lib/group-scope";
 import { getDashboard } from "@/server/dashboard";
 import { buildBackup } from "@/server/export";
 import { previewImport, runImport } from "@/server/import";
-import { createTransaction, listTransactions } from "@/server/transactions";
+import { createTransaction, listTransactions, updateTransaction } from "@/server/transactions";
+import { createTransfer, updateTransfer } from "@/server/transfers";
 import {
   archiveWalletGroup,
   createWalletGroup,
@@ -219,6 +220,65 @@ describe("archive", () => {
     const csv = "date,type,wallet,currency,amount,category\n2026-03-01,expense,Cash,EUR,1.00,Food\n";
     await expectServiceError(async () => previewImport(alice.id, csv, { groupId: biz.id }), "VALIDATION", "groupId");
   });
+
+  it("an archived group can be renamed and recoloured without unarchiving it", async () => {
+    const { biz } = await setup();
+    await archiveWalletGroup(alice.id, biz.id);
+    const renamed = await renameWalletGroup(alice.id, biz.id, { name: "Old business", color: "teal" });
+    expect(renamed).toMatchObject({ name: "Old business", color: "teal" });
+    expect(renamed.archivedAt).toBeInstanceOf(Date);
+  });
+
+  it("refuses new entries on a wallet of an archived group, like an archived wallet; existing entries stay editable", async () => {
+    const { biz, home, shop } = await setup();
+    const [entry] = (await listTransactions(alice.id, { month: "2026-03" })).items;
+    const transfer = await createTransfer(alice.id, { fromWalletId: home.id, toWalletId: shop.id, amountMinor: 100, date: "2026-03-06" });
+    await archiveWalletGroup(alice.id, biz.id);
+    const input = { walletId: shop.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 100, date: "2026-03-07" } as const;
+    await expectServiceError(() => createTransaction(alice.id, input), "VALIDATION", "walletId");
+    await expect(createTransaction(alice.id, input)).rejects.toThrow(
+      "This wallet is in the archived group “Business”. Unarchive the group first.",
+    );
+    await expectServiceError(
+      () => createTransfer(alice.id, { fromWalletId: shop.id, toWalletId: home.id, amountMinor: 100, date: "2026-03-07" }),
+      "VALIDATION",
+      "fromWalletId",
+    );
+    await expectServiceError(
+      () => createTransfer(alice.id, { fromWalletId: home.id, toWalletId: shop.id, amountMinor: 100, date: "2026-03-07" }),
+      "VALIDATION",
+      "toWalletId",
+    );
+    // Moving an existing entry onto it is new activity too.
+    const other = await createTransaction(alice.id, { ...input, walletId: home.id });
+    await expectServiceError(() => updateTransaction(alice.id, other.id, input), "VALIDATION", "walletId");
+    // An entry that already belongs to it keeps it when edited (same rule as an archived wallet).
+    expect((await updateTransaction(alice.id, entry.id, { ...input, amountMinor: 800 })).amountMinor).toBe(800);
+    const edited = await updateTransfer(alice.id, transfer.id, { fromWalletId: home.id, toWalletId: shop.id, amountMinor: 150, date: "2026-03-06" });
+    expect(edited.from.amountMinor).toBe(150);
+    // Unarchiving the group opens the wallet again.
+    await unarchiveWalletGroup(alice.id, biz.id);
+    await createTransaction(alice.id, input);
+  });
+
+  it("an import treats a wallet of an archived group as archived: new rows are problems, duplicates still skip", async () => {
+    const { biz } = await setup();
+    await archiveWalletGroup(alice.id, biz.id);
+    const csv =
+      "date,type,wallet,currency,amount,category\n2026-03-05,expense,Shop,EUR,7.00,Food\n2026-03-06,expense,Shop,EUR,1.00,Food\n";
+    const preview = await previewImport(alice.id, csv);
+    expect(preview.duplicateTransactions).toBe(1);
+    expect(preview.problems).toEqual([
+      {
+        line: 3,
+        message:
+          "Wallet “Shop” (EUR) is in the archived group “Business” in your account, so nothing new can be added to it. " +
+          "Unarchive the group first, or remove these rows.",
+      },
+    ]);
+    const again = await previewImport(alice.id, "date,type,wallet,currency,amount,category\n2026-03-05,expense,Shop,EUR,7.00,Food\n");
+    expect(again).toMatchObject({ ok: true, transactionsToAdd: 0, duplicateTransactions: 1 });
+  });
 });
 
 describe("scope", () => {
@@ -390,6 +450,11 @@ describe("rendering", () => {
     expect(html).toContain(">Shop<");
     expect(html.match(/>Unarchive</g)).toHaveLength(2);
     expect(html.match(/>Delete</g)).toHaveLength(1);
+    // Edit (rename / recolour without unarchiving): a closed toggle per group; the form mounts only when opened.
+    expect(html).toContain('aria-label="Rename or recolour Business"');
+    expect(html).toContain('aria-label="Rename or recolour Empty"');
+    expect(html.match(/aria-expanded="false"/g)).toHaveLength(2);
+    expect(html).not.toContain('name="name"');
     expect(renderToStaticMarkup(<ArchivedGroups groups={[]} wallets={[]} />)).toBe("");
   });
 });

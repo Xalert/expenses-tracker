@@ -4,7 +4,7 @@ import { getDb, type DBOrTx } from "@/db";
 import { transactions, transfers, wallets } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
-import { getOwnedWalletRow } from "./wallets";
+import { closedWalletMessage, getOwnedWalletRow } from "./wallets";
 
 type TransferSide = { walletId: number; walletName: string; currency: string; amountMinor: number };
 
@@ -79,12 +79,15 @@ async function validate(
 
   const from = await getOwnedWalletRow(userId, fromWalletId, tx, "fromWalletId");
   const to = await getOwnedWalletRow(userId, toWalletId, tx, "toWalletId");
-  // Archived wallets are rejected, except when editing a transfer that already used that wallet on that side.
-  if (from.archivedAt && from.id !== previous?.fromWalletId) {
-    throw new ServiceError("VALIDATION", "The source wallet is archived.", "fromWalletId");
+  // Archived wallets (and wallets of an archived group) are rejected, except when editing a transfer that already
+  // used that wallet on that side.
+  const fromClosed = closedWalletMessage(from, "The source wallet");
+  if (fromClosed && from.id !== previous?.fromWalletId) {
+    throw new ServiceError("VALIDATION", fromClosed, "fromWalletId");
   }
-  if (to.archivedAt && to.id !== previous?.toWalletId) {
-    throw new ServiceError("VALIDATION", "The destination wallet is archived.", "toWalletId");
+  const toClosed = closedWalletMessage(to, "The destination wallet");
+  if (toClosed && to.id !== previous?.toWalletId) {
+    throw new ServiceError("VALIDATION", toClosed, "toWalletId");
   }
 
   let receivedAmountMinor: number;

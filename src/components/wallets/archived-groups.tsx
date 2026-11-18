@@ -6,13 +6,14 @@ import type { WalletGroupView } from "@/server/wallet-groups";
 import type { WalletView } from "@/server/wallets";
 import { ActionButton } from "./action-button";
 import { GroupDot } from "./group-dot";
+import { ArchivedGroupEditor } from "./groups-card";
 
 const walletsLabel = (n: number) => (n === 1 ? "1 wallet" : `${n} wallets`);
 
 /**
  * The Wallets page's "Archived groups" section (with All selected): a closed `<details>` with each archived group in
- * its order, its wallets (links, balances) and Unarchive — plus Delete while it is empty. Works without JavaScript
- * apart from the confirm on Delete.
+ * its order, its wallets (links, balances), Edit (rename / recolour in place, without unarchiving; needs JavaScript)
+ * and Unarchive — plus Delete while it is empty. The rest works without JavaScript apart from the confirm on Delete.
  */
 export function ArchivedGroups({ groups, wallets }: { groups: WalletGroupView[]; wallets: WalletView[] }) {
   if (groups.length === 0) return null;
@@ -57,6 +58,7 @@ export function ArchivedGroups({ groups, wallets }: { groups: WalletGroupView[];
                     </form>
                   </span>
                 )}
+                <ArchivedGroupEditor group={{ id: g.id, name: g.name, walletCount: g.walletCount, color: g.color }} />
                 <ActionButton
                   action={unarchiveGroupAction.bind(null, g.id)}
                   label="Unarchive"

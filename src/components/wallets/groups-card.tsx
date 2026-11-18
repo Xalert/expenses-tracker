@@ -210,6 +210,51 @@ function GroupPanel({
   );
 }
 
+/**
+ * Rename / recolour an archived group in place (the "Archived groups" section of the Wallets page), without
+ * unarchiving it: an "Edit" toggle, then — on a line of its own in the row (`basis-full`) — the same form as the
+ * Groups card's. Focus goes into the name on open and back to the toggle on Cancel or Save; a save is announced.
+ * Rendered as siblings (a fragment) so the toggle sits in the row's flex line next to Unarchive.
+ */
+export function ArchivedGroupEditor({ group }: { group: GroupRowData }) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState("");
+  const toggle = useRef<HTMLButtonElement>(null);
+  const panelId = `archived-group-${group.id}-edit`;
+  const close = (message?: string) => {
+    setOpen(false);
+    if (message !== undefined) setStatus(message);
+    toggle.current?.focus();
+  };
+  return (
+    <>
+      <Button
+        ref={toggle}
+        variant="secondary"
+        size="sm"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-label={`Rename or recolour ${group.name}`}
+        onClick={() => {
+          setStatus("");
+          setOpen((o) => !o);
+        }}
+        className="max-sm:h-11!"
+      >
+        Edit
+      </Button>
+      <p role="status" className="basis-full text-sm text-income empty:hidden">
+        {status}
+      </p>
+      {open && (
+        <div id={panelId} className="basis-full pt-1">
+          <RenameForm group={group} onCancel={() => close()} onRenamed={(m) => close(m ?? "")} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function RenameForm({
   group,
   onCancel,

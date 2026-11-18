@@ -15,9 +15,9 @@ rules it follows. The exact contract for developers is in [`SPEC.md`](SPEC.md#im
 
 | Download | Format | Use it to |
 |---|---|---|
-| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones), transactions, transfers. |
-| Transactions | CSV | Work in a spreadsheet, and import it back. One row per wallet first, then one row per expense, income or transfer. |
-| Wallets & categories | JSON | Give the [Statement Importer](STATEMENT-IMPORTER.md) your wallet and category names, without any transactions. |
+| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones, archived state and date), transactions, transfers, and your own exchange rates from the Rates page. |
+| Transactions | CSV | Work in a spreadsheet, and import it back. One row per wallet first, then one per archived category the rows use, then one row per expense, income or transfer. |
+| Wallets & categories | JSON | Give the [Statement Importer](STATEMENT-IMPORTER.md) your wallet and category names (archived ones flagged, and left out there), without any transactions. |
 
 The **Export CSV** button on the Transactions page exports just the list you are looking at (its filters and month).
 
@@ -41,20 +41,21 @@ The format is recognised from the content, not the file name.
 ## The transactions CSV
 
 ```
-date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived
-,wallet,Main,EUR,1000.00,,,,,,Personal,
-,wallet,Old card,USD,50.00,,,,,,Personal,2025-06-30
-2026-03-01,expense,Main,EUR,12.50,Food,Lunch,,,,Personal,
-2026-03-02,income,Main,EUR,2500.00,Salary,,,,,Personal,
-2026-03-05,transfer,Main,EUR,100.00,,ATM,Cash,EUR,100.00,Personal,
-2026-03-06,transfer,Main,EUR,200.00,,,Old card,USD,215.40,Personal,
+date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind
+,wallet,Main,EUR,1000.00,,,,,,Personal,,
+,wallet,Old card,USD,50.00,,,,,,Personal,2025-06-30,
+,category,,,,Old rent,,,,,,2025-12-31,expense
+2026-03-01,expense,Main,EUR,12.50,Food,Lunch,,,,Personal,,
+2026-03-02,income,Main,EUR,2500.00,Salary,,,,,Personal,,
+2026-03-05,transfer,Main,EUR,100.00,,ATM,Cash,EUR,100.00,Personal,,
+2026-03-06,transfer,Main,EUR,200.00,,,Old card,USD,215.40,Personal,,
 ```
 
 - Required columns: `date`, `type`, `wallet`, `currency`, `amount`. The others are optional, header names are not
   case-sensitive, columns can be in any order and unknown columns are ignored.
 - **Separators**: comma, semicolon or tab (detected from the first line). Decimal commas (`12,50`) are fine.
 - **Dates**: `2026-03-31` or `31.03.2026`. Slashed dates (`03/04/2026`) are refused, because they are ambiguous.
-- **Types**: `expense`, `income`, `transfer` and `wallet`.
+- **Types**: `expense`, `income`, `transfer`, `wallet` and `category`.
 - **Amounts** are positive, in the wallet's currency, with no more decimals than the currency has (JPY none, EUR 2,
   KWD 3). The type says which way the money goes.
 - **Transfers** are one row: from `wallet` to `to_wallet`. `to_currency` defaults to the same currency; when the
@@ -77,7 +78,20 @@ active wallet). Leave `date`, `category`, `note` and the `to_` columns empty.
   (or your default group).
 - A wallet has one group: giving the same wallet two different groups, or two wallet rows, is a problem.
 - A wallet created archived still gets its history from the file (it is a restore), but nothing new can be imported
-  into a wallet that is **already archived** in your account: unarchive it first.
+  into a wallet that is **already archived** in your account, or that is in an **archived group**: unarchive it (or
+  the group) first.
+
+### Category rows and archived categories
+
+A row with type `category` describes a category: `category` is its name, `kind` is `expense` or `income`, and
+`archived` the date it was archived (empty for an active one). Leave `date`, `wallet`, `currency`, `amount`, `note`,
+`group` and the `to_` columns empty; only category rows use the `kind` column.
+
+- The export writes one for each **archived** category its rows use, so importing the file into another account
+  creates that category archived, with its entries.
+- As for wallets, the details are used only when the import **creates** the category; a category you already have is
+  never changed. A category row for a category nothing uses still creates it.
+- Nothing new can be imported into a category that is **already archived** in your account: unarchive it first.
 
 Files written before these columns existed import exactly as before.
 
@@ -127,7 +141,9 @@ selected twice in one import is used once.
 ## Preview and confirmation
 
 The preview shows what will be added, the duplicates skipped, the wallets, groups and categories that will be
-created, and anything worth knowing (rounding, labels, time zones). **Import** re-checks everything against your
+created (marked "archived" when they will be), the exchange rates a backup adds, and anything worth knowing
+(rounding, labels, time zones). A backup's exchange rate for a currency and date you already have a rate for is not
+imported: yours is kept, and the preview says so when they differ. **Import** re-checks everything against your
 account as it is at that moment. If something changed in between (another tab, another device), the confirmation says
 so and lists the numbers that differ from the preview.
 
