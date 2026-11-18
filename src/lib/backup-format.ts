@@ -13,6 +13,7 @@ export const BACKUP_VERSION = 1;
 /** Caps for untrusted files (also enforced for CSV where they apply). */
 export const BACKUP_LIMITS = {
   wallets: 1_000,
+  groups: 1_000,
   categories: 1_000,
   /** transactions + transfers together. */
   entries: IMPORT_MAX_ROWS,
@@ -43,6 +44,16 @@ export const backupWalletSchema = z.object({
   archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
   /** Optional: the name of the wallet group the wallet belongs to (added after version 1 shipped; old files lack it). */
   group: text.nullable().optional(),
+});
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): the wallet groups in display order (the array order is
+ * the position), with their colour (one of `GROUP_COLORS`; anything else reads as none) and archived flag.
+ */
+export const backupGroupSchema = z.object({
+  name: text,
+  color: z.string({ error: "Expected text." }).max(40, { error: "Text is too long." }).nullable().optional(),
+  archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
 });
 
 export const backupCategorySchema = z.object({
@@ -78,6 +89,10 @@ export const backupSchema = z.object({
   version: z.literal(BACKUP_VERSION),
   exportedAt: z.string().max(64).optional(),
   wallets: z.array(backupWalletSchema).max(BACKUP_LIMITS.wallets, { error: `At most ${BACKUP_LIMITS.wallets} wallets.` }),
+  groups: z
+    .array(backupGroupSchema)
+    .max(BACKUP_LIMITS.groups, { error: `At most ${BACKUP_LIMITS.groups} groups.` })
+    .optional(),
   categories: z
     .array(backupCategorySchema)
     .max(BACKUP_LIMITS.categories, { error: `At most ${BACKUP_LIMITS.categories} categories.` }),
@@ -91,6 +106,7 @@ export const backupSchema = z.object({
 
 export type Backup = z.output<typeof backupSchema>;
 export type BackupWallet = Backup["wallets"][number];
+export type BackupGroup = NonNullable<Backup["groups"]>[number];
 export type BackupCategory = Backup["categories"][number];
 export type BackupTransaction = Backup["transactions"][number];
 export type BackupTransfer = Backup["transfers"][number];

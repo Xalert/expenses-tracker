@@ -7,7 +7,7 @@ import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/const
 import { resolveTimeZone } from "@/lib/dates";
 import { listTransferRows } from "./export";
 import { assertId } from "./_validate";
-import { getDefaultGroupId, getOwnedGroupRow } from "./wallet-groups";
+import { getDefaultGroupId, getOpenGroupRow, nextGroupPosition } from "./wallet-groups";
 import { backupFormat } from "./import-formats/backup";
 import {
   addTally,
@@ -17,6 +17,7 @@ import {
   specBuilder,
   walletKey,
   type EntrySpec,
+  type GroupSpec,
   type ImportContext,
   type ImportFormat,
   type ImportFormatId,
@@ -84,7 +85,10 @@ export type ImportPreview = {
   duplicateTransfers: number;
   /** `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). */
   walletsToCreate: { name: string; currency: string; archived: boolean; group: string }[];
-  /** Groups named by a backup that the account does not have yet; created by the import. */
+  /**
+   * Groups named by a backup (its `groups` list, then its wallets' `group`) that the account does not have yet;
+   * created by the import, last in the order, with the list's colour and archived state.
+   */
   groupsToCreate: string[];
   categoriesToCreate: { name: string; kind: CategoryKind }[];
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
@@ -307,8 +311,13 @@ type Plan = {
   walletsToCreate: number[];
   /** Per file wallet to create: the target group's name, and its id (null → it is in `groupsToCreate`). */
   walletGroups: Map<number, { name: string; id: number | null }>;
-  /** Group names to create (first spelling wins), in file order. */
+  /**
+   * Group names to create (first spelling wins): a backup's `groups` list first (its order), then the groups only
+   * wallets name, in file order.
+   */
   groupsToCreate: string[];
+  /** Colour and archived state of a group to create, by lower-cased name (from the backup's `groups` list). */
+  groupDetails: Map<string, GroupSpec>;
   /** Category key → existing id, or null when it will be created. */
   categoryTargets: (number | null)[];
   categoriesToCreate: number[];
@@ -346,7 +355,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const targetGroupId =
     opts.groupId === undefined
       ? await getDefaultGroupId(userId, tx)
-      : (await getOwnedGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx)).id;
+      : (await getOpenGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx)).id;
   parsed.wallets.forEach((w, i) => {
     const k = used.get(w.key) ?? 0;
     used.set(w.key, k + 1);
@@ -369,6 +378,15 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const walletGroups_ = new Map<number, { name: string; id: number | null }>();
   const groupsToCreate: string[] = [];
   const plannedGroups = new Set<string>();
+  // A backup's own list: every group it names that the account lacks is created (empty ones too), in its order.
+  const groupDetails = new Map<string, GroupSpec>();
+  for (const g of parsed.groups ?? []) {
+    const folded = g.name.toLowerCase();
+    if (groupByFolded.has(folded) || plannedGroups.has(folded)) continue;
+    plannedGroups.add(folded);
+    groupsToCreate.push(g.name);
+    groupDetails.set(folded, g);
+  }
   for (const i of walletsToCreate) {
     const named = parsed.wallets[i].group;
     if (named === undefined) {
@@ -510,6 +528,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     walletsToCreate,
     walletGroups: walletGroups_,
     groupsToCreate,
+    groupDetails,
     categoryTargets,
     categoriesToCreate,
     entriesToAdd,
@@ -580,10 +599,19 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
   const now = new Date();
 
   const createdGroupIds = new Map<string, number>();
+  let position = await nextGroupPosition(tx, userId);
   for (const name of plan.groupsToCreate) {
+    const details = plan.groupDetails.get(name.toLowerCase());
     const [group] = await tx
       .insert(walletGroups)
-      .values({ userId, name, createdAt: now })
+      .values({
+        userId,
+        name,
+        position: position++,
+        color: details?.color ?? null,
+        archivedAt: details?.archived ? now : null,
+        createdAt: now,
+      })
       .returning({ id: walletGroups.id });
     createdGroupIds.set(name.toLowerCase(), group.id);
   }
