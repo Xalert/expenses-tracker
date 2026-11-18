@@ -6,6 +6,9 @@ import { resolveView, type ListParams } from "./list-params";
 /** Months offered by the no-JS month select: this many back from the current month, and one ahead. */
 export const NO_SCRIPT_MONTHS_BACK = 24;
 
+/** The no-JS month select's id: without JavaScript the Month chip's label is a link to it. */
+export const NO_SCRIPT_MONTH_ID = "no-script-month";
+
 /**
  * The month select's options, newest first: next month, the current month (value "" — the default, so the URL stays
  * clean), the 24 before it, the month in view if it is older, then "All time".
@@ -33,7 +36,8 @@ const selectClass =
  * select per chip (Month · Wallet · Type · Category) and "Apply"; the note search and the strip's currency ride
  * along as hidden fields. A date range or a selected day is replaced by the month chosen here. Empty choices
  * ("All wallets") submit empty values, which the page redirects away (`hasEmptyParams`). The `<style>` hides the
- * popover chips (`data-needs-js`), which cannot open without scripts; the month chip's ‹ › links still work.
+ * popover chips (`data-needs-js`), which cannot open without scripts; the month chip's ‹ › links still work, and its
+ * label becomes a link to the month select here (`NO_SCRIPT_MONTH_ID`).
  */
 export function NoScriptFilters({
   params,
@@ -66,7 +70,7 @@ export function NoScriptFilters({
       >
         <label className={field}>
           Month
-          <select name="month" defaultValue={monthValue} className={selectClass}>
+          <select id={NO_SCRIPT_MONTH_ID} name="month" defaultValue={monthValue} className={cn(selectClass, "scroll-mt-24")}>
             {noScriptMonthOptions(params, thisMonth).map((o) => (
               <option key={o.value || "current"} value={o.value}>
                 {o.label}

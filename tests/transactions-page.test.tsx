@@ -77,10 +77,10 @@ describe("NoScriptFilters", () => {
     expect(render({ month: "all" })).toMatch(/<option value="all" selected="">All time<\/option>/);
   });
 
-  it("the JS chips mark the listbox chips (not the month chip) as needing JavaScript", () => {
+  it("the JS chips mark every popover chip as needing JavaScript; the month chip's label falls back to a link", () => {
     const html = renderToStaticMarkup(
       <FilterChips
-        params={parseListParams({})}
+        params={parseListParams({ month: "2026-09" })}
         thisMonth="2026-11"
         wallets={wallets}
         categories={categories}
@@ -88,7 +88,15 @@ describe("NoScriptFilters", () => {
         showClear={false}
       />,
     );
-    expect(html.match(/data-needs-js=""/g)).toHaveLength(3);
+    // Month (its popover button only: the ‹ › links stay), Wallet, Type, Category.
+    expect(html.match(/data-needs-js=""/g)).toHaveLength(4);
+    // Without scripts the month label is a link to the <noscript> form's month select, with the same label.
+    const fallback = /<noscript><a href="#no-script-month"[^>]*>(.*?)<\/a><\/noscript>/.exec(html);
+    expect(fallback?.[1]).toContain('<span class="sr-only">Month: </span><span class="truncate">September 2026</span>');
+    expect(html.match(/<noscript>/g)).toHaveLength(1);
+    // The ‹ › step links are outside the hidden part.
+    expect(html).toMatch(/aria-label="Previous month, August 2026 \(\[\)"/);
+    expect(render({})).toContain('id="no-script-month"');
   });
 });
 
