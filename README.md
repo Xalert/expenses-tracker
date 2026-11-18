@@ -67,6 +67,7 @@ make down
 
 ## More
 
+- [`docs/IMPORTING.md`](docs/IMPORTING.md): importing and exporting your data — backups, the CSV, Spendee.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts, code
   layout.
 - [`docs/SPEC.md`](docs/SPEC.md): how everything works, including the

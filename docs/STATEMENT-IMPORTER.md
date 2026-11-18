@@ -9,7 +9,7 @@ page (source in `tools/statement-importer/index.html`) that:
 3. lets the user say which wallet each statement belongs to and which category each transaction gets — asking
    at first, then **remembering** those choices so the next statements need fewer answers,
 4. produces the app's own **transactions CSV** (`date,type,wallet,currency,amount,category,note,to_wallet,
-   to_currency,to_amount`, see `docs/SPEC.md` → "Import / export") which is then imported at `/data`.
+   to_currency,to_amount`; it leaves out the optional `group` and `archived` columns and wallet rows; see `docs/SPEC.md` → "Import / export") which is then imported at `/data`.
 
 The page runs only inside claude.ai (the `window.claude` runtime). Statements are read in the browser and sent
 to Claude; nothing from a statement is stored. Only the user's choices are stored (see "Memory").
@@ -58,7 +58,7 @@ their titles once statements are added, and each says "done" when it is.
 
 **1. Wallets & categories panel.** The tracker exports a small **context file** made for this page: `/data` →
 "Wallets & categories (JSON)" (`GET /api/export/context`: `{ app: "expenses-tracker", kind: "context", version: 1,
-exportedAt, wallets: [{ name, currency, archived }], categories: [{ name, kind }] }`). The panel takes it three
+exportedAt, wallets: [{ name, currency, archived, group }], categories: [{ name, kind }] }`). The panel takes it three
 ways: a file picker, drag-and-drop anywhere on the panel, or a paste box ("Copy to clipboard" on the tracker's /data page puts
 the same JSON on the clipboard, for phones and for when downloads are awkward). A full backup JSON
 (`/api/export/backup`) is still accepted — only `wallets[]` and `categories[]` are read from it — but the page

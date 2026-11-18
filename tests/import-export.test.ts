@@ -952,3 +952,17 @@ describe("archived dates in the backup", () => {
     expectProblems(bad, [{ path: "wallets[0].archivedAt", message: /ISO timestamp/ }]);
   });
 });
+
+describe("docs/IMPORTING.md", () => {
+  it("its example CSV imports as described", async () => {
+    const doc = (await import("node:fs")).readFileSync(new URL("../docs/IMPORTING.md", import.meta.url), "utf8");
+    const example = /```\n(date,type,[\s\S]*?)```/.exec(doc)![1];
+    const p = await previewImport(alice.id, example);
+    expect(p).toMatchObject({ ok: true, transactionsToAdd: 2, transfersToAdd: 2 });
+    expect(p.walletsToCreate.map((w) => [w.name, w.archived, w.described])).toEqual([
+      ["Main", false, true],
+      ["Old card", true, true],
+      ["Cash", false, false],
+    ]);
+  });
+});
