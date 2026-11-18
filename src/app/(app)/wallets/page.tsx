@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { PlusIcon, WalletIcon } from "@/components/shell/icons";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { ArchivedGroups } from "@/components/wallets/archived-groups";
+import { GroupDot } from "@/components/wallets/group-dot";
 import { GroupsCard } from "@/components/wallets/groups-card";
 import { ArchivedWallets, WalletGroup, type WalletCardMonth } from "@/components/wallets/wallet-cards";
 import { requireUser } from "@/lib/auth";
@@ -14,11 +16,14 @@ export const metadata: Metadata = { title: "Wallets" };
 
 export default async function WalletsPage() {
   const user = await requireUser();
-  const { groups, selected } = await getGroupScope();
+  const { groups, archivedGroups, selected } = await getGroupScope();
   const groupId = selected?.id;
   const all = await listWallets(user.id, { includeArchived: true, groupId });
-  const active = all.filter((w) => w.archivedAt === null);
-  const archived = all.filter((w) => w.archivedAt !== null);
+  // Wallets of an archived group are listed with their group under "Archived groups", not with the others.
+  const inArchivedGroup = all.filter((w) => w.groupArchived);
+  const shown = all.filter((w) => !w.groupArchived);
+  const active = shown.filter((w) => w.archivedAt === null);
+  const archived = shown.filter((w) => w.archivedAt !== null);
   const month = currentMonth();
 
   const months = new Map<number, WalletCardMonth>();
@@ -34,7 +39,7 @@ export default async function WalletsPage() {
   }
 
   const currencies = await listUserCurrencies(user.id, { groupId });
-  // With All and two or more groups, the cards sit under one heading per group (the groups come by name).
+  // With All and two or more groups, the cards sit under one heading per group (the groups come by position).
   const byGroup = !selected && groups.length >= 2;
 
   const newButton = (
@@ -77,8 +82,9 @@ export default async function WalletsPage() {
         </div>
       )}
 
-      <div className="mt-8">
-        <GroupsCard groups={groups.map(({ id, name, walletCount }) => ({ id, name, walletCount }))} />
+      <div className="mt-8 flex flex-col gap-4">
+        <GroupsCard groups={groups.map(({ id, name, walletCount, color }) => ({ id, name, walletCount, color }))} />
+        {!selected && <ArchivedGroups groups={archivedGroups} wallets={inArchivedGroup} />}
       </div>
     </>
   );
@@ -110,7 +116,11 @@ function CurrencySections({
     const own = wallets.filter((w) => w.groupId === g.id);
     return (
       <section key={g.id} aria-labelledby={`wallets-group-${g.id}`} className="flex flex-col gap-5">
-        <h2 id={`wallets-group-${g.id}`} className="border-b border-border px-1 pb-2 text-lg font-extrabold tracking-tight text-foreground">
+        <h2
+          id={`wallets-group-${g.id}`}
+          className="flex items-center gap-2 border-b border-border px-1 pb-2 text-lg font-extrabold tracking-tight text-foreground"
+        >
+          <GroupDot color={g.color} />
           {g.name}
         </h2>
         {own.length === 0 ? (

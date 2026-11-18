@@ -107,7 +107,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 |---|---|
 | `users` | `id`, `username` (the "user ID": unique, stored lowercased, required), `email` (nullable; unique when present, stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt` |
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
-| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
+| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `position` (int, display order), `color` (nullable, a palette key), `archivedAt` (nullable), `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
 | `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
 | `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `createdAt`; unique (`userId`, `kind`, `name`) |
 | `transfers` | `id`, `userId` → users (cascade), `date`, `note` (nullable), `createdAt` |
@@ -203,6 +203,7 @@ src/
   components/shell/  components/brand.tsx           # app shell pieces (top menu, account menu, group switcher, Add button, icons)
   lib/group-scope.ts  lib/group-cookie.ts           # the selected wallet group (cookie et_group); the cookie name is client-safe
   components/wallets/groups-card.tsx                # client: the "Groups" card of /wallets
+  components/wallets/archived-groups.tsx  group-dot.tsx  lib/group-colors.ts  # archived groups section, colour dot, palette
   components/charts/                                # DayBars, RunningLine (redesign)
   components/dashboard/                             # Overview pieces: MonthChart, WalletsCard / LatestCard, MonthSwitcher
   lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
@@ -884,8 +885,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       filter: "Nothing in December 2026." with "‹ November 2026" and "All time" buttons; otherwise "No matching
       transactions" + "Clear filters". The chip row shows whenever the user has any transaction.
 - **/wallets** — header with "+ New wallet" (opens the dialog). With a wallet group selected only its wallets show;
-  with All and two or more groups the cards sit under one heading per group (by name), and a "Groups" card (rename,
-  delete, "New group") closes the page. Active wallets grouped by currency: a group heading
+  with All and two or more groups the cards sit under one heading per group (by position, with the group's colour
+  dot), and a "Groups" card (order, rename / colour, archive, delete, "New group") plus, with All, a closed "Archived
+  groups" section close the page. Active wallets grouped by currency: a group heading
   (code, currency name, group total) over a grid of cards — name, entry count, balance, this month's change
   (coloured), and a small line of the balance through the month (flat and muted when nothing changed). Cards link
   to `/wallets/<id>`. Below, an "Archived" list (name, currency, entry count, balance, an Unarchive button).
@@ -1124,7 +1126,8 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 - **Backup (JSON)** — the whole account, lossless: `{ app: "expenses-tracker", version: 1, exportedAt, wallets[],
   categories[], transactions[], transfers[] }`. Wallets carry name, currency, initial balance and archived flag;
   an optional `group` (the wallet group's name; absent in files written before wallet groups, and the version stays
-  1); categories name + kind; transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
+  1); an optional top-level `groups[]` (name, colour, archived flag, in display order; absent in older files — see
+  "Wallet groups"); categories name + kind; transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
@@ -1478,12 +1481,38 @@ Purpose: keep personal and business money apart in one account and look at each 
 - A **wallet group** belongs to one user and has a name (same rules as other names: `normalizeName`, 1–40
   characters) that is unique per user **ignoring case**. Every wallet belongs to exactly one group
   (`wallets.group_id`, NOT NULL).
-- **Every user has at least one group.** Registration creates the group `Personal`; the migration creates
-  `Personal` for every existing user and puts all their wallets in it. The **default group** is the user's oldest
-  group (lowest id); it is where a wallet goes when nobody chose a group (service default, import).
+- **Every user has at least one unarchived group.** Registration creates the group `Personal`. The **default
+  group** is the user's oldest unarchived group (lowest id); it is where a wallet goes when nobody chose a group
+  (service default, import).
+- Groups have an **order** (`position`): every list of groups (switcher, pickers, Wallets page) is by position, then
+  id. A new group goes last; Move up / Move down swap a group with its neighbour among the groups of the same archived
+  state (nothing happens at either end). Migration `0001` numbered existing groups 1..n per user by name ignoring
+  case, i.e. the order they were shown in before.
+- A group may have a **colour** from a fixed palette (`GROUP_COLORS` in `src/lib/group-colors.ts`: red, amber, green,
+  teal, blue, violet — theme tokens `--group-<name>` in `globals.css`, light and dark), or none. It is chosen when the
+  group is created or renamed and shown as a small dot (`GroupDot`, decorative) next to the group's name: the
+  switcher (for the selected group: an `<option>` cannot hold one), the Wallets page group headings, the Groups card
+  and the Archived groups section. The wallet pickers (native `<select>` / `<optgroup>`, pills with a text suffix)
+  show no dot.
 - Groups can be created, renamed and deleted. Only an **empty** group (no wallets, archived ones included) can be
-  deleted, and never the user's last group (CONFLICT, with a message that says what to do: move or delete the
-  wallets first). There is no archive state for groups.
+  deleted, and never the user's last unarchived group (CONFLICT, with a message that says what to do: move or delete
+  the wallets first / create or unarchive another group). An empty archived group can always be deleted.
+- Groups can be **archived** and unarchived; never the user's last unarchived group (CONFLICT on `groupId`). An
+  archived group is a hidden group, the same idea as an archived wallet:
+  - it leaves the switcher and the group pickers (wallet form; the edit form still offers the wallet's own archived
+    group, labelled "(archived)", so saving never forces the wallet out); a new wallet or a moved one cannot go into
+    it (VALIDATION on `groupId`), nor can an import target it;
+  - its wallets keep their own `archivedAt` but **count as archived wherever archived wallets are hidden**:
+    `listWallets` without `includeArchived` leaves them out (so the Overview wallets card and balance totals, the
+    month income / expense of the Overview totals, and the entry pickers skip them), and the wallet page shows a
+    notice instead of the add buttons;
+  - their history keeps counting wherever an archived wallet's history counts (Transactions list and day totals,
+    month chart, insights, category usage, exports) — archiving a group, like archiving a wallet, never changes a
+    past total;
+  - a selected scope pointing at a group that is archived falls back to **All** (`getGroupScope`, and
+    `selectGroupAction` refuses one);
+  - the Wallets page lists archived groups (with All) in a closed "Archived groups" section, each with its wallets,
+    Unarchive and, when empty, Delete.
 - A wallet's group can be changed at any time (wallet edit form); it moves the wallet with all its history.
   Nothing else about a transaction depends on the group.
 - **Categories stay shared** by all groups. **Transfers between groups are allowed** (a business wallet paying a
@@ -1492,18 +1521,20 @@ Purpose: keep personal and business money apart in one account and look at each 
 
 ### Selecting a group (the scope)
 
-- The top bar shows a **group switcher** next to the account menu, **only when the user has two or more groups**:
-  "All groups", then each group by name. With one group nothing in the interface changes (no switcher, no group
-  field, no headings).
+- The top bar shows a **group switcher** next to the account menu, **only when the user has two or more unarchived
+  groups**: "All groups", then each unarchived group by position, with the selected group's colour dot in front.
+  With one unarchived group nothing in the interface changes (no switcher, no group field, no headings).
 - The choice is stored in the cookie `et_group` (the group id; no cookie, an empty value, or an id that is not one
-  of the user's groups means **All**). `httpOnly`, `sameSite=lax`, `secure` like the session cookie
+  of the user's unarchived groups means **All**). `httpOnly`, `sameSite=lax`, `secure` like the session cookie
   (`shouldUseSecureCookie`), `path=/`, one year. Set by `selectGroupAction` (`src/app/(app)/actions.ts`), which
   then calls `revalidatePath("/", "layout")` and goes back to the page it came from (`returnTo` through
   `safeReturnTo`). Works without JavaScript (a form with a submit button; with JavaScript the select submits on
   change and the button is visually hidden).
-- `getGroupScope(): Promise<{ groups: WalletGroupView[]; selected: WalletGroupView | null }>` in
-  `src/lib/group-scope.ts` (server-only, React `cache`, calls `requireUser()`) is the one place that reads the cookie.
-  Pages pass `selected?.id` to the services as `groupId`.
+- `getGroupScope(): Promise<{ groups: WalletGroupView[]; archivedGroups: WalletGroupView[]; selected:
+  WalletGroupView | null }>` in `src/lib/group-scope.ts` (server-only, React `cache`, calls `requireUser()`) is the
+  one place that reads the cookie. `groups` are the unarchived groups (what everything that offers a group uses),
+  `archivedGroups` the archived ones, both by position; the pure `resolveGroupScope(all, cookieId)` does the split
+  and the fallback. Pages pass `selected?.id` to the services as `groupId`.
 
 What the scope narrows:
 
@@ -1511,9 +1542,9 @@ What the scope narrows:
 |---|---|
 | Overview | wallets card, totals, month chart, insights, latest entries, the "All in <currency>" conversion and the currency list: only wallets of the group. The page title area names the group. |
 | Transactions | the list, day totals, the month strip, the currency picker and the wallet filter's options: only the group's wallets. **An explicit `wallet` filter wins**: `?wallet=<id>` shows that wallet even when it is in another group. The CSV export link carries the same filters and also `group=<id>`. |
-| Wallets | only the group's wallets (active and archived). With **All** and two or more groups, the cards are shown under one heading per group (group order: by name). |
+| Wallets | only the group's wallets (active and archived). With **All** and two or more groups, the cards are shown under one heading per group (group order: by position; wallets of archived groups are only in the "Archived groups" section). |
 | Categories | the usage counts and month totals count only the group's wallets. The list of categories itself is not narrowed. |
-| Add / edit entry, wallet pickers | **not narrowed**: every active wallet is offered (with two or more groups, in one `<optgroup>` per group), so a cross-group transfer is possible. The default wallet of a new entry is the first active wallet of the selected group, if it has one. |
+| Add / edit entry, wallet pickers | **not narrowed**: every active wallet of an unarchived group is offered (with two or more unarchived groups, in one `<optgroup>` per group, by position), so a cross-group transfer is possible. The default wallet of a new entry is the first active wallet of the selected group, if it has one. |
 | Wallet page `/wallets/[id]`, edit pages | not narrowed (they show one wallet / entry). |
 | Exports | backup and context export: always the whole account. Transactions CSV: narrowed only by an explicit `group` query parameter. |
 
@@ -1521,28 +1552,40 @@ What the scope narrows:
 
 | table | columns |
 |---|---|
-| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` |
+| `wallet_groups` | `id`, `userId` → users (cascade), `name`, `position` (int NOT NULL, default 0), `color` (text, nullable), `archivedAt` (timestamptz, nullable), `createdAt`; index on `userId` |
 | `wallets` | + `groupId` → wallet_groups (**restrict**), NOT NULL; index on `groupId` |
 
-There is no separate migration for groups any more: the Postgres schema starts at `drizzle/0000_*` with
-`wallet_groups` and `wallets.group_id` (NOT NULL) in place. (The SQLite-era `0002` that back-filled a `Personal`
+The Postgres schema starts at `drizzle/0000_*` with `wallet_groups` and `wallets.group_id` (NOT NULL) in place;
+`drizzle/0001_wallet-groups-order-colour-archive.sql` adds `position`, `color` and `archived_at` and back-fills
+`position` per user (1..n by `lower(name)`, then id: the old display order, hand-written `UPDATE … FROM (row_number()
+…)`). `color` is not constrained in the database (the service checks it against the palette; a stored value the
+palette no longer has reads as none). (The SQLite-era `0002` that back-filled a `Personal`
 group per user was removed with the SQLite migrations; there is no upgrade path from those databases.)
 
 ### Services
 
-`src/server/wallet-groups.ts`: `WalletGroupView = { id; name; walletCount; createdAt }`;
-`listWalletGroups(userId): WalletGroupView[]` (by name, case-insensitive, then id);
-`getWalletGroup(userId, groupId): WalletGroupView | null`; `getDefaultGroupId(userId, tx?): number`;
-`createWalletGroup(userId, { name })`; `renameWalletGroup(userId, groupId, { name })`;
-`deleteWalletGroup(userId, groupId): void`; `seedDefaultGroup(userId, tx?)` (used by `registerUser`);
-internal `getOwnedGroupRow(userId, groupId, tx?, field = "groupId")`. Errors use the fields `name` and `groupId`.
+`src/server/wallet-groups.ts`: `WalletGroupView = { id; name; position; color: GroupColor | null; archivedAt: Date |
+null; walletCount; createdAt }`; `listWalletGroups(userId): WalletGroupView[]` (all groups, archived included, by
+position, then id); `getWalletGroup(userId, groupId): WalletGroupView | null` (archived included);
+`getDefaultGroupId(userId, tx?): number` (oldest unarchived); `createWalletGroup(userId, { name, color? })` (last in
+the order); `renameWalletGroup(userId, groupId, { name, color? })` (`color` omitted = unchanged, `null` / `""` =
+none); `moveWalletGroup(userId, groupId, "up" | "down")` (swap with the neighbour of the same archived state; a no-op
+at the ends; tied positions from old rows are renumbered 1..n first); `archiveWalletGroup(userId, groupId)` /
+`unarchiveWalletGroup(userId, groupId)` (idempotent; archive is CONFLICT for the last unarchived group);
+`deleteWalletGroup(userId, groupId): void`; `seedDefaultGroup(userId, tx?)` (used by `registerUser`); internal
+`getOwnedGroupRow(userId, groupId, tx?, field = "groupId")`, `getOpenGroupRow(userId, groupId, tx?, keepGroupId?)`
+(also VALIDATION for an archived group other than `keepGroupId`), `nextGroupPosition(tx, userId)` and the SQL
+fragment `walletInOpenGroupSql`. The mutations that check other groups (create, rename, move, archive, delete) lock
+the user's group rows (`select … for update`) first. Errors use the fields `name`, `color`, `direction` and `groupId`.
 
 Changes to existing services (all `groupId` options are optional; omitted = all groups; a group of another user
 behaves like an empty group — no rows, never an error, except in mutations, which throw NOT_FOUND on `groupId`):
 
-- `WalletView` gets `groupId` and `groupName`. `listWallets(userId, { includeArchived?, groupId? })`.
-- `createWallet(userId, { name, currency, initialBalanceMinor, groupId? })` (omitted → default group);
-  `updateWallet(userId, walletId, { name, initialBalanceMinor, groupId? })` (omitted → unchanged).
+- `WalletView` gets `groupId`, `groupName`, `groupPosition` and `groupArchived`. `listWallets(userId, {
+  includeArchived?, groupId? })`; without `includeArchived` it also leaves out the wallets of archived groups.
+- `createWallet(userId, { name, currency, initialBalanceMinor, groupId? })` (omitted → default group; an archived
+  group is VALIDATION on `groupId`); `updateWallet(userId, walletId, { name, initialBalanceMinor, groupId? })`
+  (omitted → unchanged; moving into an archived group is VALIDATION, keeping the current one is fine).
 - `TransactionFilters.groupId?`, used by `listTransactions`, `listDayTotals`, `filterConditions` and the CSV
   export; ignored when `walletId` is set.
 - `getDashboard(userId, { month?, groupId? })`; `getMonthTimeline` / `getMonthInsights` opts `groupId?`
@@ -1553,7 +1596,8 @@ behaves like an empty group — no rows, never an error, except in mutations, wh
   says which group. Backup JSON stays `version: 1` and gains an **optional** `group` (name) per wallet: the export
   writes it; the import puts a created wallet into the group of that name (matched ignoring case; created if
   missing and listed in the preview as a group to create), else into the target group. Existing wallets are never
-  moved by an import.
+  moved by an import. The backup also gains an **optional** top-level `groups: [{ name, color?, archived? }]` in
+  display order (see "As built (order, colour, archive)").
 - `registerUser` seeds `Personal` in the same DB transaction as the categories. The demo data
   (`src/server/maintenance.ts`) has two groups, `Personal` and `Business`, with at least one business wallet
   and some business entries plus one transfer between the groups.
@@ -1599,18 +1643,24 @@ As built (step 2, interface):
 - Transactions: `anyAtAll` is scoped too, so an empty group shows "No transactions yet" rather than "No matching".
   The inline row editor gets every wallet (`toWalletOptions`), not the narrowed filter options. `exportCsvHref(params,
   thisMonth, groupId?)` appends `group=<id>`.
-- Entry pickers: `WalletOption.groupName` is set only with two or more groups; the transfer From / To selects render
-  one `<optgroup>` per group (ordered by group name). The expense / income picker is a row of pills, which cannot be
+- Entry pickers: `WalletOption.groupName` is set only with two or more unarchived groups; the transfer From / To
+  selects render one `<optgroup>` per group (ordered by group position). A wallet of an archived group that an
+  existing entry uses is offered as archived. The expense / income picker is a row of pills, which cannot be
   grouped, so each pill gets the group name as a muted suffix ("Till · Business"). `walletOptions` / `toWalletOptions`
   live in `transactions/form-options.ts`. `NewEntry` is async: a `wallet` search parameter wins, else the first active
   wallet of the selected group (by name), else the form's own default.
-- Wallet form: `WalletForm` takes `groups` and `defaults.groupId`; the select is required and echoed after an error
+- Wallet form: `WalletForm` takes `groups` (the unarchived groups by position; on edit plus the wallet's own group
+  when it is archived, labelled "Name (archived)") and `defaults.groupId`; the select is required and echoed after an error
   (the fields remount on every result, so `defaultValue` is applied). The parsers read an optional `groupId`: absent or
   empty → undefined, not a positive integer → field error "Choose a group.", an unknown / foreign id → the service's
   NOT_FOUND on `groupId`. `NewWallet` and `EditWallet` are async server components (they read the scope).
-- Groups card (`components/wallets/groups-card.tsx`, client): rows are `ExpandableRow`s with the name and "N wallets";
-  the panel renames in place and offers "Delete <name>" (a `confirm()`) only for an empty group that is not the last,
-  otherwise it says why not. Actions: `createGroupAction(prev, formData)`, `renameGroupAction(groupId, prev, formData)`,
+- Groups card (`components/wallets/groups-card.tsx`, client): the unarchived groups by position; rows are
+  `ExpandableRow`s with the colour dot, the name and "N wallets", and (from two groups) Move up / Move down icon
+  buttons beside the row's button (two plain `<form action={moveGroupAction.bind(null, id, dir)}>`, so they work
+  without JavaScript; disabled at the ends). The panel renames in place and picks the colour (`ColorChoice`: radios
+  named `color`, "None" plus the palette), offers "Archive <name>" (a `confirm()`) unless it is the last unarchived
+  group, and "Delete <name>" (a `confirm()`) only for an empty group that is not the last unarchived one, otherwise
+  it says why not. The "New group" form has the same colour radios. Actions: `createGroupAction(prev, formData)`, `renameGroupAction(groupId, prev, formData)`,
   `deleteGroupAction(groupId)`, all `revalidatePath("/", "layout")`, success messages "Added the group “X”." /
   "Renamed to “X”." / "Deleted the group “X”.". No new route, so no new `@modal` page.
 - Import: `previewImportAction` / `runImportAction` set `opts.groupId` from the scope. `ImportPanel` takes `groupCount`
@@ -1618,16 +1668,38 @@ As built (step 2, interface):
   `PreviewCard` takes `groupCount`: a created wallet is shown "Till · EUR in Business" from two groups or when a group
   is created; "New groups: …" is listed whenever `groupsToCreate` is non-empty and counts as something to import.
 
+As built (order, colour, archive):
+
+- Actions in `src/app/(app)/wallets/actions.ts`: `createGroupAction` / `renameGroupAction` read `color` through
+  `groupColorField` (no field → undefined, i.e. unchanged on rename; `""` → none); `moveGroupAction(groupId,
+  direction)` (a plain form action returning nothing: moves, `revalidatePath("/", "layout")`, `redirect("/wallets")`;
+  a missing group or a bad direction just reloads); `archiveGroupAction(groupId)` / `unarchiveGroupAction(groupId)`
+  (FormState, "Archived the group “X”." / "Unarchived the group “X”."). All revalidate the layout.
+- Backup: `buildBackup` writes `groups: [{ name, color, archived }]` in position order (array order = position). The
+  backup parser reads it when present (`ParsedFile.groups`, backup only): names normalized like the service (a bad
+  one is a problem on `groups[i].name`), duplicates ignoring case dropped (first wins), an unknown colour reads as
+  none. On import every listed group the account lacks is created — empty ones too — before the groups only wallets
+  name, after the account's own groups in the file's order, with its colour and archived state; groups the account
+  already has are never changed (order, colour, archived: "import adds, never changes"). Files without `groups`
+  import as before.
+- `getDashboard`'s month flows use `walletInOpenGroupSql` next to `archivedAt is null`, so the Overview totals skip the
+  wallets of archived groups exactly as they skip archived wallets.
+
 ### Screens
 
 - **Group switcher** (`src/components/shell/group-switcher.tsx`): described above. Label "Group" for screen
-  readers; the visible control shows the selected group's name or "All groups".
+  readers; the visible control shows the selected group's name or "All groups", with the selected group's colour dot
+  in front. It gets the unarchived groups (`{ id, name, color }`) by position.
 - **Wallet form** (new and edit, dialog and full page — change the body components): a "Group" select (field
   `groupId`) when the user has two or more groups, default = the selected group, else the default group. With one
   group, no field (the service default applies on create; edit leaves it unchanged).
 - **Wallets page**: a "Groups" card below the wallet cards, always shown (this is where the second group is made):
-  each group with its wallet count, inline rename and delete in the style of the Categories rows (delete only
-  offered when empty and not the last group), and a "New group" input. Group actions live in
+  each unarchived group with its colour dot, wallet count and Move up / Move down, inline rename / colour, archive
+  and delete in the style of the Categories rows (archive and delete only offered when allowed), and a "New group"
+  input with colour radios. With All, below it a closed `<details>` "Archived groups · N" (`ArchivedGroups`, server):
+  each archived group by position with its dot, wallet count, Move up / down among the archived groups, Unarchive,
+  Delete when empty (a `confirm()`), and its wallets (links to the wallet page, currency, entries, balance,
+  "archived" for a wallet that is archived itself). Group actions live in
   `src/app/(app)/wallets/actions.ts` and call `revalidatePath("/", "layout")` (the switcher is in the layout).
 - **Overview / Transactions / Categories**: as in the scope table. When a group is selected and it has no
   wallets, the pages show their normal empty states.

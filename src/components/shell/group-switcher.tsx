@@ -4,9 +4,11 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useRef, useSyncExternalStore } from "react";
 import { selectGroupAction } from "@/app/(app)/actions";
 import { Select } from "@/components/ui";
+import { GroupDot } from "@/components/wallets/group-dot";
 
 export type GroupSwitcherProps = {
-  groups: { id: number; name: string }[];
+  /** The unarchived groups, by position (archived groups are never offered). */
+  groups: { id: number; name: string; color?: string | null }[];
   /** The selected group's id, or null for "All groups". */
   selectedId: number | null;
 };
@@ -17,6 +19,7 @@ const noop = () => () => {};
  * The top bar's wallet-group switcher: "All groups" plus each group. A plain form posting to `selectGroupAction`, so
  * it works without JavaScript (a visible "Go" button); with JavaScript the select submits on change and the button
  * is visually hidden. Renders nothing for fewer than two groups. The current path and query go along as `returnTo`.
+ * The selected group's colour shows as a dot in front of the select (an <option> cannot hold one).
  */
 export function GroupSwitcher({ groups, selectedId }: GroupSwitcherProps) {
   const pathname = usePathname();
@@ -32,6 +35,7 @@ export function GroupSwitcher({ groups, selectedId }: GroupSwitcherProps) {
     () => false,
   );
   if (groups.length < 2) return null;
+  const selected = selectedId === null ? null : groups.find((g) => g.id === selectedId);
 
   return (
     <form ref={formRef} action={selectGroupAction} className="flex shrink-0 items-center gap-2">
@@ -39,6 +43,7 @@ export function GroupSwitcher({ groups, selectedId }: GroupSwitcherProps) {
       <label htmlFor="group-switcher" className="sr-only">
         Group
       </label>
+      <GroupDot color={selected?.color} />
       <Select
         id="group-switcher"
         name="groupId"

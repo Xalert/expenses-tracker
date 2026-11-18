@@ -53,6 +53,11 @@ export const walletGroups = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /** Display order within the user's groups (ascending, then id); new groups go last. */
+    position: integer("position").notNull().default(0),
+    /** One of `GROUP_COLORS` (src/lib/group-colors.ts) or null for none; checked by the service. */
+    color: text("color"),
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: createdAt(),
   },
   (t) => [index("wallet_groups_user_idx").on(t.userId)],

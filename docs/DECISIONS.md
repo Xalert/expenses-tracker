@@ -352,6 +352,15 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 | Entry forms and the inline row editor offer every wallet, not just the selected group's | A transfer can cross groups; the selected group only decides the default wallet | built (step 2) |
 | The Groups card is on the Wallets page, rows open in place like Categories, and deleting is only offered when it can succeed (the panel says why not otherwise) | No new route or dialog; same interaction as categories | built (step 2) |
 | The demo data has Personal and Business, a business wallet with entries and one transfer between the groups | Lets the scope be seen working on `npm run dev:demo` | built (step 1) |
+| *(2026-11-18)* Groups are ordered by a `position` column; new groups go last; Move up / Move down buttons swap with the neighbour of the same archived state; migration `0001` back-fills 1..n by name ignoring case | Keeps today's order on upgrade; buttons (not drag and drop) work without JavaScript and by keyboard; active and archived groups are shown apart, so each list is ordered on its own | built |
+| *(2026-11-18)* Group colour: optional, one of six palette tokens (`--group-red` … `--group-violet`, light and dark in `globals.css`), checked in the service, not in the database; shown as a decorative dot next to the name | Same theme-token rule as every other colour; a fixed palette keeps the dots legible in both themes; without a DB check a palette change needs no migration (unknown values read as none) | built |
+| *(2026-11-18)* No colour dot inside the wallet pickers or the switcher's options | Native `<option>` / `<optgroup>` cannot hold one, and the expense / income pills already carry the group as text; the switcher shows the selected group's dot in front of the select | built |
+| *(2026-11-18)* An archived group's wallets count as archived where archived wallets are hidden (active lists, Overview balance and month totals, entry pickers, wallet page add buttons) but their history keeps counting where an archived wallet's does (Transactions, insights, category usage, exports) | The planner proposed leaving them out of every "All groups" total and list; that would make archiving a group change past totals, which contradicts "groups do not change any balance or total rule" and the archived-wallet rule (history stays). Treating them like archived wallets is the least surprising reading and needs no change to the transaction, insight or category services | built |
+| *(2026-11-18)* An archived group leaves the switcher and the group pickers; a selected scope or `selectGroupAction` naming one means All; a wallet cannot be created in or moved into one (the edit form still offers the wallet's own archived group); an import cannot target one | The planner's proposal; mirrors "archived wallets are hidden from pickers" and keeps a stale cookie harmless | built |
+| *(2026-11-18)* The last unarchived group can be neither archived nor deleted; an empty archived group can always be deleted; the default group is the oldest unarchived one | There is always somewhere for a new wallet to go and something for the switcher-less interface to show | built |
+| *(2026-11-18)* The services do not refuse new entries on a wallet whose group is archived (only the pickers stop offering it) | SPEC: "nothing else about a transaction depends on the group"; changing the transaction / transfer rules is outside the groups area and the UI already prevents it | built |
+| *(2026-11-18)* Archived groups are shown (with All) in a closed "Archived groups" `<details>` on the Wallets page with their wallets, Unarchive and Delete when empty; the Groups card lists only unarchived groups | Same pattern as the "Archived" wallets list; renaming an archived group means unarchiving it first, which keeps the card simple | built |
+| *(2026-11-18)* The backup gains an optional top-level `groups: [{ name, color, archived }]` in display order; an import creates every listed group the account lacks (empty ones too), after the account's own groups, and never changes an existing group | Round-trips order, colour and archived state without a version bump; old files still import; "import adds, never changes" | built |
 
 ### Process
 
@@ -423,7 +432,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   different date, so they would not be recognised as duplicates.
 - **A category's kind cannot be changed**, and categories cannot be archived.
 - **A CSV cannot carry initial balances or archived state**; wallets it creates start at zero.
-- **Wallet groups have no archive state, no ordering and no colour**; they are listed by name.
+- **An archived group cannot be renamed or recoloured without unarchiving it first**, and the services still accept new
+  entries on a wallet of an archived group (only the pickers hide it).
 - **The context export (Statement Importer) and the transactions CSV carry no group.** The CSV can be narrowed by
   `group=<id>` on the export URL but has no group column, so a CSV import always puts new wallets in the target
   group; only the backup round-trips groups.
@@ -516,6 +526,12 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   its look at 375px (top bar width with a long group name; the select is capped at `max-w-44`), the no-JS "Go"
   button, focus after a group rename / delete, the `<optgroup>` pickers on a real phone, and the Overview with the
   group name in the heading.
+
+- **Wallet group order, colour and archive** were covered by tests (services, the `0001` back-fill on PGlite, render to
+  static markup, actions with mocked Next APIs) and typecheck / lint only; not checked in a browser: the colour dots
+  in both themes, the Move up / down buttons beside an open row at 375px, the colour radios' focus ring
+  (`has-focus-visible`), the no-JS Move submit (a bound Server Action in a client component) and the closed
+  "Archived groups" section. The migration has not been run on the real development database.
 
 - **Bind mounts on a real Linux host.** The "folder must be owned by uid 1000" failure and its fixes were only
   simulated on Docker Desktop.

@@ -73,10 +73,11 @@ describe("wallet-groups service", () => {
     expect(await listWalletGroups(u.id)).toHaveLength(1);
   });
 
-  it("creates, lists (by name ignoring case, with wallet counts) and renames", async () => {
+  it("creates (last in the order), lists (by position, with wallet counts) and renames", async () => {
     await createWalletGroup(alice.id, { name: "  business   stuff " });
     await createWalletGroup(alice.id, { name: "Archive" });
-    expect((await listWalletGroups(alice.id)).map((g) => g.name)).toEqual(["Archive", "business stuff", "Personal"]);
+    expect((await listWalletGroups(alice.id)).map((g) => g.name)).toEqual(["Personal", "business stuff", "Archive"]);
+    expect((await listWalletGroups(alice.id)).map((g) => g.position)).toEqual([1, 2, 3]);
     const g = (await listWalletGroups(alice.id))[1];
     await createWallet(alice.id, { name: "W", currency: "EUR", initialBalanceMinor: 0, groupId: g.id });
     expect(await getWalletGroup(alice.id, g.id)).toMatchObject({ walletCount: 1, name: "business stuff" });
@@ -312,7 +313,7 @@ describe("import and backup with groups", () => {
     expect(r.imported).toBe(true);
     const byName = Object.fromEntries((await listWallets(bob.id)).map((w) => [w.name, w.groupName]));
     expect(byName).toEqual({ Home: "Personal", Shop: "Business", "Shop USD": "Business" });
-    expect((await listWalletGroups(bob.id)).map((g) => g.name)).toEqual(["Business", "Personal"]);
+    expect((await listWalletGroups(bob.id)).map((g) => g.name)).toEqual(["Personal", "Business"]);
     // Same balances as the original.
     expect((await listWallets(bob.id)).find((w) => w.name === "Shop")!.balanceMinor).toBe((await getWallet(alice.id, shop.id))!.balanceMinor);
     expect((await listWallets(bob.id)).find((w) => w.name === "Home")!.balanceMinor).toBe((await getWallet(alice.id, home.id))!.balanceMinor);
@@ -324,7 +325,7 @@ describe("import and backup with groups", () => {
     await createWalletGroup(bob.id, { name: "BUSINESS" });
     const r = await runImport(bob.id, JSON.stringify(backup));
     expect(r.imported).toBe(true);
-    expect((await listWalletGroups(bob.id)).map((g) => g.name)).toEqual(["BUSINESS", "Personal"]);
+    expect((await listWalletGroups(bob.id)).map((g) => g.name)).toEqual(["Personal", "BUSINESS"]);
     expect((await listWallets(bob.id)).find((w) => w.name === "Shop")!.groupName).toBe("BUSINESS");
 
     // An old backup (no `group`) goes into the target group.

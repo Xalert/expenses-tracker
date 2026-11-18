@@ -5,6 +5,7 @@ import { categories, transactions, wallets } from "@/db/schema";
 import { currentMonth, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { listTransactions, type TransactionView } from "./transactions";
+import { walletInOpenGroupSql } from "./wallet-groups";
 import { listWallets, type WalletView } from "./wallets";
 
 export type CurrencyTotals = { currency: string; balanceMinor: number; incomeMinor: number; expenseMinor: number };
@@ -46,6 +47,7 @@ export async function getDashboard(
     eq(transactions.userId, userId),
     eq(wallets.userId, userId),
     isNull(wallets.archivedAt),
+    walletInOpenGroupSql, // a wallet in an archived group counts as archived
     opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId),
     gte(transactions.date, from),
     lte(transactions.date, to),

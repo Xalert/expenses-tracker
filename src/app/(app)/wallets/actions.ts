@@ -12,8 +12,23 @@ import {
   unarchiveWallet,
   updateWallet,
 } from "@/server/wallets";
-import { createWalletGroup, deleteWalletGroup, getWalletGroup, renameWalletGroup } from "@/server/wallet-groups";
-import { groupNameField, parseCreateWallet, parseGroupId, parseUpdateWallet, parseWalletId } from "./form-input";
+import {
+  archiveWalletGroup,
+  createWalletGroup,
+  deleteWalletGroup,
+  getWalletGroup,
+  moveWalletGroup,
+  renameWalletGroup,
+  unarchiveWalletGroup,
+} from "@/server/wallet-groups";
+import {
+  groupColorField,
+  groupNameField,
+  parseCreateWallet,
+  parseGroupId,
+  parseUpdateWallet,
+  parseWalletId,
+} from "./form-input";
 
 const NOT_FOUND_STATE: FormState = { message: "Wallet not found." };
 
@@ -131,7 +146,8 @@ export async function createGroupAction(_prev: FormState, formData: FormData): P
   const values = formValues(formData);
   let name: string;
   try {
-    name = (await createWalletGroup(user.id, { name: groupNameField(formData) })).name;
+    name = (await createWalletGroup(user.id, { name: groupNameField(formData), color: groupColorField(formData) ?? null }))
+      .name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -139,7 +155,7 @@ export async function createGroupAction(_prev: FormState, formData: FormData): P
   return { ok: true, message: `Added the group “${name}”.` };
 }
 
-/** Bind the group id. Stays on the page. */
+/** Bind the group id. Renames and sets the colour (a form without a `color` field keeps it). Stays on the page. */
 export async function renameGroupAction(groupIdArg: number, _prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const values = formValues(formData);
@@ -147,7 +163,8 @@ export async function renameGroupAction(groupIdArg: number, _prev: FormState, fo
   if (!groupId) return { ...GROUP_NOT_FOUND_STATE, values };
   let name: string;
   try {
-    name = (await renameWalletGroup(user.id, groupId, { name: groupNameField(formData) })).name;
+    name = (await renameWalletGroup(user.id, groupId, { name: groupNameField(formData), color: groupColorField(formData) }))
+      .name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
@@ -171,4 +188,53 @@ export async function deleteGroupAction(groupIdArg: number): Promise<FormState> 
   }
   revalidateGroups();
   return { ok: true, message: `Deleted the group “${group.name}”.` };
+}
+
+/**
+ * Bind the group id and "up" / "down". A plain form action (it works without JavaScript): moves the group one place
+ * among the groups of the same archived state (nothing at either end), then reloads /wallets. A missing group or a
+ * bad direction changes nothing.
+ */
+export async function moveGroupAction(groupIdArg: number, direction: string): Promise<void> {
+  const user = await requireUser();
+  const groupId = parseGroupId(groupIdArg);
+  if (groupId && (direction === "up" || direction === "down")) {
+    try {
+      await moveWalletGroup(user.id, groupId, direction);
+    } catch {
+      // NOT_FOUND (deleted meanwhile): the reloaded page shows the current order.
+    }
+  }
+  revalidateGroups();
+  redirect("/wallets");
+}
+
+/** Bind the group id. Refused (CONFLICT) for the last unarchived group. Stays on the page. */
+export async function archiveGroupAction(groupIdArg: number): Promise<FormState> {
+  const user = await requireUser();
+  const groupId = parseGroupId(groupIdArg);
+  if (!groupId) return GROUP_NOT_FOUND_STATE;
+  let name: string;
+  try {
+    name = (await archiveWalletGroup(user.id, groupId)).name;
+  } catch (err) {
+    return serviceErrorState(err);
+  }
+  revalidateGroups();
+  return { ok: true, message: `Archived the group “${name}”.` };
+}
+
+/** Bind the group id. Stays on the page. */
+export async function unarchiveGroupAction(groupIdArg: number): Promise<FormState> {
+  const user = await requireUser();
+  const groupId = parseGroupId(groupIdArg);
+  if (!groupId) return GROUP_NOT_FOUND_STATE;
+  let name: string;
+  try {
+    name = (await unarchiveWalletGroup(user.id, groupId)).name;
+  } catch (err) {
+    return serviceErrorState(err);
+  }
+  revalidateGroups();
+  return { ok: true, message: `Unarchived the group “${name}”.` };
 }

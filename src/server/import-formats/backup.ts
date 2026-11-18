@@ -3,6 +3,7 @@ import { BACKUP_APP, BACKUP_VERSION, backupSchema, formatIssuePath } from "@/lib
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidDate } from "@/lib/dates";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
+import { isGroupColor } from "@/lib/group-colors";
 import { currencyDecimals, parseAmount } from "@/lib/money";
 import { normalizeName, normalizeNote } from "../_validate";
 import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
@@ -104,6 +105,22 @@ function parseBackup(body: string): ParsedFile {
       key: walletKey(name, currency),
     });
   });
+
+  // Groups (optional list; two spellings of one name ignoring case become one, the first wins)
+  if (data.groups) {
+    const seen = new Set<string>();
+    const groups: NonNullable<ParsedFile["groups"]> = [];
+    data.groups.forEach((g, i) => {
+      const name = check(
+        () => normalizeName(g.name, "name", MAX_GROUP_NAME_LENGTH),
+        (m) => problem(`groups[${i}].name`, m),
+      );
+      if (name === undefined || seen.has(name.toLowerCase())) return;
+      seen.add(name.toLowerCase());
+      groups.push({ name, color: isGroupColor(g.color) ? g.color : null, archived: g.archived });
+    });
+    out.groups = groups;
+  }
 
   // Categories (two file categories with the same kind + name ignoring case become one)
   const categoryIndex = new Map<number, number>();

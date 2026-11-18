@@ -4,6 +4,7 @@ import { parseCsv, type CsvRecord } from "@/lib/csv";
 import { isValidCurrency } from "@/lib/currencies";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { isServiceError } from "@/lib/errors";
+import type { GroupColor } from "@/lib/group-colors";
 import { currencyDecimals } from "@/lib/money";
 import { MAX_CATEGORY_NAME_LENGTH } from "../categories";
 import { normalizeName } from "../_validate";
@@ -49,6 +50,8 @@ export type WalletSpec = {
   /** lower(name) + currency: how wallets are matched against the account. */
   key: string;
 };
+/** Backup only: a wallet group as the file describes it (in file order = display order). */
+export type GroupSpec = { name: string; color: GroupColor | null; archived: boolean };
 export type CategorySpec = { name: string; kind: CategoryKind; key: string };
 export type EntrySpec = {
   kind: CategoryKind;
@@ -100,6 +103,8 @@ export type ParsedFile = {
    */
   walletMatching: "by-position" | "merge";
   wallets: WalletSpec[];
+  /** Backup only: the file's `groups` list (normalized, one per name ignoring case); absent in older backups. */
+  groups?: GroupSpec[];
   categories: CategorySpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];

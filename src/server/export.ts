@@ -66,14 +66,12 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
   const db = await getDb();
   return await db.transaction(async (tx) => {
     const walletRows = await tx.select().from(wallets).where(eq(wallets.userId, userId)).orderBy(asc(wallets.id));
-    const groupName = new Map(
-      (
-        await tx
-          .select({ id: walletGroups.id, name: walletGroups.name })
-          .from(walletGroups)
-          .where(eq(walletGroups.userId, userId))
-      ).map((g) => [g.id, g.name]),
-    );
+    const groupRows = await tx
+      .select({ id: walletGroups.id, name: walletGroups.name, color: walletGroups.color, archivedAt: walletGroups.archivedAt })
+      .from(walletGroups)
+      .where(eq(walletGroups.userId, userId))
+      .orderBy(asc(walletGroups.position), asc(walletGroups.id));
+    const groupName = new Map(groupRows.map((g) => [g.id, g.name]));
     const categoryRows = await tx
       .select()
       .from(categories)
@@ -103,6 +101,8 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         archived: w.archivedAt !== null,
         group: groupName.get(w.groupId),
       })),
+      // In display order: the array order is the position on import.
+      groups: groupRows.map((g) => ({ name: g.name, color: g.color, archived: g.archivedAt !== null })),
       categories: categoryRows.map((c) => ({ id: categoryRef.get(c.id)!, name: c.name, kind: c.kind })),
       transactions: txRows.map((t) => ({
         date: t.date,
