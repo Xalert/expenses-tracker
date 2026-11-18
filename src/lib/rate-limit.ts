@@ -1,11 +1,12 @@
 import "server-only";
+import type { TrustProxy } from "./config";
 
 /**
  * In-memory failure counters for password checks (sign-in and the current-password checks on /account).
  *
  * Per process: the counts live in this Node.js process only, so they reset on a restart and are not shared between
- * several app containers. That is enough for the single-container deployment this app ships; see docs/SPEC.md
- * "Auth" → "Rate limiting".
+ * several app containers. That is deliberate for the single-container deployment this app ships (docs/DECISIONS.md);
+ * see docs/SPEC.md "Auth" → "Rate limiting".
  *
  * A key's window starts at its first failure. Once `limit` failures fall inside one window the key is refused until
  * the window ends; then it starts from zero. Only failures count: a key that never fails is never refused.
@@ -99,12 +100,17 @@ export function tooManyAttemptsMessage(retryAfterMs: number, what: "sign-in" | "
 }
 
 /**
- * The client address for the per-address limit: the first `x-forwarded-for` hop (Next.js fills the header with the
- * socket's remote address when no proxy sent one), else null (the address limit is then skipped).
+ * The client address for the per-address limit, picked from `x-forwarded-for` as `TRUST_PROXY` says (`trust`, see
+ * `trustProxy` in src/lib/config.ts), lowercased; null skips the address limit. Trusting nothing ignores the header:
+ * a client can write any value into it, and Next.js only fills it with the socket's address when it is absent, so
+ * without a trusted proxy it cannot be told apart from a forged one. A header shorter than the trusted hop count
+ * (a request that did not come through every proxy) also gives null.
  */
-export function clientAddress(forwardedFor: string | null | undefined): string | null {
-  const first = forwardedFor?.split(",")[0]?.trim();
-  return first ? first.toLowerCase() : null;
+export function clientAddress(forwardedFor: string | null | undefined, trust: TrustProxy): string | null {
+  if (trust.mode === "none") return null;
+  const hops = (forwardedFor ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+  const hop = trust.mode === "first" ? hops[0] : hops[hops.length - trust.hops];
+  return hop ? hop.toLowerCase() : null;
 }
 
 type Limiters = { identifier: RateLimiter; address: RateLimiter };

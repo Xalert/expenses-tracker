@@ -12,6 +12,7 @@ import {
   deleteAccount,
   isWrongPasswordError,
   signOutOtherSessions,
+  signOutSession,
   updateProfile,
 } from "@/server/users";
 
@@ -129,6 +130,23 @@ export async function signOutOtherDevicesAction(): Promise<FormState> {
     ok: true,
     message: n === 0 ? "No other devices were signed in." : `Signed out ${n} other ${n === 1 ? "session" : "sessions"}.`,
   };
+}
+
+const signOutSessionSchema = z.object({ sessionId: z.coerce.number().int().positive() });
+
+/** "Sign out" on one other device in the Devices list (never the current session). */
+export async function signOutSessionAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const parsed = signOutSessionSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { message: "That device is no longer signed in." };
+  try {
+    await signOutSession(user.id, parsed.data.sessionId, await currentSessionTokenHash());
+  } catch (err) {
+    revalidatePath("/account");
+    return serviceErrorState(err);
+  }
+  revalidatePath("/account");
+  return { ok: true, message: "Signed out that device." };
 }
 
 const deleteSchema = z.object({
