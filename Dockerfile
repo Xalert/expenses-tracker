@@ -32,7 +32,11 @@ RUN npm run build \
  && cp -r .next/static .next/standalone/.next/static \
  && cp -r public .next/standalone/public \
  # Migrations are traced in by outputFileTracingIncludes; copy them explicitly so the image never depends on it.
- && rm -rf .next/standalone/drizzle && cp -r drizzle .next/standalone/drizzle
+ && rm -rf .next/standalone/drizzle && cp -r drizzle .next/standalone/drizzle \
+ # sharp, the image optimiser's native module (with libvips, ~20 MB), is traced in by Next's own server trace,
+ # which outputFileTracingExcludes does not reach. The optimiser is off (images.unoptimized) and nothing else
+ # loads it; detect-libc and semver are only there for sharp.
+ && cd .next/standalone/node_modules && rm -rf sharp @img detect-libc semver
 
 # ---- runner: only the standalone server, as a non-root user ----------------------------------------------
 FROM ${NODE_IMAGE} AS runner
@@ -45,6 +49,9 @@ ENV NODE_ENV=production \
 
 # The base image ships a `node` user (uid/gid 1000). No DATABASE_URL here: the app requires it in production.
 COPY --from=build --chown=node:node /app/.next/standalone ./
+
+# ---- operator scripts: plain Node files run with `docker compose exec expenses-tracker node scripts/<name>` --------
+# One COPY line per script, from the build context (they may import only what the standalone output ships, e.g. pg).
 
 USER node
 EXPOSE 3000

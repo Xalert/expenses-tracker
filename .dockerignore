@@ -30,3 +30,6 @@ docker-compose*.yml
 compose*.yml
 .github
 deploy
+
+# database dumps written by the Compose `backup` service
+backups
