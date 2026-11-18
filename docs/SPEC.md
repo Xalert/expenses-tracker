@@ -469,7 +469,9 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   (picking a month returns to the days; Escape there steps back instead of closing), a Monday-first 6-week grid
   (`role="grid"`, day buttons `role="gridcell"` with `aria-selected`, `aria-current="date"` for today and the full
   date as `aria-label`; neighbouring months dimmed, today ringed, the selection filled with the accent), and a footer
-  with "Today" and, with `allowEmpty`, "Clear". Picking closes it and returns focus to the trigger. Keyboard in the
+  with "Today" and, with `allowEmpty`, "Clear". In the month view the footer starts with a "‹ Back to days" button
+  (accessible name "Back to days, <Month YYYY>", the month shown before) that returns to the day view with focus on
+  the focusable day, as Escape does. Picking closes it and returns focus to the trigger. Keyboard in the
   grid: see `moveDate`; one day is in the Tab order (roving tabindex); moving past the shown month changes month.
 - `MonthGrid` (client) `{ value: 'YYYY-MM' | null; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
   year stepper (‹ 2026 ›) over a 3 × 4 grid of `aria-pressed` month buttons; months outside the bounds are

@@ -227,6 +227,7 @@ Added 2026-11-08.
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
 | A popover opens above its anchor only when it does not fit below **and** there is more room above; the room is measured inside every clipping ancestor (the dialog body), not just the viewport; no portal still | Below stays the default so menus do not jump around; inside the Add sheet the calendar was clipped by the scrolling body, which the viewport alone does not see. A portal would have needed its own focus and outside-click handling | planner (flip), built (clipping ancestors) |
+| The date picker's way back from the month view is a "‹ Back to days" button in the footer, in the date picker only (not in the shared `MonthGrid`) | The footer is where the picker's other actions are, and it comes after the grid in Tab order; the dashboard's month switcher has no day view to return to | planner (button), built (placement) |
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -456,7 +457,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   the same way, never did it over the same page sequence, and `next start` never did. Suspected: other processes
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
-- The date picker's month view has no button back to the day view; picking a month or pressing Escape returns.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
 - `sharp` is still present in the Docker image although the image optimiser is off.
 
