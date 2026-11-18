@@ -6,7 +6,7 @@ the last tag are used instead) and starts a new one. See [`docs/DEVELOPMENT.md`]
 
 ## Unreleased
 
-Everything up to the first tagged release (2026-11-05 to 2026-11-18), in short:
+The first tagged release: everything built since 2026-11-05, in short.
 
 - Wallets in any ISO currency, expenses and income with your own categories, transfers between wallets (also
   across currencies), several users per instance.

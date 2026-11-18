@@ -20,8 +20,8 @@ PostgreSQL database; there is nothing to clone or build.
 
 [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) covers running it for real: settings (database password, port,
 closing registration), HTTPS behind a reverse proxy, backup and restore, upgrading, building from source and
-running without Docker. Take a backup before upgrading. **Instances from before the move to PostgreSQL cannot be
-upgraded in place**; carry each account across with its JSON backup
+running without Docker. Take a backup before upgrading (`docker compose run --rm backup`). **Instances from before
+the move to PostgreSQL cannot be upgraded in place**; carry each account across with its JSON backup
 ([how](docs/SELF-HOSTING.md#moving-from-sqlite-older-versions)).
 
 ## Development
@@ -67,8 +67,9 @@ make down
 
 ## More
 
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts, code
-  layout.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts,
+  releasing, code layout.
+- [`CHANGELOG.md`](CHANGELOG.md): what changed in each release.
 - [`docs/SPEC.md`](docs/SPEC.md): how everything works, including the
   [import and export formats](docs/SPEC.md#import--export); [`docs/DECISIONS.md`](docs/DECISIONS.md) has the
   reasons and the known gaps.
