@@ -30,7 +30,7 @@ section holds what replaced it.
 | Next.js Cache Components switched off | Every page is per-user and reads the session cookie; the feature would force `<Suspense>` around each cookie read for no benefit | built |
 | *(superseded 2026-11-09 by Postgres)* Services are synchronous | better-sqlite3 is synchronous; only password hashing is async | built |
 | `build` / `start` scripts set `NODE_ENV=production` inline | A globally exported `NODE_ENV=development` broke `next build` on the development machine | built |
-| `images: { unoptimized: true }` | The app serves no optimised images. It was expected to drop `sharp` from the image; it did not, and the setting was kept as harmless | planner |
+| `images: { unoptimized: true }` | The app serves no optimised images. It was expected to drop `sharp` from the image; it did not (Next's own server trace includes it), so the Dockerfile deletes it, see Deployment | planner |
 
 ### Money, wallets, transactions
 
@@ -195,7 +195,7 @@ Decided 2026-11-09.
 | Decision | Why | Decided by |
 |---|---|---|
 | The app supports **PostgreSQL only**; SQLite support is removed, not kept alongside | One database to build, test and document; the app is meant to be hosted for a household, where a real server is normal; keeping two dialects would double every query and migration | owner |
-| **No migration of existing SQLite data**: no importer, no converter. An old instance's way across is each account's JSON backup export from the old version, imported into the new one (wallets, categories, transactions and transfers come over; the account itself and its password do not) | The owner has no instance worth converting and wanted a fresh start; the backup format already round-trips an account's data | owner |
+| **Deliberate: no migration of existing SQLite data** (no in-place upgrade; also listed as a known gap until 2026-11-18): no importer, no converter. An old instance's way across is each account's JSON backup export from the old version, imported into the new one (wallets, categories, transactions and transfers come over; the account itself and its password do not) | The owner has no instance worth converting and wanted a fresh start; the backup format already round-trips an account's data | owner |
 | Tests run on **PGlite** (Postgres compiled to WASM, in process), not on a real server | `npm test` and CI keep needing no Docker and no database service, and the tests still run Postgres SQL and constraints | owner |
 | Driver is **node-postgres** (`pg`, a `Pool` of 10) with `drizzle-orm/node-postgres`; the `DB` type is Drizzle's generic `PgDatabase`, so PGlite instances fit it too | The standard driver, pure JavaScript (no native module, so the image needs no per-platform steps) | planner |
 | All services are **async**, and `getDb()` is a **memoized promise** on `globalThis` that connects and migrates once; a failed attempt clears it so the next call retries | Postgres drivers are asynchronous; sharing one promise stops concurrent first requests from migrating twice, and `globalThis` survives dev hot reload | planner |
@@ -203,7 +203,7 @@ Decided 2026-11-09.
 | Timestamps are **`timestamptz`** (`mode: "date"`, `created_at` defaults to `now()`); calendar dates stay **`text`** `YYYY-MM-DD` | Real instants need a time zone; a calendar date is not an instant, and string compare semantics are what the code and the tests already rely on | planner |
 | One fresh `0000` Postgres migration replaced the three SQLite ones | With no data to carry, a clean schema is simpler than translating table rebuilds that only existed for SQLite's limits | planner |
 | The Compose files run **`postgres:17-alpine`**, pinned to a major | A major bump needs a dump and restore; a floating tag would break the volume on pull | planner |
-| The default database password is `expenses` (`POSTGRES_PASSWORD` overrides it) because the database port is **not published** | `docker compose up -d` with no `.env` has to keep working; the database is reachable only from the Compose network. Documented as "set `POSTGRES_PASSWORD` in `.env`" | planner |
+| **Deliberate:** the default database password is `expenses` (`POSTGRES_PASSWORD` overrides it) because the database port is **not published**; anyone who publishes it must set a password (was a known gap until 2026-11-18) | `docker compose up -d` with no `.env` has to keep working; the database is reachable only from the Compose network. Documented as "set `POSTGRES_PASSWORD` in `.env`" | planner |
 | Development uses Postgres in Docker (`compose.dev.yaml`, `npm run db:up`); `npm run dev` is on database `expenses` (the owner's real data), the demo on `expenses_demo` | Same safety split as the SQLite files had (`app.db` / `demo.db`); the reset's `--yes` rule now guards `DEFAULT_DEV_DATABASE_URL` | planner |
 
 ### Deployment
@@ -216,9 +216,19 @@ Decided 2026-11-09.
 | Health check uses Node's `fetch` against `/api/health` | No curl or wget needed in the image | built |
 | All runtime configuration is environment variables | Standard for containers; nothing to bake into the image | planner |
 | A prebuilt multi-arch image on GitHub Container Registry, published by GitHub Actions, is the default way to deploy; building from source stays supported | "It should be easy to deploy with docker": downloading one Compose file beats cloning and a several-minute build, and arm64 users (Raspberry Pi) get an image without building on the device. GHCR needs no extra account or secret (`GITHUB_TOKEN`) | owner asked for an easier Docker deploy; registry chosen by planner |
-| `latest` follows `main`; releases come from `vX.Y.Z` tags | The owner deploys `main` and has no release process yet; self-hosters who want control pin `EXPENSES_TRACKER_VERSION` | planner |
+| `latest` follows `main`; releases come from `vX.Y.Z` tags | The owner deploys `main`; self-hosters who want control pin `EXPENSES_TRACKER_VERSION`. Tags are cut with `make release` (below) | planner |
 | arm64 is built under QEMU on one runner, not on a native arm64 runner | Works for private and public repositories alike; slower (the `next build` under emulation), but only CI time | planner |
 | `deploy/compose.yaml` is configured from `.env`, not edited, and shares the project name `expenses-tracker` | Upgrading can re-download the file without losing settings; moving between source build and prebuilt keeps the same volume | planner |
+| **Deliberate: CI only on GitHub, images only on GHCR** (no other CI, no Docker Hub mirror) | GitHub Actions and GHCR need no extra account or secret (`GITHUB_TOKEN`); a second CI or registry would be more to keep working for no current user. A fork can add a mirror (`EXPENSES_TRACKER_IMAGE` already points Compose elsewhere) | planner (2026-11-18) |
+| Published images carry BuildKit SBOM and provenance attestations (`sbom: true`, `provenance: mode=max`) and a keyless cosign signature (GitHub OIDC, `id-token: write`); pull-request builds have neither | Keyless signing needs no key to store or rotate and is one step; the SBOM and provenance come from BuildKit for free. On pull requests nothing is pushed, so there is nowhere to keep them | planner (2026-11-18) |
+| `sharp` (and `@img/*`, `detect-libc`, `semver`, which only it uses) is deleted from `.next/standalone/node_modules` in the Dockerfile's build stage, not excluded in `next.config.ts` | `outputFileTracingExcludes` was tried: it applies to route traces, while sharp comes from Next's own `next-server.js.nft.json`, so it had no effect. The image's `/app` went from 45 MB to 26 MB and the server starts and migrates without it. A non-Docker standalone build still carries it (documented as safe to delete) | built (2026-11-18) |
+| `npm run build` / `start` go through a small `scripts/next-production.mjs` that sets `NODE_ENV=production` and runs `next`, instead of `cross-env` | Works in Windows `cmd` with no new dependency. The dev-only scripts with an inline `DATABASE_URL` (`dev:demo`, `demo:reset`) were left as they are; see Known gaps | planner (2026-11-18) |
+| **Backups are an on-demand Compose service**, `backup` under its own profile (`docker compose run --rm backup`), writing `pg_dump -Fc` files to a bind-mounted `./backups` and keeping the newest `BACKUP_KEEP` (default 10); not a scheduler and not a step the app runs | A dump needs a `pg_dump` of the server's major, which the app image does not have; a sidecar with cron would be one more always-on container for what the host's cron does with one line. A bind-mounted folder is where people look for files to copy off the machine. Retention only prunes `expenses-*.dump`, so dumps written for other reasons stay | owner asked for a backup before upgrades; planner (form) (2026-11-18) |
+| The backup files are written by the container's root user (mode 600) rather than a configurable uid | A dump holds every account, password hashes included, so readable only by root is the safe default; a uid setting would also need the folder pre-created with that owner. On Docker Desktop they belong to the user anyway | planner (2026-11-18) |
+| Before migrating, the app logs the pending migrations, as a `console.warn` `[db] WARNING: ...` when the database already has migrations; it does not refuse to start without a backup | The app cannot tell whether a backup was taken; refusing would block every first start after `docker compose pull`. The line makes the step visible in `docker compose logs`, and the upgrade docs put the backup before the pull | planner (2026-11-18) |
+| **A Postgres major upgrade is `deploy/pg-major-upgrade.sh`**: fresh verified dump, a Compose override file (`compose.override.yaml` / `docker-compose.override.yml`) putting `db` and `backup` on the new image and a **new** volume `pg-data-<major>`, restore, row counts compared; the old volume is never touched and any failure starts the old setup again | Compose loads the override by itself, so the shipped Compose files stay as they are and a re-downloaded `deploy/compose.yaml` keeps working. Making the image and the volume name variables in the Compose files was considered and rejected: a volume `name:` built from `${COMPOSE_PROJECT_NAME}` works on current Compose, but a Compose that does not provide that variable would silently open an empty `_pg-data` volume. `PGDATA=/var/lib/postgresql/data` is set in the override because the 18+ images default to another path. Bash only (self-hosters run Linux; Windows users have WSL) | planner (2026-11-18) |
+| **Releases: `make release VERSION=X.Y.Z`** runs `scripts/release.mjs`: on a clean `main` equal to `origin/main`, `X.Y.Z` newer than the last tag, checks passing; bumps `package.json`, moves `CHANGELOG.md`'s "Unreleased" into the release (or the commit subjects since the last tag when it is empty), commits, tags; pushes only with `PUSH=1` (atomic push of `main` and the tag); `DRY_RUN=1` changes nothing | A script so that the tag, the version and the changelog cannot drift apart; Node, so it also runs on Windows without `make`. Equal to `origin/main` (not just "not behind") so the tag always lands on a commit that is on `main` upstream. No pre-release versions: the semver image tags would make `X.Y` follow them | owner asked for a release process; planner (rules) (2026-11-18) |
+| `CHANGELOG.md` was seeded with one short "Unreleased" summary of everything built so far, not one entry per past commit | There were no releases to attach entries to; the first `make release` turns the summary into that release's section | planner (2026-11-18) |
 | In development, the machine's own LAN addresses (plus `ALLOWED_DEV_ORIGINS`) may load the dev server's scripts | Next.js allows only `localhost` by default; opened at a LAN address the app rendered but nothing client-side worked (the owner hit this: "Preview import" could not be pressed). Development only — production builds are unaffected | planner |
 
 ### Development tools and documentation
@@ -227,6 +237,7 @@ Added 2026-11-08.
 
 | Decision | Why | Decided by |
 |---|---|---|
+| **Deliberate: `db:reset` is development-only.** It refuses with `NODE_ENV=production` and is not in the Docker image | A reset is one typo away from losing every account; on a deployed instance "start over" is a backup and `docker compose down -v`, which says plainly what goes | planner (2026-11-18, was a known gap) |
 | The development Postgres listens on host port **5433** (`127.0.0.1:5433`, still 5432 inside the container); `DEFAULT_DEV_DATABASE_URL`, the npm scripts and `drizzle.config.ts` follow | The owner runs billy alongside, whose dev Postgres publishes 5432; both have to run at the same time (2026-11-17). Deployment is unaffected: there the database is reached as `db:5432` on the Compose network | owner |
 | A `Makefile` of short aliases (`make dev`, `make check`, `make test FILE=… NAME=…`, …) over the npm scripts, modelled on the owner's other project (billy); `make dev` uses the demo database, the real one only via `make dev-real` | The owner asked for less typing when testing; the npm scripts stay the source of truth, so nothing works only through make (2026-11-17) | owner (ask), planner (targets) |
 | *(superseded 2026-11-09 by Postgres)* `npm run db:reset -- --demo \| --clean` deletes every row (keeping the file and the migrations table) instead of deleting the database file | A running dev server holds the file open and keeps working; migrations are not re-run | planner |
@@ -420,22 +431,14 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - **A reverse proxy must preserve the `Host` header** (or send `X-Forwarded-Host`); the app now refuses such forms
   with an explanation and a log line instead of a bare 500, but cannot work around it.
 - **A reverse proxy's upload limit must allow 6 MB** for imports (nginx defaults to 1 MB).
-- **`db:reset` is development-only.** It refuses with `NODE_ENV=production` and is not shipped in the Docker image;
-  Docker users start over by taking a backup and removing the volume (`docker compose down -v`).
-- **CI only on GitHub.** Tests and the image run in GitHub Actions; there is no other CI, and the image is only on
-  GHCR (no Docker Hub mirror). Images are not signed and no SBOM or provenance policy is documented.
-- **No automatic backup before an upgrade.** The SQLite-era pre-migration copy is gone (Postgres has no file to
-  copy); take a `pg_dump` yourself before `docker compose pull`. A failing migration rolls back, but the app does not
-  start until it is fixed or the previous image is run.
-- **Existing SQLite instances have no in-place upgrade.** The owner decided there would be no data migration; the
-  way across is each account's JSON backup, which does not carry the account itself, its password or its sessions.
-- **The default database password (`expenses`)** is only safe while the database port stays unpublished, as in the
-  shipped Compose files; anyone who publishes it must set `POSTGRES_PASSWORD`.
-- **A Postgres major-version upgrade is a manual dump and restore** (the image is pinned to 17).
-- **No release process yet.** Until the first `vX.Y.Z` tag there are no version tags to pin, only `latest`/`main`
-  and `sha-<commit>`.
-- **`build` / `start` scripts do not work in Windows `cmd`** because of the inline `NODE_ENV`. Docker users are
-  unaffected.
+- **Backups are not scheduled and not enforced.** `docker compose run --rm backup` is on demand (host cron for a
+  schedule), lands on the same disk as the database, and the app only warns, it does not wait, before migrating an
+  existing database. A failing migration rolls back, but the app does not start until it is fixed or the previous
+  image is run.
+- **No release has been cut yet.** `make release` exists; until the first `vX.Y.Z` tag there are only
+  `latest`/`main` and `sha-<commit>` to pin.
+- **`dev:demo` and `demo:reset` still set `DATABASE_URL` inline**, so they do not run in Windows `cmd` (`build` and
+  `start` do). Development only.
 
 ### Features not built
 
@@ -501,7 +504,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
-- `sharp` is still present in the Docker image although the image optimiser is off.
 
 ### Statement importer gaps
 
@@ -543,7 +545,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   the standalone server (that a real Server Action POST reaches it with the `Origin`, `Host` and `Next-Action`
   headers as tested, and that the Next.js client really shows the 403 text through `src/app/error.tsx`) behind an
   actual proxy that rewrites `Host`; `x-forwarded-for` as seen by `headers()` in a Server Action with and without a
-  proxy; `docker compose exec app node scripts/reset-password.mjs` in a built image (`next build` could not run in
+  proxy; `docker compose exec expenses-tracker node scripts/reset-password.mjs` in a built image (`next build` could not run in
   the agent worktree; `pg` was confirmed present in an existing `.next/standalone/node_modules`, and the Dockerfile
   now fails the build if it is not); the `0002_lower-unique-users` migration on a populated Postgres 17 (run on
   PGlite only).
@@ -565,7 +567,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   `pg_restore --clean --if-exists` round trip restored a deleted row with the app healthy afterwards. Not checked:
   the amd64 image, the GitHub Actions run, `docker-compose.yml` (source build) end to end, `compose.dev.yaml` with
   `npm run db:up` / `dev:demo` (not started, to keep agents off the dev volume), a JSON backup from an old SQLite
-  instance imported into the new version, the Postgres major-upgrade steps, and the app in a browser with JavaScript.
+  instance imported into the new version, and the app in a browser with JavaScript. (The GitHub Actions run and the
+  Postgres major upgrade were checked later; see the entries below.)
 - **Month stepper on /transactions** (arrows joined to the Month chip, the end-of-list month row, "This month", `[` / `]` / `T`) was
   covered by tests (static markup, the key predicate) and typecheck / lint only; not checked in a browser: the look
   at 375px (chip wrapping, the 44px arrows), the hover tint in dark mode, and the keys against a real open dialog
@@ -587,11 +590,23 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   simulated on Docker Desktop.
 - **`COOKIE_SECURE=true` over plain HTTP** was checked with curl, not a browser.
 - **The amd64 image** was built and run under emulation only.
-- **The GitHub Actions workflow has never run.** The repository had no GitHub remote when it was written
-  (2026-11-09); the workflow YAML was only parsed, not linted with actionlint or executed. The image name
-  `ghcr.io/xalert/expenses-tracker` in `deploy/compose.yaml` and the docs assumes the repository is pushed as
-  `xalert/expenses-tracker` and the package made public. Verified locally: the image built from the Dockerfile
-  runs healthy through `deploy/compose.yaml` (`/api/health` 200, `/login` 200).
+- **The GitHub Actions workflow has run, but not its newest steps.** Runs on `main` (push, 2026-11-17) and on pull
+  requests succeeded (`gh run list`), and the workflow passes actionlint (with shellcheck, 2026-11-18). The SBOM /
+  provenance attestations and the cosign signing step added on 2026-11-18 have not run yet, so neither the
+  `cosign verify` nor the `imagetools inspect` command in `docs/SELF-HOSTING.md` has been tried against a real
+  image. Whether the GHCR package is public was not checked.
+- **Operations tooling (2026-11-18) was verified on Docker Desktop (arm64) with throwaway Compose projects only.**
+  Checked: the image without `sharp` built with `docker build .`, came up healthy through `deploy/compose.yaml` and
+  migrated an empty database (the "Empty database" line logged); `docker compose run --rm backup` three times with
+  `BACKUP_KEEP=2` (oldest pruned, files mode 600); `deploy/pg-major-upgrade.sh 18` from 17 with data (row counts
+  matched, app healthy on 18, old volume intact, a second run refused), and a run with an injected failure after
+  the restore (override moved aside, old database and app back with all rows). `make release` in a scratch clone
+  with a local bare `origin`: the refusals (not main, ahead of origin, dirty tree, version not newer, existing tag,
+  `--push` with `--dry-run`), a dry run, and a real release pushed to that bare repository. Not checked: the
+  scripts on a Linux host (root-owned backup files), the upgrade script with the source `docker-compose.yml` or
+  with an existing override file, the WARNING line on a real upgrade with a pending migration (unit-tested only),
+  `npm run build` in Windows `cmd`, and a release against the real GitHub repository. In one release test run two
+  tests failed once and passed on the rerun; which ones was not captured.
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
   headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not

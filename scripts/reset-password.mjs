@@ -2,7 +2,7 @@
 /**
  * Reset a user's password from the command line (there is no email-based reset):
  *
- *   docker compose exec app node scripts/reset-password.mjs <user ID or email>          # prints a generated password
+ *   docker compose exec expenses-tracker node scripts/reset-password.mjs <user ID or email>          # prints a generated password
  *   printf '%s' 'new password' | docker compose exec -T app node scripts/reset-password.mjs <user ID or email> --stdin
  *
  * Sets the new password and deletes every session of that user (all their devices are signed out). The identifier

@@ -19,6 +19,7 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Bind mount instead of a named volume](#bind-mount-instead-of-a-named-volume)
 - [Backup](#backup) · [Restore](#restore)
 - [Upgrading](#upgrading) (rolling back, [PostgreSQL itself](#upgrading-postgresql-itself), [moving from SQLite](#moving-from-sqlite-older-versions))
+- [Verifying the image](#verifying-the-image) (signature, SBOM, provenance)
 - [Running without Docker (standalone build)](#running-without-docker-standalone-build)
 - [Database notes](#database-notes)
 
@@ -39,13 +40,15 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | folder the SQL migrations are read from; leave as is |
 | `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
 
-`deploy/compose.yaml` also reads these (they configure Compose, not the app):
+Both Compose files also read these (they configure Compose, not the app; the `EXPENSES_TRACKER_*` ones only
+`deploy/compose.yaml`):
 
 | variable | default | meaning |
 |---|---|---|
 | `EXPENSES_TRACKER_VERSION` | `latest` | image tag; pin a release (`1.2.3`, or `1.2` for its fixes) or `sha-<commit>` |
 | `EXPENSES_TRACKER_PORT` | `3000` | host port |
 | `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
+| `BACKUP_KEEP` | `10` | how many `backups/expenses-*.dump` files the [backup service](#backup) keeps (the newest); `0` keeps all |
 | `POSTGRES_PASSWORD` | `expenses` | password of the `db` service's `expenses` user, also put into `DATABASE_URL`; use URL-safe characters (or URL-encode). Set it in `.env` before the first start; the port is not published, which is why the default is tolerable |
 
 ## Prebuilt image
@@ -72,8 +75,10 @@ the data. (Running a second instance on the same machine needs `-p <other-name>`
 **Publishing from a fork.** Push the repository to GitHub; the workflow publishes `ghcr.io/<owner>/<repo>`
 (lowercased) on every push to `main` and every `v*.*.*` tag. The first push creates the package as **private**:
 open it under your profile's *Packages*, *Package settings* → *Change visibility* → *Public*, or every pull needs
-a `docker login ghcr.io`. Then set `EXPENSES_TRACKER_IMAGE` (or edit the image line). A release is `git tag v1.2.3
-&& git push --tags`. Pull requests run the tests and build the image but push nothing.
+a `docker login ghcr.io`. Then set `EXPENSES_TRACKER_IMAGE` (or edit the image line). A release is
+`make release VERSION=1.2.3 PUSH=1` from a clean, up-to-date `main` (see
+[`DEVELOPMENT.md`](DEVELOPMENT.md#releasing)); a plain `git tag v1.2.3 && git push origin v1.2.3` publishes too.
+Pull requests run the tests and build the image but push nothing.
 
 ## Plain `docker run`
 
@@ -160,7 +165,7 @@ someone.
 Reset it from the host, by user ID or email:
 
 ```bash
-docker compose exec app node scripts/reset-password.mjs ana
+docker compose exec expenses-tracker node scripts/reset-password.mjs ana
 ```
 
 It sets a random password, prints it (`New password for ana: …`) and signs that user out everywhere (all their
@@ -216,15 +221,28 @@ so the old requirement that a bind mount be writable by uid 1000 is gone.
 
 ## Backup
 
-Take a dump of the database with `pg_dump` (custom format) from the running `db` container; the app can stay up:
+Both Compose files have an on-demand `backup` service (it has its own profile, so `docker compose up` never starts
+it). Run it from the folder with your Compose file; the app can stay up:
+
+```bash
+docker compose run --rm backup
+```
+
+It writes `backups/expenses-<UTC date-time>.dump` next to the Compose file (`pg_dump` custom format: one compressed
+file with the whole database, every account) and then deletes all but the newest `BACKUP_KEEP` (default 10) of
+those files; set `BACKUP_KEEP=0` in `.env` to keep every one. Copy them somewhere else as well: the folder is on
+the same disk as the database. On Linux the files belong to `root` (mode 600), because the container writes them
+as root; read them with `sudo`. For a schedule, put that line in cron (`cd /path/to/folder && docker compose run
+--rm backup`).
+
+Without the service (or for a one-off file elsewhere), the same dump straight from the `db` container:
 
 ```bash
 docker compose exec -T db pg_dump -U expenses -Fc expenses > expenses-$(date +%F).dump
 ```
 
-The result is one compressed file with the whole database (every account). Copy it somewhere else. Do not back
-up by copying the volume's files while Postgres runs. A dump taken with `pg_dump` from the same major version
-(17) restores anywhere.
+Do not back up by copying the volume's files while Postgres runs. A dump restores into the same or a newer
+PostgreSQL major version.
 
 Each user can also download a **Full backup (JSON)** of their own account at `/data`; it imports into any instance,
 but it covers one account (wallets, wallet groups, categories, transactions and transfers), not the whole
@@ -236,7 +254,7 @@ Stop the app so nothing writes during the restore, then load the dump into the r
 
 ```bash
 docker compose stop expenses-tracker
-docker compose exec -T db pg_restore -U expenses -d expenses --clean --if-exists < expenses-2026-01-31.dump
+docker compose exec -T db pg_restore -U expenses -d expenses --clean --if-exists < backups/expenses-20260131-020000.dump
 docker compose start expenses-tracker
 ```
 
@@ -251,7 +269,7 @@ schema.
 With the prebuilt image ([`deploy/compose.yaml`](../deploy/compose.yaml)):
 
 ```bash
-docker compose exec -T db pg_dump -U expenses -Fc expenses > before-upgrade.dump   # first: see Backup
+docker compose run --rm backup  # first: a dump in backups/ (see Backup)
 docker compose pull             # the newest image for your EXPENSES_TRACKER_VERSION
 docker compose up -d            # recreates the app container; the database volume is kept
 ```
@@ -259,24 +277,52 @@ docker compose up -d            # recreates the app container; the database volu
 Built from source:
 
 ```bash
+docker compose run --rm backup  # first: a dump in backups/
 git pull
 docker compose build --pull     # rebuild on the latest node:24-bookworm-slim
 docker compose up -d            # recreates the container; the database volume is kept
 ```
 
+What changed between releases is in [`CHANGELOG.md`](../CHANGELOG.md).
+
 Pending database migrations are applied automatically when the new version starts (on first DB access, which the
 health check triggers within seconds), all in one transaction: if one fails, nothing changes and the app logs the
-error and does not become healthy. **The app no longer makes a copy of the database before migrating**; the
-`pg_dump` above is your way back. To roll back, run the previous image (set `EXPENSES_TRACKER_VERSION`) and, if the
+error and does not become healthy. Before applying them the app logs which ones it is about to run; on a database
+that already holds data that is a warning line, `[db] WARNING: applying N pending migration(s) to the existing
+database: …`, in `docker compose logs expenses-tracker`. **The app makes no copy of the database before
+migrating**; the backup above is your way back. To roll back, run the previous image (set `EXPENSES_TRACKER_VERSION`) and, if the
 new version already migrated, [restore](#restore) the dump taken before the upgrade. Migrations only move forward.
 
 ### Upgrading PostgreSQL itself
 
-The Compose files pin `postgres:17-alpine`, so `docker compose pull` never changes the major version. Moving to a
-new major (18, …) is a dump and restore: take a [backup](#backup), `docker compose down`, remove the database
-volume (`docker volume rm expenses-tracker_pg-data`), change the image tag in the `db` service, `docker compose up
--d db`, then run the [restore](#restore) step and `docker compose up -d`. Minor releases (17.x) are picked up by the
-same tag with no extra steps.
+The Compose files pin `postgres:17-alpine`, so `docker compose pull` never changes the major version, and minor
+releases (17.x) arrive with it with no extra steps. A new major (18, …) cannot read the old data directory; it is a
+dump and restore into a new volume, which [`deploy/pg-major-upgrade.sh`](../deploy/pg-major-upgrade.sh) does
+safely. With the stack running, in the folder with your Compose file (download the script first if you have no
+clone: `curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/pg-major-upgrade.sh`):
+
+```bash
+bash pg-major-upgrade.sh 18
+```
+
+From a clone, `bash deploy/pg-major-upgrade.sh 18`. It shows the plan and asks you to type `upgrade`, then:
+
+1. stops the app and takes a fresh dump, `backups/before-postgres-18-<time>.dump`, checks it with `pg_restore
+   --list` and counts the rows of every table;
+2. writes a Compose override file (`compose.override.yaml` next to `compose.yaml`, `docker-compose.override.yml`
+   next to `docker-compose.yml`; Compose merges it in by itself) that puts `db` and `backup` on
+   `postgres:18-alpine` and `db` on a **new** volume, `<project>_pg-data-18`;
+3. starts the new database, restores the dump into it, compares the row counts and the server version, and starts
+   the app.
+
+The old volume is never changed or removed. If any step after stopping the app fails, the script moves the
+override aside and starts the old database and the app again. Afterwards: to go back (losing what was written
+since), `docker compose down`, delete the override file, `docker compose up -d`; once you are satisfied, remove the
+old volume yourself with the `docker volume rm` line the script prints. Keep running `docker compose` from that
+folder without `-f`, or the override is not loaded and the old database comes back. It refuses to start when the
+database is on a bind mount or the override file already exists and was not written by it; then do it by hand: take
+a [backup](#backup), stop everything, point `db` at an empty volume or folder with the new image, start `db`,
+[restore](#restore), start the app.
 
 ### Moving from SQLite (older versions)
 
@@ -295,6 +341,25 @@ transactions and transfers, all under the signed-in account. It does **not** car
 email, names), the password or sessions: the backup never contains them. Wallets and categories that the account already has are matched by name
 (and currency or kind), not duplicated. Do this once per account.
 
+## Verifying the image
+
+Images published by the workflow are signed with [cosign](https://docs.sigstore.dev/) keyless signing: the
+signature is tied to the GitHub Actions workflow that built the image, not to a key. To check one:
+
+```bash
+cosign verify ghcr.io/xalert/expenses-tracker:latest --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '(?i)^https://github\.com/xalert/expenses-tracker/\.github/workflows/docker-image\.yml@'
+```
+
+Each image also carries an SBOM (SPDX) and SLSA provenance as BuildKit attestations:
+
+```bash
+docker buildx imagetools inspect ghcr.io/xalert/expenses-tracker:latest --format '{{ json .SBOM }}'
+```
+
+(`--format '{{ json .Provenance }}'` for the provenance.) `(?i)` is there because GitHub keeps the owner's
+capitalisation in the identity while image names are lower case. A fork's images are signed by its own workflow;
+replace `xalert/expenses-tracker` in both commands.
+
 ## Running without Docker (standalone build)
 
 You need a PostgreSQL server (17 recommended) with an empty database and a user that owns it, and Node 20.9+.
@@ -309,7 +374,10 @@ cd .next/standalone && DATABASE_URL=postgres://expenses:secret@localhost:5432/ex
 ```
 
 `DATABASE_URL` is required in production. The reverse-proxy, backup and upgrade notes above apply unchanged (run
-`pg_dump` / `pg_restore` against your own server instead of through `docker compose exec`).
+`pg_dump` / `pg_restore` against your own server instead of through `docker compose exec`). `npm run build` works
+in any shell, Windows `cmd` included. The standalone folder still contains `node_modules/sharp` (about 20 MB with
+its libvips); the app never loads it, and the Docker image deletes it, so `rm -rf
+.next/standalone/node_modules/sharp .next/standalone/node_modules/@img` is safe.
 
 ## Database notes
 

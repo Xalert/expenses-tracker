@@ -4,7 +4,8 @@
 #   curl -fsSLO https://raw.githubusercontent.com/xalert/expenses-tracker/main/deploy/compose.yaml
 #   docker compose up -d
 #
-# Then open http://<host>:3000. Upgrade with `docker compose pull && docker compose up -d`.
+# Then open http://<host>:3000. Upgrade with `docker compose run --rm backup` (a dump in ./backups), then
+# `docker compose pull && docker compose up -d`.
 # Settings can stay in this file or go in a `.env` file next to it (Compose reads it automatically).
 # Same project name as a clone of the repository, so both use the volume `expenses-tracker_pg-data`.
 name: expenses-tracker
@@ -47,6 +48,40 @@ services:
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       # "false" stops the requests to api.frankfurter.dev for the converted "All in" view on Overview.
       EXCHANGE_RATES: ${EXCHANGE_RATES:-true}
+
+  # On demand only (profile `backup`, so `up` never starts it): `docker compose run --rm backup` writes
+  # ./backups/expenses-<UTC date-time>.dump (pg_dump custom format; restore: docs/SELF-HOSTING.md#restore) and keeps
+  # the newest BACKUP_KEEP of those files (default 10, 0 keeps all). Run it before every upgrade.
+  backup:
+    # Same image as `db`: pg_dump has to be at least the server's major version.
+    image: postgres:17-alpine
+    profiles: ["backup"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: expenses
+      PGDATABASE: expenses
+      PGPASSWORD: ${POSTGRES_PASSWORD:-expenses}
+      BACKUP_KEEP: ${BACKUP_KEEP:-10}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        case "$$BACKUP_KEEP" in ""|*[!0-9]*) echo "BACKUP_KEEP must be a whole number, got '$$BACKUP_KEEP'" >&2; exit 1;; esac
+        umask 077
+        name="expenses-$$(date -u +%Y%m%d-%H%M%S).dump"
+        pg_dump -Fc -f "/backups/$$name.partial"
+        mv "/backups/$$name.partial" "/backups/$$name"
+        echo "Backup written: backups/$$name ($$(du -h "/backups/$$name" | cut -f1))"
+        if [ "$$BACKUP_KEEP" -gt 0 ]; then
+          ls -1 /backups/expenses-*.dump | sort -r | tail -n +$$((BACKUP_KEEP + 1)) | while read -r old; do
+            rm -f -- "$$old" && echo "Removed old backup: backups/$${old#/backups/}"
+          done
+        fi
 
 volumes:
   pg-data:

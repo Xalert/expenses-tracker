@@ -48,3 +48,6 @@ next-env.d.ts
 
 # Agent worktrees
 /.claude/worktrees/
+
+# database dumps written by the Compose `backup` service (docs/SELF-HOSTING.md#backup)
+/backups/

@@ -8,6 +8,7 @@ live. To just run the app, use the Compose quick start in the [README](../README
 - [Debugging](#debugging)
 - [Make shortcuts](#make-shortcuts)
 - [Scripts](#scripts)
+- [Releasing](#releasing)
 - [Layout](#layout)
 
 ## Run it
@@ -135,7 +136,7 @@ make psql
 
 The rest: `make up` / `down` / `logs` (the development Postgres), `make dev-real` (the dev server on your **real**
 data in `expenses`), `make build`, `make migration` (`db:generate`), `make docker-up` / `docker-down` / `docker-logs`
-(the source-built Compose stack on :3000). Targets that need dependencies run `npm install` first when
+(the source-built Compose stack on :3000), `make release` (see [Releasing](#releasing)). Targets that need dependencies run `npm install` first when
 `package-lock.json` is newer than `node_modules` (not `npm ci`, which deletes the folder first).
 
 ## Scripts
@@ -146,13 +147,42 @@ data in `expenses`), `make build`, `make migration` (`db:generate`), `make docke
 | `npm run dev:demo` | seed the `expenses_demo` database if needed, then the dev server on it (port 3000) |
 | `npm run demo:reset` | put `expenses_demo` back to the fresh demo state, no prompt |
 | `npm run dev` | Next.js dev server (Turbopack) on port 3000, on your data in `expenses` |
-| `npm run build` / `npm start` | production build / server (both force `NODE_ENV=production`) |
+| `npm run build` / `npm start` | production build / server (both force `NODE_ENV=production` through `scripts/next-production.mjs`, so they also work in Windows `cmd`) |
 | `npm run lint` / `npm run typecheck` | ESLint / `tsc --noEmit` |
 | `npm test` | vitest (services run against an in-process PGlite database) |
 | `npm run db:generate` | generate a new migration into `drizzle/` after editing `src/db/schema.ts` |
 | `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
 | `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email> [--stdin]` | set a random (printed) or piped-in password and delete that user's sessions; needs `DATABASE_URL` on the command and refuses the real `expenses` database |
 | `npm run db:reset -- --demo` / `--clean` | real database: delete every row, then seed the demo data / leave it empty; asks first |
+
+## Releasing
+
+A release is a `vX.Y.Z` tag on `main`; pushing it makes GitHub Actions publish the `X.Y.Z`, `X.Y` and `X` images
+(signed, with SBOM and provenance). While working, add a line under "Unreleased" in
+[`CHANGELOG.md`](../CHANGELOG.md) for anything a self-hoster should know about.
+
+First a dry run: every check, and the changelog entry it would write, without changing anything:
+
+```bash
+make release VERSION=1.2.3 DRY_RUN=1
+```
+
+It refuses unless you are on `main`, the working tree is clean, `main` is exactly `origin/main` (it fetches first),
+the version is `X.Y.Z` and newer than the last tag, and typecheck, lint and the tests pass. Then cut it: this sets
+the version in `package.json` / `package-lock.json`, turns "Unreleased" into the `1.2.3` section (the commit
+subjects since the last tag if "Unreleased" is empty), commits `Release v1.2.3` and adds the tag, all locally:
+
+```bash
+make release VERSION=1.2.3
+```
+
+It prints the push command (and how to undo it instead). To cut and push in one go:
+
+```bash
+make release VERSION=1.2.3 PUSH=1
+```
+
+Without `make` (Windows): `node scripts/release.mjs 1.2.3 [--dry-run | --push]`.
 
 ## Layout
 
@@ -164,9 +194,9 @@ src/app/api/               health check + export downloads
 src/server/                service layer: domain rules, every query scoped by userId
 src/db/  drizzle/          Drizzle schema + PostgreSQL connection (auto-migrate); SQL migrations
 src/lib/  src/components/  auth, config, money, dates, csv, form helpers; UI kit and app shell (top menu, account menu, Add button)
-scripts/  compose.dev.yaml    db:seed and db:reset; development PostgreSQL
+scripts/  compose.dev.yaml    db:seed, db:reset, release, the build/start wrapper; development PostgreSQL
 tools/statement-importer/  the claude.ai Statement Importer page
-deploy/  .github/          Compose file for the prebuilt image; CI workflow that tests and publishes it
+deploy/  .github/          Compose file for the prebuilt image, Postgres major-upgrade script; CI workflow that tests and publishes it
 tests/  docs/              vitest suites; spec, decisions, self-hosting, development, statement importer
 ```
 

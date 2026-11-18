@@ -11,7 +11,7 @@ LAN_HOST ?= $(shell ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1
 phone-hint = @if [ -n "$(LAN_HOST)" ]; then echo "Phone on the same network: open http://$(LAN_HOST):3000"; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs psql dev dev-real demo-reset reset-password check test watch typecheck lint build migration docker-up docker-down docker-logs
+.PHONY: help install up down logs psql dev dev-real demo-reset reset-password check test watch typecheck lint build migration docker-up docker-down docker-logs release
 
 help:
 	@echo "Fast path:  make dev     (dev Postgres + demo data if missing + dev server on :3000; user ID demo / demo-password)"
@@ -19,6 +19,7 @@ help:
 	@echo "Checks:     make check   (typecheck + lint + tests)"
 	@echo "            make test [FILE=tests/money.test.ts] [NAME=JPY] | watch | typecheck | lint"
 	@echo "Build:      make build | migration | docker-up | docker-down | docker-logs"
+	@echo "Release:    make release VERSION=x.y.z [DRY_RUN=1] [PUSH=1]   (from a clean, up-to-date main)"
 	@echo "Details: docs/DEVELOPMENT.md"
 
 ## Setup ----------------------------------------------------------------------
@@ -109,3 +110,12 @@ docker-down:
 
 docker-logs:
 	docker compose logs -f
+
+## Release ----------------------------------------------------------------------
+
+# Checks (main, clean, = origin/main, newer than the last tag, typecheck + lint + tests), then bumps package.json,
+# moves CHANGELOG.md's "Unreleased" into the release, commits and tags vX.Y.Z. DRY_RUN=1 changes nothing;
+# only PUSH=1 pushes main and the tag (which publishes the image). See docs/DEVELOPMENT.md#releasing.
+release: node_modules
+	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=x.y.z [DRY_RUN=1] [PUSH=1]"; exit 2; fi
+	node scripts/release.mjs $(VERSION) $(if $(DRY_RUN),--dry-run) $(if $(PUSH),--push)
