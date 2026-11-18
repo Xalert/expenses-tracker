@@ -45,6 +45,10 @@ this file in the same change and call the deviation out in your final report.
   `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` set inside the script; `npm run
   demo:reset` runs the reset with `--demo --yes` on that database. Neither can reach `expenses`. `npm run dev` stays on
   the real database. Scratch databases: put `DATABASE_URL=postgres://…/<scratch>` inline on the same command.
+- **Password reset in development.** `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email>
+  [--stdin]` or `make reset-password ID=<user>` (always `expenses_demo`) run `scripts/reset-password.mjs` (Auth →
+  "Forgotten password"). It needs `DATABASE_URL` and refuses `DEFAULT_DEV_DATABASE_URL` outside production;
+  `tests/reset-password.test.ts` keeps its copy of that URL and of the minimum password length in step.
 - **Demo login in the terminal.** When the dev server (`next dev`) opens the database and a user with user ID
   `demo` exists, it logs one line: `[demo] Sign in with user ID demo / password demo-password (if unchanged)`.
   Never in production builds. `db:seed` and `db:reset --demo` print the same line.
@@ -105,7 +109,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 
 | table | columns |
 |---|---|
-| `users` | `id`, `username` (the "user ID": unique, stored lowercased, required), `email` (nullable; unique when present, stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt` |
+| `users` | `id`, `username` (the "user ID": stored lowercased, required), `email` (nullable; stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `createdAt`; unique expression indexes `users_username_lower_uq` on `lower(username)` and `users_email_lower_uq` on `lower(email)` (migration `0002_lower-unique-users`; NULL emails never collide) |
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
 | `wallet_groups` | `id`, `userId` → users (cascade), `name`, `position` (int, display order), `color` (nullable, a palette key), `archivedAt` (nullable), `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
 | `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
@@ -130,13 +134,69 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
     shell's secondary line shows the user ID (and the email when there is one).
   - As built: the rules live in `src/lib/user-id.ts` (client-safe: `USER_ID_RE`, `USER_ID_HINT`, `NAME_MAX`,
     `normalizeUserId`, `userIdProblem`, `displayName`). Lookups compare `lower(username)` / `lower(email)`, so an
-    email stored in mixed case would still be found and still block a duplicate. A user ID problem
+    email stored in mixed case would still be found and still block a duplicate; the unique indexes are on those
+    same expressions, so the lookups are index scans and a case-only duplicate is refused by the database too. A user ID problem
     is reported in this order: empty, contains `@`, too short, too long, bad first character, other characters.
     The account menu (top bar, after the redesign; the old sidebar until then): display name, then the user ID
     (when it differs from the display name), then the email (when there is one), one per line, then Sign out. Long
     values truncate with an ellipsis and a tooltip; between them and Sign out, an **Account settings** link to
     `/account`.
-  - There is no profile editing yet: the user ID, email and names cannot be changed after registration.
+- **Profile (`/account`).** The user ID, email (add, change, remove) and first name / surname can be changed with
+  the registration rules above. Changing the user ID or the email (an email added, changed or removed) needs the
+  current password; the names alone do not. A change of letter case only is no change (values are stored
+  lowercased). Order of checks: formats (VALIDATION on the field), conflicts with *other* accounts (CONFLICT on
+  `username` / `email`, the registration messages), then the current password (VALIDATION on `currentPassword`:
+  "Enter your current password to change your user ID or email." when empty, "That is not your current
+  password." when wrong). Sessions stay valid (they reference the numeric id); the account menu updates on every
+  page (`revalidatePath("/", "layout")`).
+  - Service: `updateProfile(userId, { username, email?, firstName?, lastName?, currentPassword? }): Promise<UserView>`
+    — the whole profile, empty optional fields become NULL; NOT_FOUND for an unknown user; a unique violation from a
+    lost race is mapped to the field by `userConflictFromError(err)` (shared with `registerUser`, keyed on the index
+    names `USERNAME_UNIQUE_INDEX` / `EMAIL_UNIQUE_INDEX` exported by `src/db/schema.ts`).
+  - Action: `updateProfileAction` (`requireUser()`, zod shape, service, `serviceErrorState`); never echoes the
+    password; success returns `{ ok: true, message: "Profile saved.", values: <saved values> }` and the form is keyed
+    on the result.
+- **Devices (`/account`).** Shows how many *other* active (unexpired) sessions the user has and a "Sign out other
+  devices" button that deletes every session of the user except the current one ("Signed out N other
+  session(s)." / "No other devices were signed in."). Services: `countOtherSessions(userId, keepTokenHash)`,
+  `signOutOtherSessions(userId, keepTokenHash): Promise<number>` (`keepTokenHash: string | null`, null = all).
+  Action: `signOutOtherDevicesAction()`.
+  - **Expired sessions are cleaned up:** `createSession` deletes the user's expired sessions before adding the new
+    one, and every successful sign-in also runs one global `delete from sessions where expires_at <= now()`
+    (`deleteExpiredSessions(userId?)`). A session found expired when its cookie is presented is deleted as before.
+- **Deleting the account (`/account`, "Delete account").** Needs the current password and the user ID typed out
+  (any letter case). Suggests downloading a backup first (link to `/api/export/backup`). Deletes the user and all
+  their data in one DB transaction, children first (entries, transfers, wallets, wallet groups, categories,
+  sessions, then the user row), so the `restrict` foreign keys never see a half-deleted account. Then the cookie is
+  cleared and the browser goes to `/login?deleted=1`, which shows "Your account and all its data were deleted."
+  - Service: `deleteAccount(userId, { currentPassword, confirmUsername }): Promise<void>` — the password is checked
+    first (VALIDATION on `currentPassword`; unknown user looks the same), then the confirmation (VALIDATION on
+    `confirmUsername`, "Type your user ID, <id>, to confirm.").
+  - Action: `deleteAccountAction` (zod: both required), `clearSessionCookie()` from `src/lib/auth.ts`, then
+    `redirect("/login?deleted=1")` outside the `try`.
+- **Rate limiting (`src/lib/rate-limit.ts`).** In memory, **per process**: counts reset on restart and are not shared
+  between several app containers (the shipped deployment runs one). A key's 15-minute window starts at its first
+  failure; once it holds the limit of failures the key is refused until the window ends.
+  - Sign-in: 5 failures per identifier (trimmed, lowercased — so it applies equally to unknown identifiers) and 30
+    per client address (the first `X-Forwarded-For` hop; Next.js fills that header with the socket address when no
+    proxy sent one; no address → only the identifier limit). A refused attempt does not check the password and
+    answers "Too many sign-in attempts. Try again in N minutes." (N rounded up), whether or not the account exists.
+    A successful sign-in resets the identifier's counter (not the address's).
+  - `/account`: the current-password checks of the password change, the profile change and the deletion share one
+    counter per signed-in user (5 failures / 15 minutes, "Too many password attempts. Try again in N minutes.").
+    Only a wrong password counts (`isWrongPasswordError`); a missing one does not. A names-only profile change
+    checks no password and is never refused.
+  - The memory is bounded: at 10 000 keys expired entries are pruned, then the oldest.
+- **Forgotten password.** There is no email-based reset. `/login` says "Forgot your password? Ask the administrator
+  of this server to reset it." The administrator runs `scripts/reset-password.mjs <user ID or email>` (in the
+  container: `docker compose exec app node scripts/reset-password.mjs <user>`; `docs/SELF-HOSTING.md`): plain ESM
+  JavaScript using `pg` and `node:crypto` scrypt in exactly the `src/lib/password.ts` format. It sets a random
+  20-character password and prints it, or with `--stdin` reads one (at least 8 characters, one trailing newline
+  dropped), and deletes all of that user's sessions, in one transaction. The identifier is looked up like the
+  sign-in field. `DATABASE_URL` is required; outside `NODE_ENV=production` it refuses the development default
+  database (`expenses` on localhost:5433). Shipped in the image (`/app/scripts/`, copied by the Dockerfile and
+  traced by `outputFileTracingIncludes`); `pg` comes from the standalone output. In development:
+  `DATABASE_URL=<url> npm run user:reset-password -- <user>` or `make reset-password ID=<user>` (demo database).
 - **Changing the password (`/account`).** A signed-in user changes their password by giving the current one and
   the new one twice. Rules: the current password must verify (else VALIDATION on `currentPassword`, "That is not
   your current password."); the new one has at least 8 characters (VALIDATION on `newPassword`); the confirmation
@@ -163,6 +223,9 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   migrator; Postgres DDL is transactional, so a failing migration rolls back and the app does not start, and foreign
   keys are always enforced (no pragmas, no `foreign_key_check`, no copy of the database before migrating). Take a
   `pg_dump` before upgrading. A migration that rewrites data still needs reading by hand before it ships.
+  `0002_lower-unique-users` drops the plain unique constraints `users_username_unique` / `users_email_unique` and
+  creates the `lower(...)` unique indexes (no data rewritten; it would fail, and roll back, only on a database
+  holding two user IDs or emails that differ in case alone, which the app never writes).
 - Passwords hashed with `node:crypto` scrypt (random salt, timing-safe compare). Min length 8.
 - DB-backed sessions: random 32-byte token in an `httpOnly`, `sameSite=lax` cookie (30-day expiry) whose `secure`
   flag follows `COOKIE_SECURE` (see Deployment; logic in `src/lib/config.ts`); only its sha256 is stored. Logout
@@ -171,7 +234,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   is disabled" card, `registerAction` returns an error without creating anything, `/login` hides the sign-up link.
 - `src/lib/auth.ts` exposes `getCurrentUser(): Promise<CurrentUser | null>` (React `cache`, per request),
   `requireUser(): Promise<CurrentUser>` (redirects to `/login`), `createSession(userId)`, `destroySession()`,
-  `redirectIfSignedIn()`; `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string }`. Cookie name `et_session`.
+  `redirectIfSignedIn()`, `clearSessionCookie()` (after an account deletion); `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string }`. Cookie name `et_session`.
   The `(app)` layout calls `requireUser()`; every Server Action calls it too (layouts don't protect actions).
   Signed-in users visiting `/login` or `/register` are redirected to `/`.
 - Password hashing lives in `src/lib/password.ts` (`hashPassword`, `verifyPassword`); user creation/login in
@@ -184,7 +247,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   fields through and the service turns them into NULL.
   Sign-out is `signOutAction` in `src/app/(app)/actions.ts`.
 - Login failures return one generic message ("Invalid user ID, email or password"), taking similar time whether
-  or not the account exists. The login form field is named `identifier`; an empty or blank identifier never
+  or not the account exists (see "Rate limiting" for repeated failures). The login form field is named `identifier`; an empty or blank identifier never
   matches an account (also not one without email).
 
 ## Layout
@@ -253,7 +316,7 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
-`firstName`, `lastName`, `password`, `moveToCategoryId`.
+`firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -1103,10 +1166,20 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       category" and "Add" (secondary pill); errors and focus as before. The rows' old Rename / Remove buttons are
       gone; `category-row.tsx` holds the row summary and the open-row forms.
 - **/account** ("Account settings") — not in `NAV_ITEMS`; reached from the account menu. `PageHeader` "Account
-  settings", then a "Signed in as" card (display name, user ID, email when set; read-only) and a "Change password"
-  card with the form described in Auth → "Changing the password". A successful change shows a polite, non-alert
-  success notice ("Password changed. Your other devices were signed out.") above the cleared form; errors use the
-  usual field errors / `FormError`. One column, `max-w-xl`. The `@modal` slot has a null `account/page.tsx`.
+  settings", then four cards in one column (`max-w-xl`):
+  1. **Profile** ("Signed in as <display name>."): user ID (with `USER_ID_HINT`), email (optional), first name /
+     surname (optional, side by side from `sm`), current password (hint "Needed only when you change your user ID or
+     email."), "Save profile". Prefilled from the account; after a result the inputs show the echoed / saved values.
+  2. **Change password**: the form described in Auth → "Changing the password".
+  3. **Devices** ("Sessions last 30 days unless you sign out."): "You are signed in on this device only." or "You are
+     also signed in on N other device(s) or browser(s).", and a secondary "Sign out other devices" button.
+  4. **Delete account**: what gets deleted, a "Download a backup" link (`/api/export/backup`), "Type your user ID,
+     **<id>**, to confirm", current password, and a danger "Delete account" button.
+  Each form shows its success as a polite, non-alert notice (`role="status"`) above it and errors as the usual field
+  errors / `FormError`; each current-password input has its own id (`profile-`, `pw-`, `delete-currentPassword`),
+  all named `currentPassword`. The `@modal` slot has a null `account/page.tsx`.
+- **/login** also shows "Forgot your password? Ask the administrator of this server to reset it." under the form,
+  and with `?deleted=1` a status notice "Your account and all its data were deleted." above the heading.
 - **Route contract between features**: `/transactions/new?wallet=<id>&kind=expense|income|transfer`,
   `/transactions/<id>/edit`, `/transactions/transfers/<transferId>/edit`,
   `/transactions?wallet=<id>&month=YYYY-MM`, `/wallets/<id>?month=YYYY-MM`, `/wallets/new`, `/wallets/<id>/edit`,
@@ -1711,8 +1784,9 @@ As built (order, colour, archive):
 The app is meant to be self-hosted by anyone (homelab, VPS) from a single container. There is no dependency on
 Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (README text, "Deploy" links, logos).
 
-- `next.config`: `output: 'standalone'` (+ `outputFileTracingIncludes` for `drizzle/**`, so the migrations are inside
-  `.next/standalone/drizzle`). The standalone server still needs `.next/static` → `.next/standalone/.next/static`
+- `next.config`: `output: 'standalone'` (+ `outputFileTracingIncludes` for `drizzle/**` and
+  `scripts/reset-password.mjs`, so the migrations are inside `.next/standalone/drizzle` and the script in
+  `.next/standalone/scripts`). The standalone server still needs `.next/static` → `.next/standalone/.next/static`
   and `public/` → `.next/standalone/public` copied in (Next's standard standalone step). `public/` only holds a
   `.gitkeep` today. `pg` is in `serverExternalPackages`; it is pure JavaScript and is traced into
   `.next/standalone/node_modules` like any other dependency.
@@ -1733,6 +1807,21 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
 - Migrations are applied automatically at startup, so the migrations folder must be resolvable in the
   standalone build (resolve from `process.cwd()`, overridable with `MIGRATIONS_DIR`) and copied into the image.
 - `GET /api/health` → `200 {"status":"ok"}` after a trivial DB query (`503` if the DB is unreachable); public, no auth.
+- **A reverse proxy that does not pass `Host` (`src/proxy.ts`, `src/lib/origin-check.ts`).** Next.js refuses every
+  Server Action whose `Origin` host differs from the request's host (first `X-Forwarded-Host` hop, else `Host`) with
+  a bare 500 and the log line "`host` header with value … does not match `origin` header …" — what a proxy that
+  rewrites `Host` to `localhost:3000` causes. The proxy file repeats that comparison for POSTs that are Server
+  Actions (a `Next-Action` header, or a `multipart/form-data` / `application/x-www-form-urlencoded` body) and, on a
+  mismatch, logs `[origin-check] Refused a form post to <path>: the browser's Origin "<host>" does not match the
+  host "<host>". A reverse proxy in front of the app must pass the original Host header or set X-Forwarded-Host
+  (docs/SELF-HOSTING.md, "Behind a reverse proxy").` and answers 403: for a fetch action a `text/plain` body with
+  `HOST_MISMATCH_MESSAGE` (the Next.js client throws it as the error message; `src/app/error.tsx`, the app's error
+  boundary, shows it under "Request refused"), for a form post without JavaScript a small self-contained HTML page
+  with the same text. Everything else passes through unchanged. `serverActions.allowedOrigins` is not configured
+  (the check would have to honour it too). `src/app/error.tsx` shows "Something went wrong" + "Try again"
+  (`retry()`) for any other error.
+- **Password reset script.** The image also holds `/app/scripts/reset-password.mjs` (see Auth → "Forgotten
+  password"); the Dockerfile copies it and fails the build if `node_modules/pg` is missing from the standalone output.
 - `Dockerfile`: multi-stage on `node:24-bookworm-slim`, final stage runs the standalone server as a non-root user,
   `EXPOSE 3000`, `HEALTHCHECK` on `/api/health`. The image is pure JavaScript (`pg` has no native module), so it
   builds for `linux/amd64` and `linux/arm64` without per-platform steps. No `/data` volume and no `DATABASE_URL`

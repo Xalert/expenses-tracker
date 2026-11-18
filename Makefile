@@ -11,11 +11,11 @@ LAN_HOST ?= $(shell ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1
 phone-hint = @if [ -n "$(LAN_HOST)" ]; then echo "Phone on the same network: open http://$(LAN_HOST):3000"; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs psql dev dev-real demo-reset check test watch typecheck lint build migration docker-up docker-down docker-logs
+.PHONY: help install up down logs psql dev dev-real demo-reset reset-password check test watch typecheck lint build migration docker-up docker-down docker-logs
 
 help:
 	@echo "Fast path:  make dev     (dev Postgres + demo data if missing + dev server on :3000; user ID demo / demo-password)"
-	@echo "Dev:        make up | down | logs | psql [DB=expenses] | demo-reset | dev-real (your REAL data)"
+	@echo "Dev:        make up | down | logs | psql [DB=expenses] | demo-reset | reset-password ID=demo | dev-real (your REAL data)"
 	@echo "Checks:     make check   (typecheck + lint + tests)"
 	@echo "            make test [FILE=tests/money.test.ts] [NAME=JPY] | watch | typecheck | lint"
 	@echo "Build:      make build | migration | docker-up | docker-down | docker-logs"
@@ -62,6 +62,12 @@ dev-real: node_modules up
 # expenses_demo back to the fresh demo state, no prompt.
 demo-reset: node_modules up
 	npm run -s demo:reset
+
+# A new random password for a user of the demo database (prints it): make reset-password ID=demo
+# The script refuses the real `expenses` database.
+reset-password: node_modules up
+	@if [ -z "$(ID)" ]; then echo "Usage: make reset-password ID=<user ID or email>"; exit 1; fi
+	DATABASE_URL=$(DEMO_URL) node scripts/reset-password.mjs "$(ID)"
 
 ## Checks (no database needed: tests use PGlite) ------------------------------
 

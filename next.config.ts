@@ -27,8 +27,9 @@ const nextConfig: NextConfig = {
   // (no mandatory <Suspense> around cookie reads). See docs/SPEC.md "Stack".
   // Self-hosting: `next build` emits .next/standalone/server.js (see docs/SPEC.md "Deployment").
   output: "standalone",
-  // Migrations are read from disk at runtime; ship them inside the standalone output too.
-  outputFileTracingIncludes: { "/**": ["./drizzle/**/*"] },
+  // Migrations are read from disk at runtime; ship them inside the standalone output too, with the administrator's
+  // password reset script (it imports `pg`, which the standalone output holds because of serverExternalPackages).
+  outputFileTracingIncludes: { "/**": ["./drizzle/**/*", "./scripts/reset-password.mjs"] },
   serverExternalPackages: ["pg"],
   // The app serves no optimised images, so the image optimiser is switched off.
   images: { unoptimized: true },

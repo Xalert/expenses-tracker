@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
+import { deleteExpiredSessions } from "@/server/users";
 import { shouldUseSecureCookie } from "./config";
 import { displayName } from "./user-id";
 
@@ -27,10 +28,14 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** Create a DB session for `userId` and set the session cookie. Call from a Server Action only. */
+/**
+ * Create a DB session for `userId` and set the session cookie; the user's expired sessions are deleted first.
+ * Call from a Server Action only.
+ */
 export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await deleteExpiredSessions(userId);
   await (await getDb()).insert(sessions).values({ tokenHash: hashToken(token), userId, expiresAt });
 
   (await cookies()).set(SESSION_COOKIE, token, {
@@ -49,6 +54,11 @@ export async function destroySession(): Promise<void> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) await (await getDb()).delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
   store.delete(SESSION_COOKIE);
+}
+
+/** Clear the session cookie without touching the database (after the account and its sessions were deleted). */
+export async function clearSessionCookie(): Promise<void> {
+  (await cookies()).delete(SESSION_COOKIE);
 }
 
 /** sha256 of the current request's session cookie token (what `sessions.tokenHash` stores), or null when there is no cookie. */

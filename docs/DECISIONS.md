@@ -76,6 +76,20 @@ section holds what replaced it.
 | The dashboard greeting uses the display name (it used the first word of the name) | Spec: display name everywhere; with optional names the first word is no longer meaningful | built |
 | Mobile top bar shows the display name with the user ID under it (when they differ); the sidebar shows user ID and email on separate lines; the user ID line is left out when it already is the display name | Migrated users learn their user ID from the shell; the top bar has room for two short lines | built |
 | Demo seed user: user ID `demo`, email kept, first/last name "Demo" / "User"; an existing demo user is found by user ID or email and the login printed with its actual user ID | Idempotent on databases seeded before user IDs (the migration derives `demo` for it, or a suffixed one) | built |
+| Profile editing on `/account` (user ID, email add/change/remove, names) with the registration rules; changing the user ID or email needs the current password, the names do not | The user ID and email are what someone signs in with, so changing them from a borrowed signed-in browser must need the password; names are cosmetic | planner (2026-11-18) |
+| A profile change checks formats, then conflicts, then the password; a case-only change counts as no change | Conflicts and typos are reported without spending a password attempt; stored values are lowercased anyway | built |
+| The "Signed in as" card became the Profile form (its description keeps "Signed in as <name>") | One card that shows and edits the same fields; no read-only duplicate | built |
+| "Sign out other devices" on `/account` shows the count of other active sessions and keeps the current one; no per-device list | A list would need user agents / last-seen times the sessions table does not keep; the count and one button cover "I signed in somewhere I shouldn't have" | planner (2026-11-18) |
+| Expired sessions: the user's are deleted whenever a session is created, plus one global `delete … where expires_at <= now()` at every sign-in | No scheduler needed; the global delete is cheap at household scale | planner (2026-11-18) |
+| Account deletion needs the current password and the user ID typed out, deletes everything in one transaction children first, then clears the cookie and shows a notice on `/login` | Irreversible, so two deliberate inputs; explicit order instead of relying on cascades past `restrict` foreign keys; the page links the JSON backup first | planner (2026-11-18) |
+| No email-based password reset: an administrator command `scripts/reset-password.mjs` in the image (random printed password, or `--stdin`), which also deletes the user's sessions; `/login` says to ask the administrator | Email is optional and the app sends none; the person running the container is the one who can prove anything. Plain ESM so it runs with the image's Node and `pg` alone; tested against `verifyPassword` so the hash format cannot drift | planner (2026-11-18) |
+| The reset script refuses the development default database outside production (no override flag) | Same rule as `db:reset --yes`: the default dev database is the owner's real data; `make reset-password` uses `expenses_demo` | planner (2026-11-18) |
+| Sign-in rate limiting in memory, per process: 5 failures per identifier (lowercased, so unknown identifiers too) or 30 per client address in a 15-minute window that starts at the first failure; refused attempts get "Too many sign-in attempts. Try again in N minutes." without a password check; a success resets the identifier only | No extra infrastructure for a single-container app; the message is the same for existing and unknown accounts. A restart clears the counts and several containers would not share them (documented) | planner (2026-11-18) |
+| The client address is the first `X-Forwarded-For` hop (Next.js fills the header with the socket address when absent); without one the address limit is skipped | What the planner asked for. The first hop is client-controlled when the proxy appends (nginx's `$proxy_add_x_forwarded_for`), so the address limit can be dodged by a client that sets the header; the per-identifier limit cannot. `docs/SELF-HOSTING.md` says how to make nginx overwrite it | planner (rule), built (caveat) |
+| The current-password checks on `/account` (password change, profile, deletion) share one per-user counter with the sign-in limits' numbers (5 / 15 min), separate from the sign-in identifier counters; only a wrong password counts | A stolen session must not be able to guess the password through `/account`; keeping it apart from the sign-in key means a lockout on `/account` does not also lock the user out of signing in | planner (limit), built (separate key) |
+| Unique indexes on `lower(username)` and `lower(email)` replace the plain unique constraints (migration `0002_lower-unique-users`) | The lookups compare `lower(...)`, which the plain indexes could not serve; the expression indexes do and also make case-only duplicates impossible in the database. The race mapping keys on the new index names, exported from the schema | planner (2026-11-18) |
+| A reverse proxy that drops `Host` is detected by `src/proxy.ts`, which repeats Next.js's Server Action origin check: a log line naming the fix and a 403 with a readable message (`src/app/error.tsx` shows it, or a small HTML page without JavaScript) instead of Next's bare 500 | The 500 comes from Next.js's action handler (`Invalid Server Actions request.`, "`host` header … does not match `origin` header …"); it gave a self-hoster no clue. Repeating the comparison is cheap and the Next.js check still runs after it. `serverActions.allowedOrigins` is not set; if it ever is, the proxy must honour it too | planner (ask), built (approach) |
+| `src/app/error.tsx` (the first app-wide error boundary) shows "Something went wrong" + Try again for every other error | Needed for the host-mismatch message to be visible after a fetch action; before it, an unexpected error showed Next's default "Application error" | built |
 
 ### Categories
 
@@ -375,23 +389,18 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Security and operations
 
-- **No login rate limiting.** An internet-facing instance should sit behind something that throttles sign-in
-  attempts.
-- **No password reset or account deletion** (password change exists, on `/account`). A forgotten password
-  currently means editing the database by hand.
-- **No profile screen: user ID, email and names cannot be changed after registration** (nor can an email be added
-  later to an account created without one).
+- **Sign-in rate limits are per process and in memory** (reset on restart, not shared between containers), and the
+  per-address limit trusts the first `X-Forwarded-For` hop, which a client can forge unless the proxy overwrites it.
+- **No self-service password reset.** A forgotten password needs the administrator (`scripts/reset-password.mjs`).
+- **No list of signed-in devices** (only their count and "Sign out other devices"); sessions record no user agent or
+  last use.
 - *(superseded 2026-11-09 by Postgres)* **Migrated accounts are not told their new user ID** other than by the shell after signing in with their email;
   `docs/SELF-HOSTING.md` shows how an administrator can list them.
 - *(superseded 2026-11-09 by Postgres)* **Pre-migration copies are never cleaned up**; each one is a full copy of the database in the `/data` volume.
 - *(superseded 2026-11-09 by Postgres)* **A migration whose derived user IDs still collide after the `user<id>` fallback** (only possible with contrived
   emails) stops startup; it is rolled back and needs a manual fix of the colliding email before upgrading.
-- **Sign-in lookups compare `lower(...)`** and so do not use the unique indexes (a scan of `users`); irrelevant at
-  household scale.
-- **No session management.** There is no "sign out everywhere", and expired sessions are only removed when their
-  cookie is next presented.
-- **A reverse proxy must preserve the `Host` header** (or send `X-Forwarded-Host`); otherwise sign-in fails with a
-  500. Documented in `docs/SELF-HOSTING.md`, not detected or explained by the app.
+- **A reverse proxy must preserve the `Host` header** (or send `X-Forwarded-Host`); the app now refuses such forms
+  with an explanation and a log line instead of a bare 500, but cannot work around it.
 - **A reverse proxy's upload limit must allow 6 MB** for imports (nginx defaults to 1 MB).
 - **`db:reset` is development-only.** It refuses with `NODE_ENV=production` and is not shipped in the Docker image;
   Docker users start over by taking a backup and removing the volume (`docker compose down -v`).
@@ -503,6 +512,17 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   (the layout refresh while the dialog is open keeping typed values), the "Manage categories" draft round trip
   through /categories in the dialog and on the full page, and the amount / note surviving a Transfer ↔ Expense
   switch.
+- **Accounts and security (2026-11-18): profile editing, devices, account deletion, rate limiting, the reset script
+  and the host check** are covered by service, action (mocked Next APIs), render and unit tests only. Not checked in
+  a browser or a container: the four `/account` cards at 375px and in dark mode; the account menu showing a changed
+  name after saving; the redirect to `/login?deleted=1` and its notice; `src/proxy.ts` running in `next dev` /
+  the standalone server (that a real Server Action POST reaches it with the `Origin`, `Host` and `Next-Action`
+  headers as tested, and that the Next.js client really shows the 403 text through `src/app/error.tsx`) behind an
+  actual proxy that rewrites `Host`; `x-forwarded-for` as seen by `headers()` in a Server Action with and without a
+  proxy; `docker compose exec app node scripts/reset-password.mjs` in a built image (`next build` could not run in
+  the agent worktree; `pg` was confirmed present in an existing `.next/standalone/node_modules`, and the Dockerfile
+  now fails the build if it is not); the `0002_lower-unique-users` migration on a populated Postgres 17 (run on
+  PGlite only).
 
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking

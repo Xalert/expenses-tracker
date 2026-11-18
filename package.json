@@ -15,7 +15,8 @@
     "db:down": "docker compose -f compose.dev.yaml down",
     "db:seed": "tsx --conditions=react-server scripts/seed.ts",
     "db:reset": "tsx --conditions=react-server scripts/reset.ts",
-    "demo:reset": "DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo tsx --conditions=react-server scripts/reset.ts --demo --yes"
+    "user:reset-password": "node scripts/reset-password.mjs",
+    "demo:reset":"DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo tsx --conditions=react-server scripts/reset.ts --demo --yes"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",

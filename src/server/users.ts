@@ -1,7 +1,17 @@
 import "server-only";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, count, eq, gt, lte, ne, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { sessions, users, type User } from "@/db/schema";
+import {
+  EMAIL_UNIQUE_INDEX,
+  categories,
+  sessions,
+  transactions,
+  transfers,
+  users,
+  walletGroups,
+  wallets,
+  type User,
+} from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
 import { NAME_MAX, displayName, normalizeUserId, userIdProblem } from "@/lib/user-id";
@@ -51,19 +61,50 @@ function optionalName(value: string | null | undefined, field: "firstName" | "la
 const byUsername = (username: string) => sql`lower(${users.username}) = ${username}`;
 const byEmail = (email: string) => sql`lower(${users.email}) = ${email}`;
 
+function parseUsername(value: string | null | undefined): string {
+  const username = normalizeUserId(value ?? "");
+  const problem = userIdProblem(username);
+  if (problem) throw new ServiceError("VALIDATION", problem, "username");
+  return username;
+}
+
+function parseEmail(value: string | null | undefined): string | null {
+  const email = normalizeEmail(value ?? "") || null;
+  if (email !== null && !EMAIL_RE.test(email)) {
+    throw new ServiceError("VALIDATION", "Enter a valid email address, or leave it empty.", "email");
+  }
+  return email;
+}
+
+/**
+ * CONFLICT on the right field for a unique violation on `users` (a lost race with a concurrent registration or
+ * profile change), by the name of the index that fired; null for any other error.
+ */
+export function userConflictFromError(err: unknown): ServiceError | null {
+  const unique = pgError(err, "23505");
+  if (!unique) return null;
+  if (unique.constraint === EMAIL_UNIQUE_INDEX) return new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+  return new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
+}
+
+/** CONFLICT when another account (not `exceptUserId`) has this user ID or email. */
+async function assertFree(conn: DBOrTx, username: string, email: string | null, exceptUserId?: number) {
+  const others = (where: SQL) => (exceptUserId === undefined ? where : and(where, ne(users.id, exceptUserId)));
+  const [byName] = await conn.select({ id: users.id }).from(users).where(others(byUsername(username))).limit(1);
+  if (byName) throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
+  if (email !== null) {
+    const [byMail] = await conn.select({ id: users.id }).from(users).where(others(byEmail(email))).limit(1);
+    if (byMail) throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
+  }
+}
+
 /**
  * Create a user and seed their default categories and group in one DB transaction.
  * VALIDATION (field username / email / password / firstName / lastName) or CONFLICT (field username / email).
  */
 export async function registerUser(input: RegisterInput): Promise<UserView> {
-  const username = normalizeUserId(input.username ?? "");
-  const usernameProblem = userIdProblem(username);
-  if (usernameProblem) throw new ServiceError("VALIDATION", usernameProblem, "username");
-
-  const email = normalizeEmail(input.email ?? "") || null;
-  if (email !== null && !EMAIL_RE.test(email)) {
-    throw new ServiceError("VALIDATION", "Enter a valid email address, or leave it empty.", "email");
-  }
+  const username = parseUsername(input.username);
+  const email = parseEmail(input.email);
   const firstName = optionalName(input.firstName, "firstName");
   const lastName = optionalName(input.lastName, "lastName");
   if ((input.password ?? "").length < MIN_PASSWORD_LENGTH) {
@@ -71,20 +112,12 @@ export async function registerUser(input: RegisterInput): Promise<UserView> {
   }
 
   const db = await getDb();
-  const assertFree = async (conn: DBOrTx) => {
-    const [byName] = await conn.select({ id: users.id }).from(users).where(byUsername(username)).limit(1);
-    if (byName) throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
-    if (email !== null) {
-      const [byMail] = await conn.select({ id: users.id }).from(users).where(byEmail(email)).limit(1);
-      if (byMail) throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
-    }
-  };
-  await assertFree(db); // before the (slow) hash, so a taken name is reported at once
+  await assertFree(db, username, email); // before the (slow) hash, so a taken name is reported at once
   const passwordHash = await hashPassword(input.password);
 
   try {
     return await db.transaction(async (tx) => {
-      await assertFree(tx); // again: another registration may have finished while we were hashing
+      await assertFree(tx, username, email); // again: another registration may have finished while we were hashing
       const [user] = await tx
         .insert(users)
         .values({ username, email, firstName, lastName, passwordHash })
@@ -95,12 +128,7 @@ export async function registerUser(input: RegisterInput): Promise<UserView> {
     });
   } catch (err) {
     // Lost a race with a concurrent registration: tell which unique index fired.
-    const unique = pgError(err, "23505");
-    if (unique) {
-      if (unique.constraint === "users_email_unique") throw new ServiceError("CONFLICT", EMAIL_TAKEN, "email");
-      throw new ServiceError("CONFLICT", USERNAME_TAKEN, "username");
-    }
-    throw err;
+    throw userConflictFromError(err) ?? err;
   }
 }
 
@@ -125,6 +153,35 @@ export async function authenticateUser(identifier: string, password: string): Pr
   return toUserView(row);
 }
 
+/** The message of a current password that does not verify (actions count these for the rate limit). */
+export const WRONG_PASSWORD_MESSAGE = "That is not your current password.";
+
+/** True for the ServiceError a wrong current password produces (not for a missing one). */
+export function isWrongPasswordError(err: unknown): boolean {
+  return err instanceof ServiceError && err.field === "currentPassword" && err.message === WRONG_PASSWORD_MESSAGE;
+}
+
+/**
+ * The user's row once `password` verifies against it; VALIDATION on `currentPassword` otherwise. An unknown user
+ * looks the same as a wrong password and takes similar time.
+ */
+async function verifyCurrentPassword(userId: number, password: string | null | undefined): Promise<User> {
+  const [row] = await (await getDb()).select().from(users).where(eq(users.id, userId)).limit(1);
+  const wrong = new ServiceError("VALIDATION", WRONG_PASSWORD_MESSAGE, "currentPassword");
+  if (!row) {
+    await verifyPassword(password ?? "", await getDummyPasswordHash());
+    throw wrong;
+  }
+  if (!(await verifyPassword(password ?? "", row.passwordHash))) throw wrong;
+  return row;
+}
+
+/** Sessions of `userId` other than `keepTokenHash` (null = all of them). */
+const otherSessions = (userId: number, keepTokenHash: string | null) =>
+  keepTokenHash === null
+    ? eq(sessions.userId, userId)
+    : and(eq(sessions.userId, userId), ne(sessions.tokenHash, keepTokenHash));
+
 /**
  * Replace the user's password. The current one must verify first (VALIDATION on `currentPassword`; an unknown user
  * looks the same). Then, in one DB transaction, the hash is replaced and every session of the user except
@@ -135,24 +192,123 @@ export async function changePassword(
   input: { currentPassword: string; newPassword: string },
   opts: { keepSessionTokenHash: string | null },
 ): Promise<void> {
-  const db = await getDb();
-  const [row] = await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, userId)).limit(1);
-  const wrong = new ServiceError("VALIDATION", "That is not your current password.", "currentPassword");
-  if (!row) {
-    await verifyPassword(input.currentPassword ?? "", await getDummyPasswordHash());
-    throw wrong;
-  }
-  if (!(await verifyPassword(input.currentPassword ?? "", row.passwordHash))) throw wrong;
+  await verifyCurrentPassword(userId, input.currentPassword);
   if ((input.newPassword ?? "").length < MIN_PASSWORD_LENGTH) {
     throw new ServiceError("VALIDATION", `Use at least ${MIN_PASSWORD_LENGTH} characters.`, "newPassword");
   }
 
   const passwordHash = await hashPassword(input.newPassword); // slow: outside the transaction
-  const keep = opts.keepSessionTokenHash;
-  await db.transaction(async (tx) => {
+  await (await getDb()).transaction(async (tx) => {
     await tx.update(users).set({ passwordHash }).where(eq(users.id, userId));
-    await tx
-      .delete(sessions)
-      .where(keep === null ? eq(sessions.userId, userId) : and(eq(sessions.userId, userId), ne(sessions.tokenHash, keep)));
+    await tx.delete(sessions).where(otherSessions(userId, opts.keepSessionTokenHash));
+  });
+}
+
+export type ProfileInput = {
+  username: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  /** Needed only when the user ID or the email changes. */
+  currentPassword?: string | null;
+};
+
+/**
+ * Replace the user's user ID, email, first name and surname (the whole profile: an empty email or name removes it),
+ * with the same rules as registration. Changing the user ID or the email (adding, changing or removing it) also
+ * needs the current password — VALIDATION on `currentPassword` when it is missing or wrong; the names alone do
+ * not. Checked in this order: formats, conflicts with other accounts (CONFLICT on `username` / `email`), the
+ * password. Sessions stay valid (they reference the numeric id). NOT_FOUND for an unknown user.
+ */
+export async function updateProfile(userId: number, input: ProfileInput): Promise<UserView> {
+  const username = parseUsername(input.username);
+  const email = parseEmail(input.email);
+  const firstName = optionalName(input.firstName, "firstName");
+  const lastName = optionalName(input.lastName, "lastName");
+
+  const db = await getDb();
+  const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!row) throw new ServiceError("NOT_FOUND", "Account not found.");
+
+  const identityChanged = username !== row.username.toLowerCase() || email !== (row.email?.toLowerCase() ?? null);
+  await assertFree(db, username, email, userId);
+  if (identityChanged) {
+    if (!input.currentPassword) {
+      throw new ServiceError("VALIDATION", "Enter your current password to change your user ID or email.", "currentPassword");
+    }
+    await verifyCurrentPassword(userId, input.currentPassword);
+  }
+
+  try {
+    const [updated] = await db
+      .update(users)
+      .set({ username, email, firstName, lastName })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!updated) throw new ServiceError("NOT_FOUND", "Account not found.");
+    return toUserView(updated);
+  } catch (err) {
+    // Lost a race with a registration or another profile change between the check and the update.
+    throw userConflictFromError(err) ?? err;
+  }
+}
+
+/** Active (unexpired) sessions of the user other than `keepTokenHash` (null counts all of them). */
+export async function countOtherSessions(userId: number, keepTokenHash: string | null): Promise<number> {
+  const [row] = await (await getDb())
+    .select({ n: count() })
+    .from(sessions)
+    .where(and(otherSessions(userId, keepTokenHash), gt(sessions.expiresAt, new Date())));
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * "Sign out other devices": delete every session of the user except `keepTokenHash` (null deletes all of them).
+ * Returns how many were deleted. Other users' sessions are never touched.
+ */
+export async function signOutOtherSessions(userId: number, keepTokenHash: string | null): Promise<number> {
+  const deleted = await (await getDb())
+    .delete(sessions)
+    .where(otherSessions(userId, keepTokenHash))
+    .returning({ id: sessions.id });
+  return deleted.length;
+}
+
+/**
+ * Delete expired sessions: the given user's (when a session is created), or with no user every account's (one
+ * `delete ... where expires_at <= now`, run at sign-in; cheap at household scale). Returns how many were deleted.
+ */
+export async function deleteExpiredSessions(userId?: number): Promise<number> {
+  const expired = lte(sessions.expiresAt, new Date());
+  const deleted = await (await getDb())
+    .delete(sessions)
+    .where(userId === undefined ? expired : and(eq(sessions.userId, userId), expired))
+    .returning({ id: sessions.id });
+  return deleted.length;
+}
+
+/**
+ * Delete the account and everything it owns in one DB transaction: entries, transfers, wallets, wallet groups,
+ * categories, sessions, then the user row — explicitly and children first, so the `restrict` foreign keys
+ * (entries → wallets / categories, wallets → groups) never see a half-deleted account. The current password must
+ * verify (VALIDATION on `currentPassword`; an unknown user looks the same), then `confirmUsername` must be the
+ * user ID in any letter case (VALIDATION on `confirmUsername`).
+ */
+export async function deleteAccount(
+  userId: number,
+  input: { currentPassword: string; confirmUsername: string },
+): Promise<void> {
+  const row = await verifyCurrentPassword(userId, input.currentPassword);
+  if (normalizeUserId(input.confirmUsername ?? "") !== row.username.toLowerCase()) {
+    throw new ServiceError("VALIDATION", `Type your user ID, ${row.username}, to confirm.`, "confirmUsername");
+  }
+  await (await getDb()).transaction(async (tx) => {
+    await tx.delete(transactions).where(eq(transactions.userId, userId));
+    await tx.delete(transfers).where(eq(transfers.userId, userId));
+    await tx.delete(wallets).where(eq(wallets.userId, userId));
+    await tx.delete(walletGroups).where(eq(walletGroups.userId, userId));
+    await tx.delete(categories).where(eq(categories.userId, userId));
+    await tx.delete(sessions).where(eq(sessions.userId, userId));
+    await tx.delete(users).where(eq(users.id, userId));
   });
 }

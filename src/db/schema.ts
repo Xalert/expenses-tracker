@@ -19,17 +19,30 @@ export type CategoryKind = (typeof CATEGORY_KINDS)[number];
 export const TRANSACTION_KINDS = ["expense", "income", "transfer_out", "transfer_in"] as const;
 export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
-export const users = pgTable("users", {
-  id: id(),
-  /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
-  username: text("username").notNull().unique(),
-  /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
-  email: text("email").unique(),
-  firstName: text("first_name"),
-  lastName: text("last_name"),
-  passwordHash: text("password_hash").notNull(),
-  createdAt: createdAt(),
-});
+/** Names of the unique indexes on `users` (src/server/users.ts maps a lost registration race by them). */
+export const USERNAME_UNIQUE_INDEX = "users_username_lower_uq";
+export const EMAIL_UNIQUE_INDEX = "users_email_lower_uq";
+
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
+    username: text("username").notNull(),
+    /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
+    email: text("email"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    passwordHash: text("password_hash").notNull(),
+    createdAt: createdAt(),
+  },
+  // Unique on lower(...): sign-in and the duplicate checks compare `lower(username)` / `lower(email)`, so these
+  // indexes serve those lookups and make case-only duplicates impossible in the database too.
+  (t) => [
+    uniqueIndex(USERNAME_UNIQUE_INDEX).on(sql`lower(${t.username})`),
+    uniqueIndex(EMAIL_UNIQUE_INDEX).on(sql`lower(${t.email})`),
+  ],
+);
 
 export const sessions = pgTable(
   "sessions",

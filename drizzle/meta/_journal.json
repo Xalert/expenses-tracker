@@ -15,6 +15,13 @@
       "when": 1794995019827,
       "tag": "0001_wallet-groups-order-colour-archive",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794996050126,
+      "tag": "0002_lower-unique-users",
+      "breakpoints": true
     }
   ]
 }
