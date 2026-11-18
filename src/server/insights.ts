@@ -62,6 +62,11 @@ export type WalletMonth = {
   totalEntryCount: number;
   /** Days 1..N; `closingMinor` is the balance after that day. */
   days: WalletMonthDay[];
+  /**
+   * Days N+1..the end of the month (empty for a past month), the closing balances carried on from `days` through
+   * the future-dated entries: the wallet page's "Balance after … · projected". Not drawn by the charts.
+   */
+  projectedDays: WalletMonthDay[];
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -432,8 +437,16 @@ export async function getMonthInsights(
   };
 }
 
-/** One wallet's month: opening balance, money in / out (transfers included) and the balance after each day 1..N. */
-export async function getWalletMonth(userId: number, walletId: number, month: string): Promise<WalletMonth | null> {
+/**
+ * One wallet's month: opening balance, money in / out (transfers included), the balance after each day 1..N and,
+ * for the days after today, the projected balance after each (`projectedDays`). `today` is for tests.
+ */
+export async function getWalletMonth(
+  userId: number,
+  walletId: number,
+  month: string,
+  { today = todayISO() }: { today?: string } = {},
+): Promise<WalletMonth | null> {
   const { from, to } = monthRange(assertMonth(month));
   if (!isPgId(walletId)) return null;
   const db = await getDb();
@@ -475,15 +488,14 @@ export async function getWalletMonth(userId: number, walletId: number, month: st
   }
 
   let balance = openingMinor;
-  const days = monthDates(month)
-    .slice(0, monthDayN(month))
-    .map((date) => {
-      const r = byDate.get(date);
-      const dayIn = r?.inMinor ?? 0;
-      const dayOut = r?.outMinor ?? 0;
-      balance += dayIn - dayOut;
-      return { date, inMinor: dayIn, outMinor: dayOut, closingMinor: balance };
-    });
+  const all = monthDates(month).map((date) => {
+    const r = byDate.get(date);
+    const dayIn = r?.inMinor ?? 0;
+    const dayOut = r?.outMinor ?? 0;
+    balance += dayIn - dayOut;
+    return { date, inMinor: dayIn, outMinor: dayOut, closingMinor: balance };
+  });
+  const n = monthDayN(month, today);
 
   return {
     openingMinor,
@@ -491,6 +503,7 @@ export async function getWalletMonth(userId: number, walletId: number, month: st
     outMinor,
     entryCount,
     totalEntryCount: (before?.n ?? 0) + entryCount + (after?.n ?? 0),
-    days,
+    days: all.slice(0, n),
+    projectedDays: all.slice(n),
   };
 }

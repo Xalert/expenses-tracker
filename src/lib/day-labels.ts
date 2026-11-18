@@ -45,6 +45,22 @@ export function dayMonthLabel(date: string): string {
 }
 
 /** A wallet page's day header: "Balance after €1,234.56" (the wallet's balance at the end of that day). */
-export function balanceAfterLabel(closingMinor: number, currency: string): string {
-  return `Balance after ${formatMoney(closingMinor, currency)}`;
+export function balanceAfterLabel(closingMinor: number, currency: string, { projected = false } = {}): string {
+  return `Balance after ${formatMoney(closingMinor, currency)}${projected ? " · projected" : ""}`;
+}
+
+/**
+ * The right side of a wallet page's day header: the balance after that day from `getWalletMonth().days`, or for a
+ * day after today the projected one from `projectedDays` ("Balance after €1,234.56 · projected"). Null otherwise.
+ */
+export function walletDayAside(
+  date: string,
+  closings: ReadonlyMap<string, number>,
+  projected: ReadonlyMap<string, number>,
+  currency: string,
+): string | null {
+  const closing = closings.get(date);
+  if (closing !== undefined) return balanceAfterLabel(closing, currency);
+  const ahead = projected.get(date);
+  return ahead === undefined ? null : balanceAfterLabel(ahead, currency, { projected: true });
 }
