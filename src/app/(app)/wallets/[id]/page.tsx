@@ -58,6 +58,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
   if (!data) notFound();
 
   const archived = wallet.archivedAt !== null;
+  // A wallet of an archived group is hidden like an archived one (the pickers do not offer it), so no add buttons.
+  const hidden = archived || wallet.groupArchived;
   const self = `/wallets/${wallet.id}`;
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
@@ -71,14 +73,14 @@ export default async function WalletPage({ params, searchParams }: Props) {
     id: w.id,
     name: w.name,
     currency: w.currency,
-    archived: w.archivedAt !== null,
+    archived: w.archivedAt !== null || w.groupArchived,
   }));
   const categoryOptions = (await listCategories(user.id)).map(({ id, name, kind }) => ({ id, name, kind }));
   const transactionsHref = `/transactions?wallet=${wallet.id}&month=${month}`;
 
   return (
     <>
-      {!archived && <AddButton href={`/transactions/new?wallet=${wallet.id}`} />}
+      {!hidden && <AddButton href={`/transactions/new?wallet=${wallet.id}`} />}
 
       <nav aria-label="Breadcrumb" className="mb-3 text-sm">
         <ol className="flex min-w-0 items-center gap-1.5">
@@ -132,7 +134,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {!archived &&
+              {!hidden &&
                 KIND_PILLS.map((p) => (
                   <LinkButton
                     key={p.kind}
@@ -156,6 +158,16 @@ export default async function WalletPage({ params, searchParams }: Props) {
             <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">
               This wallet is archived: it&apos;s hidden from the Overview and the pickers and can&apos;t take new
               entries. Unarchive it from the ⋯ menu to use it again.
+            </p>
+          )}
+          {!archived && wallet.groupArchived && (
+            <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">
+              This wallet&apos;s group “{wallet.groupName}” is archived, so the wallet is hidden from the Overview and the
+              pickers. Unarchive the group under “Archived groups” on the{" "}
+              <Link href="/wallets" className="font-semibold text-foreground underline">
+                Wallets
+              </Link>{" "}
+              page to use it again.
             </p>
           )}
 
@@ -210,7 +222,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
           </div>
           {items.length === 0 ? (
             <p className="rounded-[18px] border border-border bg-surface px-4 py-8 text-center text-sm text-muted-foreground">
-              {archived
+              {hidden
                 ? `No entries in ${formatMonth(month)}.`
                 : `No entries in ${formatMonth(month)}. Add one with the buttons above.`}
             </p>

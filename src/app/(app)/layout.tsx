@@ -29,7 +29,10 @@ export default async function AppLayout({ children, modal }: { children: React.R
           </Link>
           <MainMenu className="order-last w-full sm:order-none sm:w-auto sm:flex-1" />
           <div className="ml-auto flex items-center gap-2 sm:ml-0">
-            <GroupSwitcher groups={scope.groups.map(({ id, name }) => ({ id, name }))} selectedId={scope.selected?.id ?? null} />
+            <GroupSwitcher
+              groups={scope.groups.map(({ id, name, color }) => ({ id, name, color }))}
+              selectedId={scope.selected?.id ?? null}
+            />
             <AccountMenu displayName={user.displayName} username={user.username} email={user.email} />
           </div>
         </div>

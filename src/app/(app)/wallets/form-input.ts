@@ -127,3 +127,12 @@ export function groupNameField(formData: FormData): string {
   const v = formData.get("name");
   return typeof v === "string" ? v : "";
 }
+
+/**
+ * The `color` field of the group forms: undefined when the form has none (keep the colour), "" for "None" (the
+ * service reads it as no colour), else the raw value (the service checks it against the palette).
+ */
+export function groupColorField(formData: FormData): string | undefined {
+  const v = formData.get("color");
+  return typeof v === "string" ? v : undefined;
+}

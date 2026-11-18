@@ -8,18 +8,19 @@ const toOption = (w: WalletView, grouped: boolean): WalletOption => ({
   id: w.id,
   name: w.name,
   currency: w.currency,
-  archived: w.archivedAt !== null,
+  // A wallet of an archived group counts as archived (it is only offered when an entry already uses it).
+  archived: w.archivedAt !== null || w.groupArchived,
   ...(grouped ? { groupName: w.groupName } : {}),
 });
 
 /**
- * Picker options for `wallets`. With `grouped` (the user has two or more groups) they carry `groupName` and come
- * ordered by group name (then as given), so the pickers can show one <optgroup> per group.
+ * Picker options for `wallets`. With `grouped` (the user has two or more unarchived groups) they carry `groupName`
+ * and come ordered by group position (then as given), so the pickers can show one <optgroup> per group.
  */
 export function toWalletOptions(wallets: WalletView[], grouped: boolean): WalletOption[] {
   const list = [...wallets];
   if (grouped) {
-    list.sort((a, b) => a.groupName.localeCompare(b.groupName, undefined, { sensitivity: "base" }) || a.groupId - b.groupId);
+    list.sort((a, b) => a.groupPosition - b.groupPosition || a.groupId - b.groupId);
   }
   return list.map((w) => toOption(w, grouped));
 }
@@ -37,7 +38,8 @@ export async function walletOptions(userId: number, keepWalletIds: number[] = []
         .map((id) => getWallet(userId, id)),
     )
   ).filter((w): w is WalletView => w !== null);
-  return toWalletOptions([...active, ...extra], (await listWalletGroups(userId)).length >= 2);
+  const openGroups = (await listWalletGroups(userId)).filter((g) => g.archivedAt === null);
+  return toWalletOptions([...active, ...extra], openGroups.length >= 2);
 }
 
 export async function categoryOptions(userId: number): Promise<CategoryOption[]> {
