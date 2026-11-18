@@ -1,6 +1,7 @@
 // The create Server Actions behind the Add form: `mode=dialog` returns `{ ok: true }` (the dialog closes or clears
 // itself), the full page still redirects to `returnTo`. Next's request APIs are mocked; the services run for real.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listCategories } from "@/server/categories";
 import { createTransaction, getTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer, getTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
@@ -28,8 +29,13 @@ class RedirectSignal extends Error {
   }
 }
 
-const { createTransactionAction, createTransferAction, updateTransactionInlineAction, updateTransferInlineAction } =
-  await import("@/app/(app)/transactions/actions");
+const {
+  createCategoryFromEntryAction,
+  createTransactionAction,
+  createTransferAction,
+  updateTransactionInlineAction,
+  updateTransferInlineAction,
+} = await import("@/app/(app)/transactions/actions");
 
 function fd(entries: Record<string, string>): FormData {
   const f = new FormData();
@@ -231,5 +237,33 @@ describe("updateTransferInlineAction", () => {
     expect(cross.fieldErrors?.receivedAmount).toBe("Enter the amount received in JPY.");
     expect(next.revalidated).toEqual([]);
     expect((await getTransfer(user.id, transferId))?.from.amountMinor).toBe(5000);
+  });
+});
+
+describe("createCategoryFromEntryAction (the picker's + New category)", () => {
+  it("creates a category of the kind, returns it and revalidates every page", async () => {
+    const state = await createCategoryFromEntryAction({}, fd({ kind: "income", name: "  Side   gig " }));
+    expect(state).toMatchObject({ ok: true, message: "Added “Side gig”.", category: { name: "Side gig", kind: "income" } });
+    expect((await listCategories(user.id, "income")).map((c) => c.name)).toContain("Side gig");
+    expect(next.revalidated).toEqual([["/", "layout"]]);
+  });
+
+  it("puts name errors on `name` (empty, duplicate ignoring case, too long) and changes nothing", async () => {
+    const before = (await listCategories(user.id)).length;
+    const empty = await createCategoryFromEntryAction({}, fd({ kind: "expense", name: " " }));
+    expect(empty.fieldErrors?.name).toBe("Enter a name.");
+    const dup = await createCategoryFromEntryAction({}, fd({ kind: "expense", name: "food" }));
+    expect(dup.fieldErrors?.name).toMatch(/already have an expense category called/);
+    const long = await createCategoryFromEntryAction({}, fd({ kind: "expense", name: "x".repeat(41) }));
+    expect(long.fieldErrors?.name).toBe("Keep the name to 40 characters or fewer.");
+    expect(long.values).toMatchObject({ kind: "expense" });
+    expect((await listCategories(user.id)).length).toBe(before);
+    expect(next.revalidated).toEqual([]);
+  });
+
+  it("rejects a kind other than expense or income", async () => {
+    const state = await createCategoryFromEntryAction({}, fd({ kind: "transfer", name: "X" }));
+    expect(state.message).toBe("Choose expense or income.");
+    expect(state.ok).toBeUndefined();
   });
 });

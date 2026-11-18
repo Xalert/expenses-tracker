@@ -9,6 +9,7 @@ import { isServiceError } from "@/lib/errors";
 import { formValues, serviceErrorState, zodErrorState, type FormState } from "@/lib/form";
 import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
 import { safeReturnTo } from "@/lib/return-to";
+import { createCategory } from "@/server/categories";
 import {
   createTransaction,
   deleteTransaction,
@@ -342,4 +343,31 @@ export async function deleteTransferAction(formData: FormData): Promise<void> {
     revalidateAll([existing.from.walletId, existing.to.walletId]);
   }
   redirect(returnToOf(formData));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Categories created from the entry form
+
+/** The result of `createCategoryFromEntryAction`: on `ok`, the new category to add to the picker and select. */
+export type NewCategoryState = FormState & { category?: { id: number; name: string; kind: "expense" | "income" } };
+
+/**
+ * The category picker's "+ New category" (`useActionState`, dispatched without a <form>: the entry form cannot hold
+ * another). Fields `kind` ("expense" | "income") and `name`. Errors land on `name` (the service's field); a bad kind is
+ * a form-level message. Category names show on every signed-in page, hence the layout revalidation.
+ */
+export async function createCategoryFromEntryAction(_prev: NewCategoryState, formData: FormData): Promise<NewCategoryState> {
+  const user = await requireUser();
+  const values = formValues(formData);
+  const kind = formData.get("kind");
+  if (kind !== "expense" && kind !== "income") return { message: "Choose expense or income.", values };
+  let category: NewCategoryState["category"];
+  try {
+    const name = formData.get("name");
+    category = await createCategory(user.id, { name: typeof name === "string" ? name : "", kind });
+  } catch (err) {
+    return serviceErrorState(err, values);
+  }
+  revalidatePath("/", "layout");
+  return { ok: true, message: `Added “${category.name}”.`, category };
 }

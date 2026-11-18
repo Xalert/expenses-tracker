@@ -152,9 +152,25 @@ describe("EntryForm fields", () => {
         variant="dialog"
       />,
     );
-    expect(none).toContain("You have no expense categories.");
+    expect(none).toContain("You have no expense categories yet.");
     expect(none).not.toContain('name="categoryId"');
     expect(none).not.toContain('type="submit"');
+    // …but a category can be made right there.
+    expect(none).toMatch(/<button type="button"[^>]*>\+ New category<\/button>/);
+  });
+
+  it("ends the category pills with + New category and the Manage categories link, in that order", () => {
+    const html = render({ initial: { walletId: 1 } });
+    const pills = html.indexOf('name="categoryId"');
+    const add = html.indexOf("+ New category");
+    const manage = html.indexOf(">Manage categories</a>");
+    expect(pills).toBeGreaterThan(-1);
+    expect(add).toBeGreaterThan(pills);
+    expect(manage).toBeGreaterThan(add);
+    // The closed creator posts nothing: no field of its own.
+    expect(html).not.toContain("newCategoryName");
+    // Not on a transfer (no categories there).
+    expect(render({ initial: { kind: "transfer", fromWalletId: 1, toWalletId: 2 } })).not.toContain("+ New category");
   });
 
   it("transfers: From → To selects, Sent, and Received with the no-rate line only across currencies", () => {

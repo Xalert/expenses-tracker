@@ -286,6 +286,10 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | "Today" is the server's date, passed to the form | The form renders on the server first; a browser in another time zone would otherwise disagree with the server's default date and cause a hydration mismatch | built (step 6) |
 | Sent and Received sit side by side from `sm` up and stack below it | Two 44px inputs with their currency codes do not fit side by side in a 375px sheet | built (step 6) |
 | "Manage categories" is a dashed pill after the category pills, not a link in the heading row | Keeps the Tab order amount → categories → wallet that the spec asks for | built (step 6) |
+| The entry form creates a category in place ("+ New category", a Server Action called from a transition, not a nested form) and "Manage categories" saves a sessionStorage draft that the next form with the same key restores once | Leaving the form to add a category lost what was typed. Forms cannot nest, so the creator's field has no `name` and posts nothing with the entry. The draft covers the remaining trip to /categories (rename, remove) | planner |
+| `createCategoryFromEntryAction` lives in `transactions/actions.ts`, not `categories/actions.ts`; it revalidates the whole layout like the other category actions | It is the entry form's action (its own result shape with the new category); category names show on every page | built |
+| The draft key is shared by the Add dialog and the Add page (`new`); edit pages use `edit-<id>`, the inline editor its id prefix; a draft older than an hour, or with a wallet or category that is gone, is dropped (whole or per field) | "The same form" for a person is "Add", wherever it opens; an edit draft must not land in another entry. sessionStorage is per tab, so another tab never picks it up | built |
+| Switching between Transfer and Expense / Income carries the typed amount and note into the new inputs; Received is not carried | The amount input is a different element per kind; the date was already state. Received has no counterpart on the other side | planner (amount), built (note) |
 | The type switch uses the neutral `Segmented` look (no expense/income/transfer colours) | The shared control; the submit label and the fields already say which kind is chosen | built (step 6) |
 | After a failed save, focus moves to the first invalid control | The form remounts, so focus would fall to `<body>`, outside the dialog's focus trap | built (step 6) |
 | `Popover` clears its own `translateX` before measuring | React StrictMode runs the layout effect twice in development; the second run measured the shifted panel, found a sub-pixel overflow and reset the shift to 0, so the calendar opened from the date pill stuck out of the 375px sheet | built (step 6) |
@@ -424,8 +428,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - The import rules a user may want to read (Spendee transfers, time zones, labels, rounding) are documented only in
   `docs/SPEC.md`, which is written as a build contract rather than a user guide.
-- "Manage categories" in the transaction form navigates away and loses what was typed.
-- Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
 - Without JavaScript, an empty note search on /transactions leaves `q=` in the URL (harmless); with it the URL is
   clean. The filter chips themselves need JavaScript (popovers); without it only the search, the day-strip links,
@@ -477,6 +479,15 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   when it does).
 
 ### Not verified
+
+- **Entry form, dialogs and pickers gap fixes (2026-11-18) are covered by tests only** (pure functions, static
+  render, the new action against PGlite). Not tried in a browser: the popover flipping above near the bottom of the
+  viewport and of the Add sheet's scrolling body (and re-placing on scroll / resize / month view), the date
+  picker's "Back to days" focus, the sheet's drag-to-close on a real touch screen (iOS Safari's own gestures, the
+  slide-out timing, reduced motion), the "±" toggle keeping the iOS keyboard open, "+ New category" end to end
+  (the layout refresh while the dialog is open keeping typed values), the "Manage categories" draft round trip
+  through /categories in the dialog and on the full page, and the amount / note surviving a Transfer ↔ Expense
+  switch.
 
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking

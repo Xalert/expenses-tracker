@@ -421,6 +421,10 @@ Add dialog's create actions gain a `mode: "dialog"` hidden field that makes them
 redirecting. As built (step 4): the inline actions return `{ ok: true, message }` — "Saved €4.80 · Food" / "Saved
 €60.00 from Cash to Bank" — which the list announces in a visually hidden status line when the row closes; errors come
 back as `{ fieldErrors, message?, values }` exactly like the edit pages' actions.
+`createCategoryFromEntryAction(prev, formData)` (fields `kind`, `name`) backs the entry form's "+ New category": it
+returns `NewCategoryState` = `FormState & { category?: { id; name; kind } }` — `{ ok: true, message: "Added “X”.",
+category }` after `revalidatePath("/", "layout")`, else the service error on `name` (or "Choose expense or income."
+as the message for another kind). See "/transactions/new".
 
 `src/lib/money.ts`: `currencyDecimals(code)`, `parseAmount(input: string, currency, opts?: { allowNegative?: boolean }): number | null`
 (accepts `12`, `12.5`, `12,50`, `1 234.56`, `1,234.56`, `1.234,56`; a lone `,` is always the decimal separator; rejects
@@ -984,16 +988,44 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     transfer edit page no switch). The amount is a 72px-tall box with a 44px (48px from `sm`) extrabold
     `tabular-nums` input and the currency text beside it (`<id>-currency`, in the input's `aria-describedby`):
     "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
-    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then "Manage categories" as a dashed pill
-    after the pills (so Tab reaches it after the group). Wallet: `PillPicker name="walletId"` of the active wallets
+    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then two dashed pills after the pills (so
+    Tab reaches them after the group): "+ New category" and the "Manage categories" link. With no category of the
+    kind the pills are replaced by "You have no expense categories yet. Add one to record an expense." (the two
+    dashed pills stay; there is no submit). Wallet: `PillPicker name="walletId"` of the active wallets
     plus an archived one the entry already uses ("Old card (archived)"). Transfer: From → To selects (the arrow
     from `sm` up), Sent and Received side by side from `sm`, stacked below it, the no-rate line under them. Date:
     "Today" and "Yesterday" are `aria-pressed` buttons in a `role="group"` labelled "Date", followed by the
     `DatePicker` (controlled, owns `<input type="hidden" name="date">`) drawn as a third pill: "Other date" with a
     calendar icon, or the date itself (selected style, neither pill pressed) when it is neither today nor
     yesterday. Note: one `Input` (`name="note"`, placeholder "Note (optional)", `maxLength` 500, `sr-only`
-    label). Tab order: type → amount → category → Manage categories → wallet → Today → Yesterday → calendar → note
-    → footer.
+    label). Tab order: type → amount → category → + New category → Manage categories → wallet → Today → Yesterday
+    → calendar → note → footer.
+    **+ New category** (`NewCategoryInline`, `components/transactions/new-category-inline.tsx`; every variant): the
+    pill opens a name field (`<idPrefix>newCategoryName`, `sr-only` label "New expense category name", `maxLength`
+    40, no `name`, so the entry form never posts it) with Add and Cancel; it lives inside the entry `<form>` and has
+    no form of its own. Enter adds (and does not submit the entry), Escape cancels (marked handled, so the dialog
+    stays open) and focus goes back to the pill. Add calls `createCategoryFromEntryAction` (in
+    `transactions/actions.ts`; fields `kind`, `name`; `requireUser`, `createCategory`, errors through
+    `serviceErrorState` so they land on `name`; on success `revalidatePath("/", "layout")` and `{ ok, message,
+    category: { id, name, kind } }`) inside a transition (Add shows "Adding…"). An error shows under the field
+    (`FieldError`, `aria-invalid`) and focus returns to it. On success the field closes, the new category is added
+    to the form's list (kept in state, deduped by id against the refreshed props), selected (the picker remounts
+    with it checked) and focused. The action is an `EntryForm` prop (`categoryAction`, default the real action).
+    **Manage categories keeps a draft:** before the link navigates, `saveEntryDraft(draftKey, kind, form)`
+    (`components/transactions/entry-draft.ts`) writes `{ kind, values, savedAt }` to sessionStorage under
+    `entry-draft:<draftKey>` — `values` are the non-empty posted `amount`, `receivedAmount`, `walletId`,
+    `categoryId`, `fromWalletId`, `toWalletId`, `date`, `note`. On mount, a form with a `draftKey` takes (reads and
+    removes) that entry and applies it through `sanitizeDraft` — a kind the form offers, wallets that are in its
+    list, a category of the draft's kind that still exists, a `YYYY-MM-DD` date, strings of at most 500 characters,
+    at most an hour old; anything else is dropped (field by field, or the whole draft) — then remounts with those
+    values. Keys: the Add form, dialog and full page alike, `new`; the expense / income edit page `edit-<id>`; the
+    inline editor its `idPrefix`; no key, no draft. Every storage access is in `try/catch`: without storage the
+    link simply navigates. The "Create one" link of the old empty state is gone (the inline creator replaces it).
+    **Switching the kind keeps what was typed:** Transfer and Expense / Income render different amount inputs, so
+    `changeKind` reads the current `amount` and `note` from the form and uses them as the defaults of the newly
+    mounted inputs (for that form instance only; the next action result remounts the form with its own echoed
+    values). The date is React state and already stayed; the wallet carries over as the transfer's From and back,
+    the category only when it fits the new kind; Received is not carried.
 - **/categories** — month + currency switch at the top (default current month, `pickDefaultCurrency`). A "Spending
   split" card: the month's expense total and one segmented bar with a legend (one shade of the accent ramp per
   category, largest first). Then Expense and Income lists side by side: each row shows a swatch, the name, "N this
