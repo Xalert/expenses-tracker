@@ -16,6 +16,7 @@ import { balanceAfterLabel } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
+import { toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
@@ -73,7 +74,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
     currency: w.currency,
     archived: w.archivedAt !== null,
   }));
-  const categoryOptions = (await listCategories(user.id)).map(({ id, name, kind }) => ({ id, name, kind }));
+  // Archived included and flagged: each row editor keeps only the one its entry uses (`InlineEditPanel`).
+  const categoryOptions = toCategoryOptions(await listCategories(user.id, undefined, { includeArchived: true }));
   const transactionsHref = `/transactions?wallet=${wallet.id}&month=${month}`;
 
   return (

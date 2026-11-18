@@ -12,8 +12,9 @@ import { CategoryPanel, CategorySummary, MAX_CATEGORY_NAME, type Announce } from
 const TITLE = { expense: "Expense", income: "Income" } as const;
 
 /**
- * One kind's list on /categories: heading ("Expense · 5 categories"), a live status line (announces adds, renames
- * and removals), the categories as rows that open in place to rename / remove, and the dashed "add" row.
+ * One kind's list on /categories: heading ("Expense · 5 categories", active ones), a live status line (announces
+ * adds, renames, kind changes, (un)archiving and removals), the active categories as rows that open in place, the
+ * dashed "add" row, then — when there are any — the archived ones under a muted "Archived · N" heading.
  * `segments` are the spending split's (expense only); `currency` is the one the month amounts are in.
  */
 export function CategorySection({
@@ -38,7 +39,31 @@ export function CategorySection({
     if (opts.focusHeading) headingRef.current?.focus();
   };
 
-  const count = categories.length;
+  const active = categories.filter((c) => c.archivedAt === null);
+  const archived = categories.filter((c) => c.archivedAt !== null);
+  const count = active.length;
+  const archivedHeadingId = `${kind}-archived-categories-heading`;
+
+  const rowFor = (c: CategoryWithMonthUsage) => (
+    <ExpandableRow
+      key={c.id}
+      id={String(c.id)}
+      buttonClassName="min-h-11 px-4 py-3 text-sm sm:px-[18px]"
+      summary={
+        <CategorySummary
+          key="summary"
+          category={c}
+          currency={currency}
+          share={kind === "expense" ? rowShare(byId.get(c.id)) : null}
+        />
+      }
+      panelLabel={`Edit ${c.name}`}
+      panel={
+        <CategoryPanel key="panel" category={c} others={active.filter((o) => o.id !== c.id)} announce={announce} />
+      }
+    />
+  );
+
   return (
     <section aria-labelledby={headingId} className="min-w-0 rounded-[20px] border border-border bg-surface">
       <div className="px-4 pt-4 pb-3 sm:px-[18px]">
@@ -58,42 +83,35 @@ export function CategorySection({
         </p>
       </div>
 
-      {count === 0 ? (
-        <p className="border-t border-surface-muted px-4 py-6 text-center text-sm text-muted-foreground sm:px-[18px]">
-          No {kind} categories yet. Add one below to start recording {kind === "expense" ? "expenses" : "income"}.
-        </p>
-      ) : (
-        <ExpandableList>
-          <ul className="divide-y divide-surface-muted border-t border-surface-muted">
-            {categories.map((c) => (
-              <ExpandableRow
-                key={c.id}
-                id={String(c.id)}
-                buttonClassName="min-h-11 px-4 py-3 text-sm sm:px-[18px]"
-                summary={
-                  <CategorySummary
-                    key="summary"
-                    category={c}
-                    currency={currency}
-                    share={kind === "expense" ? rowShare(byId.get(c.id)) : null}
-                  />
-                }
-                panelLabel={`Rename or remove ${c.name}`}
-                panel={
-                  <CategoryPanel
-                    key="panel"
-                    category={c}
-                    others={categories.filter((o) => o.id !== c.id)}
-                    announce={announce}
-                  />
-                }
-              />
-            ))}
-          </ul>
-        </ExpandableList>
-      )}
+      {/* One list for both groups, so only one row is open at a time in the section. */}
+      <ExpandableList>
+        {count === 0 ? (
+          <p className="border-t border-surface-muted px-4 py-6 text-center text-sm text-muted-foreground sm:px-[18px]">
+            {archived.length > 0 ? `No active ${kind} categories.` : `No ${kind} categories yet.`} Add one below to
+            start recording {kind === "expense" ? "expenses" : "income"}.
+          </p>
+        ) : (
+          <ul className="divide-y divide-surface-muted border-t border-surface-muted">{active.map(rowFor)}</ul>
+        )}
 
-      <AddCategoryForm kind={kind} onAdded={announce} />
+        <AddCategoryForm kind={kind} onAdded={announce} />
+
+        {archived.length > 0 && (
+          <div className="border-t border-surface-muted">
+            <div className="px-4 pt-3.5 pb-2 sm:px-[18px]">
+              <h3 id={archivedHeadingId} className="text-sm font-semibold text-muted-foreground">
+                Archived · {archived.length} {archived.length === 1 ? "category" : "categories"}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Hidden from the entry form; their entries stay in reports and history.
+              </p>
+            </div>
+            <ul aria-labelledby={archivedHeadingId} className="divide-y divide-surface-muted border-t border-surface-muted">
+              {archived.map(rowFor)}
+            </ul>
+          </div>
+        )}
+      </ExpandableList>
     </section>
   );
 }

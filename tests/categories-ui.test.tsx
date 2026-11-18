@@ -15,6 +15,8 @@ vi.mock("@/app/(app)/categories/actions", () => ({
   createCategoryAction: async () => ({}),
   renameCategoryAction: async () => ({}),
   deleteCategoryAction: async () => ({}),
+  changeCategoryKindAction: async () => ({}),
+  setCategoryArchivedAction: async () => ({}),
 }));
 
 const cat = (
@@ -24,7 +26,8 @@ const cat = (
   monthAmountMinor: number,
   monthCount: number,
   transactionCount: number,
-): CategoryWithMonthUsage => ({ id, name, kind, monthAmountMinor, monthCount, transactionCount });
+): CategoryWithMonthUsage => ({ id, name, kind, archivedAt: null, monthAmountMinor, monthCount, transactionCount });
+const archive = (c: CategoryWithMonthUsage): CategoryWithMonthUsage => ({ ...c, archivedAt: new Date("2026-10-01T00:00:00Z") });
 
 // Service order (by name); Housing spends the most, so it gets ramp 1 although it is not the first row.
 const EXPENSE = [
@@ -93,6 +96,30 @@ describe("CategorySection", () => {
     expect(html).toContain("Bills");
   });
 
+  it("archived categories leave the main list and the count, and follow the add row under an Archived heading", () => {
+    const list = [EXPENSE[0], archive(EXPENSE[1]), EXPENSE[2], archive(EXPENSE[3])];
+    const html = renderToStaticMarkup(
+      <CategorySection kind="expense" categories={list} currency="EUR" segments={split.segments} />,
+    );
+    const text = html.replace(/<[^>]+>/g, "");
+    expect(text).toContain("Expense · 2 categories");
+    expect(text).toContain("Archived · 2 categories");
+    expect(text).toContain("Hidden from the entry form; their entries stay in reports and history.");
+    // Active rows, then the add row, then the archived rows (still with their month figures).
+    expect(rows(html).map((r) => r.text.split(" · ")[0])).toEqual(["Bills", "Housing", "Food", "Transport"]);
+    expect(html.indexOf('id="new-expense-category"')).toBeLessThan(html.indexOf("expense-archived-categories-heading"));
+    expect(html).toContain('<ul aria-labelledby="expense-archived-categories-heading"');
+    expect(rows(html)[2].text).toContain("€40.00");
+  });
+
+  it("only archived categories: the empty line says there are no active ones", () => {
+    const html = renderToStaticMarkup(
+      <CategorySection kind="income" categories={INCOME.map(archive)} currency="EUR" segments={[]} />,
+    );
+    expect(html).toContain("No active income categories. Add one below");
+    expect(html.replace(/<[^>]+>/g, "")).toContain("Archived · 2 categories");
+  });
+
   it("an empty kind says so and still offers the add row", () => {
     const html = renderToStaticMarkup(<CategorySection kind="income" categories={[]} currency="EUR" segments={[]} />);
     expect(html.replace(/<[^>]+>/g, "")).toContain("Income · 0 categories");
@@ -131,7 +158,7 @@ function openPanel(category: CategoryWithMonthUsage, others: CategoryWithMonthUs
         <ExpandableRow
           id="x"
           summary={category.name}
-          panelLabel={`Rename or remove ${category.name}`}
+          panelLabel={`Edit ${category.name}`}
           panel={<CategoryPanel category={category} others={others} announce={() => {}} />}
         />
       </ul>
@@ -150,18 +177,61 @@ describe("CategoryPanel (the open row)", () => {
     expect(html).not.toContain("<select");
   });
 
-  it("a used category asks for a replacement of the same kind first", () => {
-    const html = openPanel(EXPENSE[1], EXPENSE.filter((c) => c.id !== 2));
-    expect(html).toContain('for="move-category-2">Remove, moving its 40 transactions to</label>');
-    const options = [...html.matchAll(/<option value="(\d*)"[^>]*>([^<]*)<\/option>/g)].map((m) => m[2]);
-    expect(options).toEqual(["Choose a category…", "Bills", "Housing", "Transport"]);
-    expect(html).toContain('<span class="truncate">Remove Food</span>');
+  it("an unused category offers the kind change (a hidden field with the other kind) and Archive", () => {
+    const html = openPanel(EXPENSE[3], EXPENSE.slice(0, 3));
+    expect(html).toContain('<input type="hidden" name="kind" value="income"/>');
+    expect(html).toContain(">Make it an income category</button>");
+    expect(html).toMatch(/aria-describedby="category-4-archive-note">Archive<\/button>/);
+    expect(html).toContain("Hides it from the entry form; its entries stay in reports and history.");
   });
 
-  it("the only category of its kind with transactions explains why it cannot be removed", () => {
+  it("a used category explains why its kind stays", () => {
+    const html = openPanel(EXPENSE[1], EXPENSE.filter((c) => c.id !== 2));
+    expect(html).not.toContain('name="kind"');
+    expect(html).toContain(
+      "Used by 40 transactions, so it stays an expense category: changing it would turn those entries into income.",
+    );
+    const one = openPanel({ ...INCOME[0], transactionCount: 1 }, [INCOME[1]]);
+    expect(one).toContain(
+      "Used by 1 transaction, so it stays an income category: changing it would turn that entry into expense.",
+    );
+  });
+
+  it("a used category asks for a replacement: another active category of its kind, or a new one", () => {
+    const html = openPanel(EXPENSE[1], EXPENSE.filter((c) => c.id !== 2));
+    expect(html).toContain('for="move-category-2">Remove, moving its 40 transactions to</label>');
+    const options = [...html.matchAll(/<option value="(\w*)"[^>]*>([^<]*)<\/option>/g)].map((m) => [m[1], m[2]]);
+    expect(options).toEqual([
+      ["", "Choose a category…"],
+      ["1", "Bills"],
+      ["3", "Housing"],
+      ["4", "Transport"],
+      ["new", "A new expense category…"],
+    ]);
+    // The name field only appears once "A new … category" is chosen.
+    expect(html).not.toContain('name="moveToNewCategoryName"');
+    expect(html).toContain('<span class="truncate">Remove Food</span>');
+    expect(html).toContain("To keep its entries where they are, archive it instead.");
+  });
+
+  it("the only active category of its kind with transactions: a new category named here, or archive it", () => {
     const html = openPanel(INCOME[0], []);
-    expect(html).toContain("is your only income category, so there is nowhere to move them");
-    expect(html).not.toContain("Remove Salary");
+    expect(html).not.toContain("<select");
+    expect(html).toContain(
+      'for="move-category-10-new-name">Remove, moving its 7 transactions to a new income category named</label>',
+    );
+    expect(html).toMatch(/<input[^>]*id="move-category-10-new-name"[^>]*name="moveToNewCategoryName"/);
+    expect(html).toContain('<span class="truncate">Remove Salary</span>');
+    expect(html).toContain(
+      "It is your only active income category. To keep its entries where they are, archive it instead.",
+    );
+  });
+
+  it("an archived category offers Unarchive and no archive hint", () => {
+    const html = openPanel(archive(INCOME[0]), [INCOME[1]]);
+    expect(html).toMatch(/aria-describedby="category-10-archive-note">Unarchive<\/button>/);
+    expect(html).toContain("Archived: hidden from the entry form.");
+    expect(html).not.toContain("archive it instead");
   });
 });
 
