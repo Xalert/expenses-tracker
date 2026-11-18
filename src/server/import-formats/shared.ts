@@ -4,6 +4,7 @@ import { parseCsv, type CsvRecord } from "@/lib/csv";
 import { isValidCurrency } from "@/lib/currencies";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { isServiceError } from "@/lib/errors";
+import type { GroupColor } from "@/lib/group-colors";
 import { currencyDecimals } from "@/lib/money";
 import { MAX_CATEGORY_NAME_LENGTH } from "../categories";
 import { normalizeName } from "../_validate";
@@ -26,9 +27,14 @@ export type ImportNotice = { code: string; message: string; count?: number; file
 
 /** What the importing request adds to the files: used by formats whose content depends on it (Spendee). */
 export type ImportContext = {
-  /** A valid IANA time zone (already checked; "UTC" when the browser sent none or an invalid one). */
+  /**
+   * The valid IANA time zone Spendee's UTC timestamps are dated in: the account's when set, else the browser's, else
+   * "UTC".
+   */
   timeZone: string;
-  /** True when a time zone was sent but was not a valid IANA zone, so UTC was used instead. */
+  /** Where `timeZone` came from ("none": UTC, because the account has none and the browser sent none or a bad one). */
+  timeZoneSource: "account" | "browser" | "none";
+  /** True when the browser sent a time zone that is not a valid IANA zone (and the account has none), so UTC was used. */
   timeZoneFallback: boolean;
   /** Import transfer rows that have no partner as plain income / expense in a "Transfer" category. */
   unpairedTransfersAsEntries: boolean;
@@ -44,12 +50,35 @@ export type WalletSpec = {
   currency: string;
   initialBalanceMinor: number;
   archived: boolean;
-  /** Backup only: the wallet group's name (normalized), when the file names one. */
+  /** When an archived wallet was archived (ISO timestamp); absent → archived as of the import. */
+  archivedAt?: string;
+  /** The wallet group's name (normalized), when the file names one (backup `group`, CSV `group` column). */
   group?: string;
+  /** Where the group was named (CSV), to report a second, different group for the same wallet. */
+  groupLoc?: Loc;
+  /**
+   * Where the file describes the wallet itself (initial balance, archived state): a backup wallet, a CSV `wallet`
+   * row. Absent when the file only uses the wallet in entries; such a wallet is created at 0 and active.
+   */
+  detailsLoc?: Loc;
   /** lower(name) + currency: how wallets are matched against the account. */
   key: string;
 };
-export type CategorySpec = { name: string; kind: CategoryKind; key: string };
+/** Backup only: a wallet group as the file describes it (in file order = display order). */
+export type GroupSpec = { name: string; color: GroupColor | null; archived: boolean };
+export type CategorySpec = {
+  name: string;
+  kind: CategoryKind;
+  key: string;
+  /** The file says the category is archived (backup flag, CSV category row): one the import creates is created archived. */
+  archived?: boolean;
+  /** When it was archived (ISO timestamp); absent → archived as of the import. */
+  archivedAt?: string;
+  /** CSV: the `category` row that describes it, to report a second one. */
+  detailsLoc?: Loc;
+};
+/** Backup only: one of the user's own exchange rates (validated; `rate` normalised as `parseRateInput` gives it). */
+export type ManualRateSpec = { currency: string; base: string; effectiveDate: string; rate: string; loc: Loc };
 export type EntrySpec = {
   kind: CategoryKind;
   wallet: number; // index into wallets
@@ -91,6 +120,21 @@ export type TransferLeg = {
   loc: Loc;
 };
 
+/**
+ * A transfer row (Spendee) that has its own problem, already reported. It is never paired, but a row that would have
+ * paired with it is not reported as unpaired as well: one mistake, one problem. Whatever the row got wrong is null.
+ */
+export type BrokenTransferRow = {
+  direction: "out" | "in";
+  /** `walletKey(name, currency)`, so it needs no remapping when files are merged. */
+  walletKey: string | null;
+  currency: string | null;
+  amountMinor: number | null;
+  instant: number | null;
+  matchKey: string | null;
+  loc: Loc;
+};
+
 export type ParsedFile = {
   format: ImportFormatId | null;
   /**
@@ -100,11 +144,17 @@ export type ParsedFile = {
    */
   walletMatching: "by-position" | "merge";
   wallets: WalletSpec[];
+  /** Backup only: the file's `groups` list (normalized, one per name ignoring case); absent in older backups. */
+  groups?: GroupSpec[];
   categories: CategorySpec[];
+  /** Backup only: the file's `manualRates` (absent in older backups); imported additively. */
+  manualRates?: ManualRateSpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];
   /** Unpaired transfer halves; a format's `finalize` turns them into `transfers` (or entries / problems). */
   transferLegs: TransferLeg[];
+  /** Transfer rows with their own problem; `finalize` uses them to avoid a second "unpaired" problem. */
+  brokenTransferRows: BrokenTransferRow[];
   problems: ImportProblem[];
   notices: ImportNotice[];
   /** Transfer rows left without a partner (whether reported as problems or imported as entries). */
@@ -151,6 +201,7 @@ export function emptyParsed(format: ParsedFile["format"], problems: ImportProble
     entries: [],
     transfers: [],
     transferLegs: [],
+    brokenTransferRows: [],
     problems,
     notices: [],
     unpairedTransferRows: 0,
@@ -234,7 +285,8 @@ export function specBuilder(out: ParsedFile) {
 
 /**
  * Read a CSV file with a header row: quoting errors, an empty file, missing required columns and the row limit
- * become problems on `out` (and `null` is returned). Otherwise returns the column positions (by lower-cased
+ * become problems on `out` (and `null` is returned, except for quoting errors after the header: the broken records
+ * are left out and the rest is returned, so their problems are reported too). Otherwise returns the column positions (by lower-cased
  * header name; the first occurrence wins) and the non-blank data rows.
  */
 export function readCsvTable<C extends string>(
@@ -243,10 +295,10 @@ export function readCsvTable<C extends string>(
   columns: { required: readonly C[]; optional: readonly C[]; describe: (missing: C[]) => string },
 ): { col: Map<C, number>; rows: CsvRecord[] } | null {
   const { records, errors } = parseCsv(text);
-  if (errors.length) {
-    out.problems.push(...errors.map((e) => ({ line: e.line, message: e.message })));
-    return null;
-  }
+  // Quoting errors are problems, but the reader resyncs after each one, so the other rows are still checked (and
+  // their problems reported in the same preview). A broken header, though, leaves nothing to read the rows with.
+  out.problems.push(...errors.map((e) => ({ line: e.line, message: e.message })));
+  if (errors.length && errors[0].line < (records[0]?.line ?? Infinity)) return null;
   const [header, ...rest] = records;
   if (!header) {
     out.problems.push({ message: "The file is empty." });

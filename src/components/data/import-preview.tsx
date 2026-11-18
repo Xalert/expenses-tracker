@@ -14,14 +14,23 @@ export const fileSize = (bytes: number) =>
       ? `${Math.ceil(bytes / 1024)} KB`
       : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+/** " (income)", " (archived)", " (expense, archived)" or "" after a new category's name. */
+function categoryNote(kind: string | null, archived: boolean): string {
+  const parts = [kind, archived ? "archived" : null].filter(Boolean);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 /** Entries the confirm button imports: transactions + transfers. */
 export function entriesToImport(p: ImportPreview): number {
   return p.transactionsToAdd + p.transfersToAdd;
 }
 
-/** Whether confirming would change anything (entries, or only new wallets / categories). */
+/** Whether confirming would change anything (entries, or only new wallets / categories / exchange rates). */
 export function hasSomethingToImport(p: ImportPreview): boolean {
-  return entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length > 0;
+  return (
+    entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length + p.manualRatesToAdd >
+    0
+  );
 }
 
 export function importLabel(p: ImportPreview): string {
@@ -32,6 +41,43 @@ export function importLabel(p: ImportPreview): string {
 const subheading = "text-xs font-semibold tracking-wide text-muted-foreground uppercase";
 
 /**
+ * How a confirmed import's numbers differ from the preview the user confirmed (the account can change in between,
+ * e.g. in another tab: the confirmation re-validates and reports what it actually did). Empty when they match.
+ */
+export function previewDifferences(previewed: ImportPreview, result: ImportPreview): string[] {
+  const rows: [number, number, string, string][] = [
+    [result.transactionsToAdd, previewed.transactionsToAdd, "transaction", "transactions"],
+    [result.transfersToAdd, previewed.transfersToAdd, "transfer", "transfers"],
+    [
+      result.duplicateTransactions + result.duplicateTransfers,
+      previewed.duplicateTransactions + previewed.duplicateTransfers,
+      "duplicate skipped",
+      "duplicates skipped",
+    ],
+    [result.walletsToCreate.length, previewed.walletsToCreate.length, "new wallet", "new wallets"],
+    [result.groupsToCreate.length, previewed.groupsToCreate.length, "new group", "new groups"],
+    [result.categoriesToCreate.length, previewed.categoriesToCreate.length, "new category", "new categories"],
+    [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
+  ];
+  return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
+}
+
+/** The sentence shown when the confirmation differs from the preview; null when it does not. */
+export function PreviewDifferences({ previewed, result }: { previewed?: ImportPreview | null; result: ImportPreview }) {
+  if (!previewed) return null;
+  const diffs = previewDifferences(previewed, result);
+  const newProblems = previewed.ok && !result.ok;
+  if (diffs.length === 0 && !newProblems) return null;
+  return (
+    <p className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground">
+      <strong className="font-semibold">Your account changed after the preview</strong>
+      {newProblems ? ", and the import now finds problems the preview did not" : ""}
+      {diffs.length > 0 ? `, so these numbers differ from it: ${diffs.join(", ")}.` : "."}
+    </p>
+  );
+}
+
+/**
  * The preview of a selection: the problem card when it cannot be imported, otherwise "Ready to import" with the
  * counts, what will be created, and the confirm row (`actions`: Cancel + the import button, supplied by the panel).
  */
@@ -39,9 +85,12 @@ export function PreviewCard({
   preview: p,
   option,
   actions,
+  note,
   groupCount = 1,
 }: {
   preview: ImportPreview;
+  /** Shown at the top of the card, e.g. that a confirmation differs from its preview. */
+  note?: ReactNode;
   /** How many wallet groups the user has; the groups of new wallets are named from two (or when groups are created). */
   groupCount?: number;
   /** The "unpaired transfers" checkbox, when it applies. */
@@ -49,10 +98,11 @@ export function PreviewCard({
   /** Cancel + "Import N entries"; shown unless there is nothing to import. */
   actions?: ReactNode;
 }) {
-  if (!p.ok) return <ProblemCard preview={p} option={option} />;
+  if (!p.ok) return <ProblemCard preview={p} option={option} note={note} />;
 
   const showGroups = groupCount >= 2 || p.groupsToCreate.length > 0;
   const duplicates = p.duplicateTransactions + p.duplicateTransfers;
+  const undescribed = p.walletsToCreate.filter((w) => !w.described).length;
   const formats = new Set(p.files.filter((f) => !f.duplicateOf).map((f) => f.format));
   const categoryKinds = new Map<string, Set<string>>();
   for (const c of p.categoriesToCreate) {
@@ -68,6 +118,7 @@ export function PreviewCard({
         <p className="text-xs text-muted-foreground">Nothing saved yet</p>
       </div>
       <div className="space-y-4 px-4 py-4 sm:px-5">
+        {note}
         {p.files.length > 1 && <FileList files={p.files} />}
         <dl className="grid grid-cols-3 gap-3">
           <Stat label="Transactions" value={p.transactionsToAdd} />
@@ -108,17 +159,27 @@ export function PreviewCard({
                 {i > 0 && ", "}
                 <strong className="font-semibold text-foreground">{c.name}</strong>
                 {/* The kind only when the same name is created as both (e.g. Spendee's unpaired "Transfer"). */}
-                {(categoryKinds.get(c.name.toLowerCase())?.size ?? 0) > 1 && ` (${c.kind})`}
+                {categoryNote((categoryKinds.get(c.name.toLowerCase())?.size ?? 0) > 1 ? c.kind : null, c.archived === true)}
               </span>
             ))}
           </p>
         )}
+        {p.manualRatesToAdd > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            Your own exchange rates:{" "}
+            <strong className="font-semibold text-foreground">{p.manualRatesToAdd.toLocaleString("en-US")}</strong> to add
+            to the Rates page.
+          </p>
+        )}
         {option}
         <NoticeList notices={p.notices} />
-        {formats.has("csv") && p.walletsToCreate.length > 0 && (
+        {formats.has("csv") && undescribed > 0 && (
           <p className="text-xs text-muted-foreground">
-            A CSV carries no initial balances or archived state: new wallets start at a balance of 0 and active. Edit
-            them afterwards if needed, or import a backup instead.
+            {undescribed === p.walletsToCreate.length
+              ? "The CSV has no wallet rows for the new wallets"
+              : `The CSV has no wallet rows for ${plural(undescribed, "new wallet", "new wallets")}`}
+            , so {undescribed === 1 ? "it starts" : "they start"} at a balance of 0 and active. Edit them afterwards if
+            needed, or import a backup instead.
           </p>
         )}
         {formats.has("spendee") && p.walletsToCreate.length > 0 && (
@@ -153,7 +214,7 @@ export function PreviewCard({
  * colour and the line labels in `text-danger` on the card's surface: `--danger` on `--danger-soft` is 4.4:1 in Sand,
  * under the 4.5:1 the UI direction asks for.
  */
-function ProblemCard({ preview: p, option }: { preview: ImportPreview; option?: ReactNode }) {
+function ProblemCard({ preview: p, option, note }: { preview: ImportPreview; option?: ReactNode; note?: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface">
       <div role="alert" className="bg-danger-soft px-4 py-3 sm:px-5">
@@ -169,6 +230,7 @@ function ProblemCard({ preview: p, option }: { preview: ImportPreview; option?: 
         </p>
       </div>
       <div className="space-y-3 px-4 py-4 sm:px-5">
+        {note}
         {p.files.length > 1 && <FileList files={p.files} />}
         <ProblemList problems={p.problems} />
         {p.problemCount > p.problems.length && (
@@ -298,7 +360,7 @@ function NoticeList({ notices }: { notices: ImportNotice[] }) {
 }
 
 /** After a confirmed import: what was added, the notices, and where to go next. */
-export function ImportSuccess({ result: r }: { result: ImportPreview }) {
+export function ImportSuccess({ result: r, previewed }: { result: ImportPreview; previewed?: ImportPreview | null }) {
   const duplicates = r.duplicateTransactions + r.duplicateTransfers;
   const parts = [
     plural(r.transactionsToAdd, "transaction", "transactions"),
@@ -323,9 +385,11 @@ export function ImportSuccess({ result: r }: { result: ImportPreview }) {
           {r.groupsToCreate.length > 0 && ` Created ${plural(r.groupsToCreate.length, "group", "groups")}.`}
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
+          {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}
         </p>
       </div>
+      <PreviewDifferences previewed={previewed} result={r} />
       <NoticeList notices={r.notices} />
       <div className="flex flex-wrap gap-2">
         <Link href="/" className={buttonClasses()}>

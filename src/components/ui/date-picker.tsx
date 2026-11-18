@@ -157,30 +157,37 @@ const footerButton =
   "rounded-md px-2 py-1 text-sm font-medium transition-colors hover:bg-surface-muted " +
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-40";
 
-/** The popover's content; mounted on open, so its view state starts fresh from the current value each time. */
-function CalendarPanel({
+/**
+ * The popover's content; mounted on open, so its view state starts fresh from the current value each time.
+ * Exported for tests (`initialView`); the app renders it only through `DatePicker`.
+ */
+export function CalendarPanel({
   value,
   max,
   allowEmpty,
   onPick,
+  initialView = "days",
 }: {
   value: string;
   max?: string;
   allowEmpty: boolean;
   onPick: (date: string) => void;
+  initialView?: "days" | "months";
 }) {
   const today = todayISO();
-  const [view, setView] = useState<"days" | "months">("days");
+  const [view, setView] = useState<"days" | "months">(initialView);
   const [focusDate, setFocusDate] = useState(() => clampTo(value || today, undefined, max));
   const [viewMonth, setViewMonth] = useState(() => monthOf(clampTo(value || today, undefined, max)));
   const shouldFocus = useRef(true);
   const cells = useRef(new Map<string, HTMLButtonElement>());
 
-  // Roving focus: after a key press (and on open) move DOM focus to the focusable day.
+  // Roving focus: after a key press (and on open) move DOM focus to the focusable day. Without scrolling: on open this
+  // runs before the Popover has re-placed itself above a trigger near the bottom, and the browser would scroll the
+  // page to the panel's first (below) position instead.
   useEffect(() => {
     if (view !== "days" || !shouldFocus.current) return;
     shouldFocus.current = false;
-    cells.current.get(focusDate)?.focus();
+    cells.current.get(focusDate)?.focus({ preventScroll: true });
   }, [focusDate, view]);
 
   const maxMonth = max ? monthOf(max) : MAX_MONTH;
@@ -197,14 +204,19 @@ function CalendarPanel({
 
   const outOfRange = (date: string) => !isValidDate(date) || (max !== undefined && date > max);
 
+  /** Back from the month view to the days of the month shown before, focus on the focusable day. */
+  function backToDays() {
+    shouldFocus.current = true;
+    setView("days");
+  }
+
   return (
     <div
       onKeyDown={(e) => {
         // Escape in the month view steps back to the days instead of closing (the Popover skips handled keys).
         if (e.key === "Escape" && view === "months") {
           e.preventDefault();
-          shouldFocus.current = true;
-          setView("days");
+          backToDays();
         }
       }}
     >
@@ -320,6 +332,12 @@ function CalendarPanel({
       )}
 
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+        {view === "months" && (
+          <button type="button" className={cn(footerButton, "inline-flex items-center gap-1 text-foreground")} onClick={backToDays}>
+            <ChevronIcon dir="left" className="size-3.5 text-muted-foreground" />
+            Back to days<span className="sr-only">, {formatMonth(viewMonth)}</span>
+          </button>
+        )}
         <button
           type="button"
           className={cn(footerButton, "text-accent")}

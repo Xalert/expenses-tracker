@@ -3,12 +3,19 @@
  * them again is a no-op, and the constraints they create (check constraints, foreign keys with restrict / cascade)
  * behave as the schema file promises. Also the URL helpers in src/db/index.ts.
  */
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_DEV_DATABASE_URL,
   describeDatabase,
+  migrationNotice,
+  migrationStatus,
   resolveDatabaseUrl,
   resolveMigrationsDir,
   setDb,
@@ -48,6 +55,9 @@ describe("migrations on an empty database", () => {
     );
     expect(tables.map((t) => t.table_name)).toEqual([
       "categories",
+      "exchange_rate_days",
+      "exchange_rates",
+      "manual_exchange_rates",
       "sessions",
       "transactions",
       "transfers",
@@ -57,7 +67,7 @@ describe("migrations on an empty database", () => {
     ]);
     const applied = await rows<{ n: string }>(db, sql`select count(*) as n from drizzle.__drizzle_migrations`);
     expect(Number(applied[0].n)).toBeGreaterThan(0);
-  });
+  }, 30_000); // a new PGlite in the test body: slow while the whole suite starts its databases in parallel
 
   it("are a no-op the second time", async () => {
     const db = await createTestDatabase();
@@ -66,6 +76,48 @@ describe("migrations on an empty database", () => {
     const before = await count();
     await migrate(db as never, { migrationsFolder: resolveMigrationsDir() });
     expect(await count()).toBe(before);
+  }, 30_000);
+});
+
+describe("pending migrations (the line logged before migrating)", () => {
+  it("an empty database: every migration is pending, announced as a plain line", async () => {
+    const db = drizzle({ client: new PGlite() }) as unknown as DB;
+    const status = await migrationStatus(db);
+    expect(status.existing).toBe(false);
+    expect(status.pending[0]).toBe("0000_init");
+    expect(migrationNotice(status)).toEqual({ warn: false, text: expect.stringContaining("Empty database") });
+    // reading the status creates nothing
+    const tables = await rows<{ n: string }>(db, sql`select count(*) as n from information_schema.tables where table_schema in ('public', 'drizzle')`);
+    expect(Number(tables[0].n)).toBe(0);
+  });
+
+  it("a migrated database: nothing pending, no line", async () => {
+    const db = await createTestDatabase();
+    const status = await migrationStatus(db);
+    expect(status).toEqual({ existing: true, pending: [] });
+    expect(migrationNotice(status)).toBeNull();
+  });
+
+  it("an existing database with a newer migration in the folder: a warning naming it", async () => {
+    const db = await createTestDatabase();
+    const dir = mkdtempSync(path.join(tmpdir(), "migrations-"));
+    try {
+      cpSync(resolveMigrationsDir(), dir, { recursive: true });
+      const journalPath = path.join(dir, "meta", "_journal.json");
+      const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+      const lastWhen = journal.entries.at(-1).when;
+      journal.entries.push({ idx: journal.entries.length, version: "7", when: lastWhen + 1000, tag: "9999_next", breakpoints: true });
+      writeFileSync(journalPath, JSON.stringify(journal));
+      writeFileSync(path.join(dir, "9999_next.sql"), "select 1;");
+      const status = await migrationStatus(db, dir);
+      expect(status).toEqual({ existing: true, pending: ["9999_next"] });
+      const notice = migrationNotice(status);
+      expect(notice?.warn).toBe(true);
+      expect(notice?.text).toMatch(/^\[db\] WARNING: applying 1 pending migration\(s\) to the existing database: 9999_next\./);
+      expect(notice?.text).toContain("backup");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -142,6 +194,9 @@ describe("constraints", () => {
     expect(await sqlState(() => db.insert(users).values({ username: "u", passwordHash: "x" }))).toBe("23505");
     await db.insert(users).values({ username: "v", email: "v@x.test", passwordHash: "x" });
     expect(await sqlState(() => db.insert(users).values({ username: "w", email: "v@x.test", passwordHash: "x" }))).toBe("23505");
+    // the indexes are on lower(...): a value that differs only in case collides too
+    expect(await sqlState(() => db.insert(users).values({ username: "U", passwordHash: "x" }))).toBe("23505");
+    expect(await sqlState(() => db.insert(users).values({ username: "w", email: "V@X.test", passwordHash: "x" }))).toBe("23505");
     // several accounts without an email do not collide
     expect(await sqlState(() => db.insert(users).values({ username: "z", passwordHash: "x" }))).toBeNull();
     expect(await sqlState(() => db.insert(categories).values({ userId, name: "Food", kind: "expense" }))).toBe("23505");
@@ -151,7 +206,19 @@ describe("constraints", () => {
       await db.insert(users).values({ username: "u", passwordHash: "x" });
       expect.unreachable();
     } catch (err) {
-      expect(pgError(err, "23505")?.constraint).toBe("users_username_unique");
+      expect(pgError(err, "23505")?.constraint).toBe("users_username_lower_uq");
+    }
+  });
+
+  it("sign-in lookups on lower(username) / lower(email) can use the unique indexes", async () => {
+    await db.execute(sql`set enable_seqscan = off`);
+    try {
+      for (const where of [sql`lower(username) = 'u'`, sql`lower(email) = 'v@x.test'`]) {
+        const plan = await rows<{ "QUERY PLAN": string }>(db, sql`explain select id from users where ${where}`);
+        expect(plan.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/users_(username|email)_lower_uq/);
+      }
+    } finally {
+      await db.execute(sql`reset enable_seqscan`);
     }
   });
 

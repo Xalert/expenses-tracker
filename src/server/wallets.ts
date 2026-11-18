@@ -1,16 +1,20 @@
 import "server-only";
-import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import { transactions, walletGroups, wallets, type Wallet } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
 import { ServiceError } from "@/lib/errors";
 import { assertId, isPgId, normalizeName } from "./_validate";
-import { getDefaultGroupId, getOwnedGroupRow } from "./wallet-groups";
+import { getDefaultGroupId, getOpenGroupRow } from "./wallet-groups";
 
 export type WalletView = {
   id: number;
   groupId: number;
   groupName: string;
+  /** The group's position (wallets are listed by group in this order where they are grouped). */
+  groupPosition: number;
+  /** The group is archived: the wallet is then hidden wherever archived wallets are (its own `archivedAt` is kept). */
+  groupArchived: boolean;
   name: string;
   currency: string;
   initialBalanceMinor: number;
@@ -31,6 +35,8 @@ function selectWalletViews(db: DBOrTx, userId: number, extra?: SQL) {
       id: wallets.id,
       groupId: wallets.groupId,
       groupName: walletGroups.name,
+      groupPosition: walletGroups.position,
+      groupArchived: sql<boolean>`${walletGroups.archivedAt} is not null`.mapWith(Boolean),
       name: wallets.name,
       currency: wallets.currency,
       initialBalanceMinor: wallets.initialBalanceMinor,
@@ -43,17 +49,20 @@ function selectWalletViews(db: DBOrTx, userId: number, extra?: SQL) {
     .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
     .leftJoin(transactions, eq(transactions.walletId, wallets.id))
     .where(extra ? and(eq(wallets.userId, userId), extra) : eq(wallets.userId, userId))
-    .groupBy(wallets.id, walletGroups.name);
+    .groupBy(wallets.id, walletGroups.id);
 }
 
-/** The user's wallets with balances: active first, then archived, each by name. Archived excluded unless asked. */
+/**
+ * The user's wallets with balances: active first, then archived, each by name. Archived excluded unless asked — and
+ * so are the wallets of an archived group (they count as archived wherever archived wallets are hidden).
+ */
 export async function listWallets(
   userId: number,
   opts: { includeArchived?: boolean; groupId?: number } = {},
 ): Promise<WalletView[]> {
   const db = await getDb();
   const conds: SQL[] = [];
-  if (!opts.includeArchived) conds.push(sql`${wallets.archivedAt} is null`);
+  if (!opts.includeArchived) conds.push(sql`${wallets.archivedAt} is null and ${walletGroups.archivedAt} is null`);
   if (opts.groupId !== undefined) conds.push(eq(wallets.groupId, opts.groupId));
   const q = selectWalletViews(db, userId, conds.length ? and(...conds) : undefined);
   return q.orderBy(sql`${wallets.archivedAt} is not null`, sql`lower(${wallets.name})`, asc(wallets.id));
@@ -66,17 +75,43 @@ export async function getWallet(userId: number, walletId: number, db?: DBOrTx): 
   return row ?? null;
 }
 
-/** Internal: the owned wallet row or NOT_FOUND. */
-export async function getOwnedWalletRow(userId: number, walletId: number, tx?: DBOrTx, field = "walletId"): Promise<Wallet> {
+/**
+ * Internal: the owned wallet row or NOT_FOUND, with `groupName` and `groupArchived` (its group is archived: the
+ * entry services then refuse new entries on it, as on an archived wallet).
+ */
+export async function getOwnedWalletRow(
+  userId: number,
+  walletId: number,
+  tx?: DBOrTx,
+  field = "walletId",
+): Promise<Wallet & { groupName: string; groupArchived: boolean }> {
   const db = tx ?? (await getDb());
   const [row] = !isPgId(walletId)
     ? []
     : await db
-    .select()
-    .from(wallets)
-    .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)));
+        .select({
+          ...getTableColumns(wallets),
+          groupName: walletGroups.name,
+          groupArchived: sql<boolean>`${walletGroups.archivedAt} is not null`.mapWith(Boolean),
+        })
+        .from(wallets)
+        .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
+        .where(and(eq(wallets.id, walletId), eq(wallets.userId, userId)));
   if (!row) throw new ServiceError("NOT_FOUND", "Wallet not found.", field);
   return row;
+}
+
+/**
+ * Internal, for the entry services: why `wallet` takes no new entries (it is archived, or its group is), else null.
+ * `subject` starts the message ("This wallet", "The source wallet").
+ */
+export function closedWalletMessage(
+  wallet: { archivedAt: Date | null; groupArchived: boolean; groupName: string },
+  subject: string,
+): string | null {
+  if (wallet.archivedAt) return `${subject} is archived.`;
+  if (wallet.groupArchived) return `${subject} is in the archived group “${wallet.groupName}”. Unarchive the group first.`;
+  return null;
 }
 
 function assertInitialBalance(value: unknown): number {
@@ -100,7 +135,7 @@ export async function createWallet(
     const groupId =
       input.groupId === undefined
         ? await getDefaultGroupId(userId, tx)
-        : (await getOwnedGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx)).id;
+        : (await getOpenGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx)).id;
     const [created] = await tx
       .insert(wallets)
       .values({ userId, groupId, name, currency, initialBalanceMinor })
@@ -117,15 +152,16 @@ export async function updateWallet(
   input: { name: string; initialBalanceMinor: number; groupId?: number },
 ): Promise<WalletView> {
   assertId(walletId, "walletId", "wallet");
-  await getOwnedWalletRow(userId, walletId);
+  const current = await getOwnedWalletRow(userId, walletId);
   const name = normalizeName(input.name);
   const initialBalanceMinor = assertInitialBalance(input.initialBalanceMinor);
   const db = await getDb();
   await db.transaction(async (tx) => {
+    // Moving into an archived group is refused; staying in one (the wallet is already there) is not.
     const groupId =
       input.groupId === undefined
         ? undefined
-        : (await getOwnedGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx)).id;
+        : (await getOpenGroupRow(userId, assertId(input.groupId, "groupId", "group"), tx, current.groupId)).id;
     await tx
       .update(wallets)
       .set({ name, initialBalanceMinor, ...(groupId === undefined ? {} : { groupId }) })

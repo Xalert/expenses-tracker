@@ -7,7 +7,7 @@ import { categories } from "@/db/schema";
 import type { CurrentUser } from "@/lib/auth";
 import { contextSchema } from "@/lib/context-format";
 import { buildContext } from "@/server/export";
-import { createCategory } from "@/server/categories";
+import { archiveCategory, createCategory } from "@/server/categories";
 import { createTransaction } from "@/server/transactions";
 import { archiveWallet, createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
@@ -38,23 +38,34 @@ async function seed() {
 }
 
 describe("buildContext", () => {
-  it("returns exactly the spec's shape: wallets with archived flag, categories with kind, nothing else", async () => {
+  it("returns exactly the spec's shape: wallets with archived flag and group, categories with kind, nothing else", async () => {
     const alice = await seed();
     const ctx = await buildContext(alice.id, NOW);
 
     expect(Object.keys(ctx).sort()).toEqual(["app", "categories", "exportedAt", "kind", "version", "wallets"]);
     expect(ctx).toMatchObject({ app: "expenses-tracker", kind: "context", version: 1, exportedAt: "2026-11-08T09:30:00.000Z" });
     expect(ctx.wallets).toEqual([
-      { name: "Main", currency: "EUR", archived: false },
-      { name: "Tokyo", currency: "JPY", archived: false },
-      { name: "Old card", currency: "USD", archived: true },
+      { name: "Main", currency: "EUR", archived: false, group: "Personal" },
+      { name: "Tokyo", currency: "JPY", archived: false, group: "Personal" },
+      { name: "Old card", currency: "USD", archived: true, group: "Personal" },
     ]);
-    for (const c of ctx.categories) expect(Object.keys(c).sort()).toEqual(["kind", "name"]);
-    expect(ctx.categories).toContainEqual({ name: "Pets", kind: "expense" });
-    expect(ctx.categories).toContainEqual({ name: "Salary", kind: "income" });
+    for (const c of ctx.categories) expect(Object.keys(c).sort()).toEqual(["archived", "kind", "name"]);
+    expect(ctx.categories).toContainEqual({ name: "Pets", kind: "expense", archived: false });
+    expect(ctx.categories).toContainEqual({ name: "Salary", kind: "income", archived: false });
     // No ids, balances, notes or transactions anywhere in the file.
     const json = JSON.stringify(ctx);
     expect(json).not.toMatch(/"id"|Minor|balance|secret note|transactions|alice/i);
+  });
+
+  it("flags archived categories; a file without the flag (older) still validates", async () => {
+    const alice = await seed();
+    await archiveCategory(alice.id, alice.cat("Bills"));
+    const ctx = await buildContext(alice.id, NOW);
+    expect(ctx.categories).toContainEqual({ name: "Bills", kind: "expense", archived: true });
+    expect(ctx.categories.filter((c) => c.archived)).toHaveLength(1);
+    expect(contextSchema.safeParse(ctx).success).toBe(true);
+    const older = { ...ctx, categories: ctx.categories.map(({ name, kind }) => ({ name, kind })) };
+    expect(contextSchema.safeParse(older).success).toBe(true);
   });
 
   it("is scoped to the user", async () => {
@@ -62,7 +73,7 @@ describe("buildContext", () => {
     const bob = await makeUser(db, "bob@example.com");
     await createWallet(bob.id, { name: "Bob's", currency: "GBP", initialBalanceMinor: 0 });
     const ctx = await buildContext(bob.id, NOW);
-    expect(ctx.wallets).toEqual([{ name: "Bob's", currency: "GBP", archived: false }]);
+    expect(ctx.wallets).toEqual([{ name: "Bob's", currency: "GBP", archived: false, group: "Personal" }]);
     expect(ctx.categories).not.toContainEqual({ name: "Pets", kind: "expense" });
   });
 

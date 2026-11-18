@@ -62,7 +62,13 @@ function ManageWallet({ wallet }: { wallet: WalletView }) {
  * a save closes the dialog instead of redirecting to the wallet).
  */
 export async function EditWallet({ wallet, variant = "page" }: { wallet: WalletView; variant?: "page" | "dialog" }) {
-  const { groups } = await getGroupScope();
+  const { groups, archivedGroups } = await getGroupScope();
+  // An archived group is offered only to a wallet already in it (saving never forces the wallet out).
+  const own = archivedGroups.find((g) => g.id === wallet.groupId);
+  const options = [
+    ...groups.map(({ id, name }) => ({ id, name })),
+    ...(own ? [{ id: own.id, name: `${own.name} (archived)` }] : []),
+  ];
   return (
     <WalletForm
       mode="edit"
@@ -70,7 +76,7 @@ export async function EditWallet({ wallet, variant = "page" }: { wallet: WalletV
       action={updateWalletAction.bind(null, wallet.id)}
       currency={wallet.currency}
       currencyLabel={`${wallet.currency} · ${currencyName(wallet.currency)}`}
-      groups={groups.map(({ id, name }) => ({ id, name }))}
+      groups={options}
       defaults={{
         name: wallet.name,
         initialBalance: minorToInputValue(wallet.initialBalanceMinor, wallet.currency),

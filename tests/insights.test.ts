@@ -431,6 +431,25 @@ describe("getWalletMonth", () => {
     expect(future.openingMinor).toBe(70);
   });
 
+  it("carries the balance past today into projectedDays through the future-dated entries", async () => {
+    const w = await wallet(alice, "EUR", "Cash", 1000);
+    await spend(alice, w, 100, "2026-03-10");
+    await spend(alice, w, 300, "2026-03-20"); // after "today"
+    await earn(alice, w, 50, "2026-03-25");
+    const m = (await getWalletMonth(alice.id, w, "2026-03", { today: "2026-03-15" }))!;
+    expect(m.days).toHaveLength(15);
+    expect(m.days.at(-1)?.closingMinor).toBe(900);
+    expect(m.projectedDays).toHaveLength(16);
+    expect(m.projectedDays[0]).toEqual({ date: "2026-03-16", inMinor: 0, outMinor: 0, closingMinor: 900 });
+    expect(m.projectedDays.find((d) => d.date === "2026-03-20")?.closingMinor).toBe(600);
+    expect(m.projectedDays.at(-1)).toEqual({ date: "2026-03-31", inMinor: 0, outMinor: 0, closingMinor: 650 });
+    // The month's totals still count every entry; a past month has nothing projected.
+    expect([m.inMinor, m.outMinor, m.entryCount]).toEqual([50, 400, 3]);
+    expect((await getWalletMonth(alice.id, w, "2026-03", { today: "2026-04-02" }))!.projectedDays).toEqual([]);
+    // A future month is projected throughout.
+    expect((await getWalletMonth(alice.id, w, "2026-03", { today: "2026-02-01" }))!.projectedDays).toHaveLength(31);
+  });
+
   it("returns null for another user's or a missing wallet and rejects an invalid month", async () => {
     const bobs = await wallet(bob);
     expect(await getWalletMonth(alice.id, bobs, "2026-03")).toBeNull();

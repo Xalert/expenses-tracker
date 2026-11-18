@@ -4,21 +4,24 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:demo": "DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo npm run -s db:seed && DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo next dev",
-    "build": "NODE_ENV=production next build",
-    "start": "NODE_ENV=production next start",
+    "dev:demo": "node scripts/with-demo-db.mjs tsx --conditions=react-server scripts/seed.ts && node scripts/with-demo-db.mjs next dev",
+    "build": "node scripts/next-production.mjs build",
+    "start": "node scripts/next-production.mjs start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
     "db:generate": "drizzle-kit generate",
     "db:up": "docker compose -f compose.dev.yaml up -d --wait",
     "db:down": "docker compose -f compose.dev.yaml down",
     "db:seed": "tsx --conditions=react-server scripts/seed.ts",
     "db:reset": "tsx --conditions=react-server scripts/reset.ts",
-    "demo:reset": "DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo tsx --conditions=react-server scripts/reset.ts --demo --yes"
+    "user:reset-password": "node scripts/reset-password.mjs",
+    "demo:reset": "node scripts/with-demo-db.mjs tsx --conditions=react-server scripts/reset.ts --demo --yes"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
+    "fflate": "^0.8.3",
     "next": "16.4.5",
     "pg": "^8.23.1",
     "react": "19.3.0",
@@ -28,6 +31,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",

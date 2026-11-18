@@ -8,6 +8,48 @@
       "when": 1794259068363,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794995019827,
+      "tag": "0001_wallet-groups-order-colour-archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794996050126,
+      "tag": "0002_lower-unique-users",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794996190543,
+      "tag": "0003_categories-archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794996818127,
+      "tag": "0004_account-time-zone",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794997997777,
+      "tag": "0005_exchange-rates",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794998090076,
+      "tag": "0006_sessions-devices",
+      "breakpoints": true
     }
   ]
 }

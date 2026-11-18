@@ -42,3 +42,18 @@ next-env.d.ts
 *.db-journal
 *.db-wal
 *.db-shm
+
+# IDE project files
+/.idea/
+
+# Agent worktrees
+/.claude/worktrees/
+
+# database dumps written by the Compose `backup` service (docs/SELF-HOSTING.md#backup)
+/backups/
+
+# end-to-end tests (Playwright, e2e/)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

@@ -1,6 +1,6 @@
 // Pure helpers for the wallet pages (`/wallets` cards and the `/wallets/[id]` month chart). No React, no DB.
 
-import type { DayBar } from "@/components/charts/day-bars";
+import type { CapTone, DayBar } from "@/components/charts/day-bars";
 import { pickScale } from "./chart-scale";
 import { formatMoney } from "./money";
 import { monthLength } from "./overview";
@@ -73,7 +73,7 @@ export function walletBars(
   month: string,
   days: WalletDay[],
   currency: string,
-): { bars: DayBar[]; max: number; cap?: { date: string; label: string } } {
+): { bars: DayBar[]; max: number; cap?: { date: string; label: string; tone: CapTone } } {
   const length = monthLength(month);
   const byDate = new Map(days.map((d) => [d.date, d]));
   const bars: DayBar[] = [];
@@ -92,13 +92,16 @@ export function walletBars(
     });
   }
   const scale = pickScale(bars);
-  let cap: { date: string; label: string } | undefined;
+  let cap: { date: string; label: string; tone: CapTone } | undefined;
   if (scale.cappedDate) {
     const d = byDate.get(scale.cappedDate);
     if (d) {
+      const moneyIn = d.inMinor >= d.outMinor;
       cap = {
         date: scale.cappedDate,
-        label: d.inMinor >= d.outMinor ? `In ${formatMoney(d.inMinor, currency)}` : `Out ${formatMoney(d.outMinor, currency)}`,
+        label: moneyIn ? `In ${formatMoney(d.inMinor, currency)}` : `Out ${formatMoney(d.outMinor, currency)}`,
+        // The pill takes the direction's colour (In green, Out the expense colour), like the money elsewhere.
+        tone: moneyIn ? "income" : "expense",
       };
     }
   }

@@ -12,6 +12,8 @@
  *              bg-expense-dot)
  *   danger     text-danger  bg-danger  bg-danger-soft
  *   charts     bg-chart-future  bg-chart-ramp-1 … bg-chart-ramp-5 (decorative only, never behind text)
+ *   groups     bg-group-red  bg-group-amber  bg-group-green  bg-group-teal  bg-group-blue  bg-group-violet
+ *              (the wallet-group dot; src/lib/group-colors.ts; decorative, always next to the name)
  *   dialogs    bg-scrim
  * Dark mode follows prefers-color-scheme.
  */
@@ -51,6 +53,13 @@
   --chart-ramp-3: #e8b48c;
   --chart-ramp-4: #cdbfae;
   --chart-ramp-5: #8c7e70;
+
+  --group-red: #c0392b;
+  --group-amber: #c98a12;
+  --group-green: #3d8a4f;
+  --group-teal: #23837f;
+  --group-blue: #3b6fb6;
+  --group-violet: #7d55b0;
 
   --scrim: rgba(43, 36, 31, 0.45);
   --ring: var(--accent);
@@ -95,6 +104,13 @@
     --chart-ramp-4: #7a4639;
     --chart-ramp-5: #4e515a;
 
+    --group-red: #f07a6a;
+    --group-amber: #e6b54a;
+    --group-green: #6cc483;
+    --group-teal: #5cc8c0;
+    --group-blue: #7aa7ec;
+    --group-violet: #b493e6;
+
     --scrim: rgba(0, 0, 0, 0.6);
     --ring: var(--accent);
     color-scheme: dark;
@@ -133,6 +149,12 @@
   --color-chart-ramp-3: var(--chart-ramp-3);
   --color-chart-ramp-4: var(--chart-ramp-4);
   --color-chart-ramp-5: var(--chart-ramp-5);
+  --color-group-red: var(--group-red);
+  --color-group-amber: var(--group-amber);
+  --color-group-green: var(--group-green);
+  --color-group-teal: var(--group-teal);
+  --color-group-blue: var(--group-blue);
+  --color-group-violet: var(--group-violet);
   --color-scrim: var(--scrim);
   --color-ring: var(--ring);
 

@@ -3,7 +3,7 @@
 // Playwright; see SPEC "Import / export" → Screen.
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ImportSuccess, PreviewCard, importLabel } from "@/components/data/import-preview";
+import { ImportSuccess, PreviewCard, PreviewDifferences, importLabel, previewDifferences } from "@/components/data/import-preview";
 import type { ImportPreview } from "@/server/import";
 
 function preview(over: Partial<ImportPreview> = {}): ImportPreview {
@@ -19,6 +19,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     walletsToCreate: [],
     groupsToCreate: [],
     categoriesToCreate: [],
+    manualRatesToAdd: 0,
     problems: [],
     problemCount: 0,
     notices: [],
@@ -52,7 +53,7 @@ describe("PreviewCard", () => {
   });
 
   it("names the group of new wallets only from two groups or when groups are created", () => {
-    const wallets = [{ name: "Till", currency: "EUR", archived: false, group: "Business" }];
+    const wallets = [{ name: "Till", currency: "EUR", archived: false, group: "Business", described: false }];
     const one = text(renderToStaticMarkup(<PreviewCard preview={preview({ walletsToCreate: wallets })} />));
     expect(one).toContain("Till · EUR");
     expect(one).not.toContain("in Business");
@@ -78,8 +79,8 @@ describe("PreviewCard", () => {
       <PreviewCard
         preview={preview({
           walletsToCreate: [
-            { name: "Savings", currency: "EUR", archived: false, group: "Personal" },
-            { name: "Old card", currency: "RON", archived: true, group: "Personal" },
+            { name: "Savings", currency: "EUR", archived: false, group: "Personal", described: false },
+            { name: "Old card", currency: "RON", archived: true, group: "Personal", described: true },
           ],
           categoriesToCreate: [
             { name: "Shopping", kind: "expense" },
@@ -92,8 +93,33 @@ describe("PreviewCard", () => {
     expect(text(html)).toContain("New wallets: Savings · EUR , Old card · RON (archived)");
     expect(text(html)).toContain("New categories: Shopping , Transfer (expense) , Transfer (income)");
     expect(html).toContain('<strong class="font-semibold text-foreground">Savings · EUR</strong>');
-    // CSV-created wallets get the "no initial balances" note.
-    expect(text(html)).toContain("A CSV carries no initial balances");
+    // CSV-created wallets without a wallet row get the "starts at 0" note.
+    expect(text(html)).toContain("The CSV has no wallet rows for 1 new wallet, so it starts at a balance of 0 and active.");
+  });
+
+  it("says which new categories will be archived, and how many exchange rates a backup adds", () => {
+    const html = renderToStaticMarkup(
+      <PreviewCard
+        preview={preview({
+          format: "backup",
+          categoriesToCreate: [
+            { name: "Old rent", kind: "expense", archived: true },
+            { name: "Gifts", kind: "income" },
+            { name: "Transfer", kind: "expense" },
+            { name: "Transfer", kind: "income", archived: true },
+          ],
+          manualRatesToAdd: 3,
+        })}
+      />,
+    );
+    expect(text(html)).toContain("New categories: Old rent (archived) , Gifts , Transfer (expense) , Transfer (income, archived)");
+    expect(text(html)).toContain("Your own exchange rates: 3 to add to the Rates page.");
+    // Only rates to add is still something to import.
+    const onlyRates = renderToStaticMarkup(
+      <PreviewCard preview={preview({ transactionsToAdd: 0, transfersToAdd: 0, manualRatesToAdd: 1 })} actions={<button>Import</button>} />,
+    );
+    expect(text(onlyRates)).not.toContain("Nothing to import");
+    expect(onlyRates).toContain("<button>Import</button>");
   });
 
   it("says when there is nothing to import and drops the save sentence", () => {
@@ -130,7 +156,7 @@ describe("PreviewCard", () => {
 describe("ImportSuccess", () => {
   it("summarises what was added and links onwards", () => {
     const html = renderToStaticMarkup(
-      <ImportSuccess result={preview({ walletsToCreate: [{ name: "Savings", currency: "EUR", archived: false, group: "Personal" }] })} />,
+      <ImportSuccess result={preview({ walletsToCreate: [{ name: "Savings", currency: "EUR", archived: false, group: "Personal", described: false }] })} />,
     );
     expect(text(html)).toContain("Import complete");
     expect(text(html)).toContain(
@@ -138,5 +164,33 @@ describe("ImportSuccess", () => {
     );
     expect(html).toContain('href="/"');
     expect(html).toContain('href="/transactions"');
+    expect(text(renderToStaticMarkup(<ImportSuccess result={preview({ manualRatesToAdd: 2 })} />))).toContain(
+      "Added 2 exchange rates.",
+    );
+  });
+});
+
+describe("confirmation vs preview", () => {
+  it("lists only the numbers that changed since the preview", () => {
+    const before = preview();
+    expect(previewDifferences(before, preview())).toEqual([]);
+    expect(
+      previewDifferences(before, preview({ transactionsToAdd: 11, duplicateTransactions: 4, categoriesToCreate: [{ name: "Pets", kind: "expense" }] })),
+    ).toEqual(["11 transactions (preview: 12)", "5 duplicates skipped (preview: 4)", "1 new category (preview: 0)"]);
+  });
+
+  it("says so on the success banner, and stays silent when nothing changed", () => {
+    const changed = text(renderToStaticMarkup(<ImportSuccess result={preview({ transactionsToAdd: 11, duplicateTransactions: 4 })} previewed={preview()} />));
+    expect(changed).toContain(
+      "Your account changed after the preview , so these numbers differ from it: 11 transactions (preview: 12), 5 duplicates skipped (preview: 4).",
+    );
+    expect(text(renderToStaticMarkup(<ImportSuccess result={preview()} previewed={preview()} />))).not.toContain("changed after the preview");
+    expect(text(renderToStaticMarkup(<ImportSuccess result={preview()} />))).not.toContain("changed after the preview");
+  });
+
+  it("explains new problems at confirmation on the problem card", () => {
+    const failed = preview({ ok: false, problems: [{ line: 2, message: "Wallet “Cash” (EUR) is archived in your account" }], problemCount: 1, transactionsToAdd: 0 });
+    const html = renderToStaticMarkup(<PreviewCard preview={failed} note={<PreviewDifferences previewed={preview()} result={failed} />} />);
+    expect(text(html)).toContain("Your account changed after the preview , and the import now finds problems the preview did not");
   });
 });

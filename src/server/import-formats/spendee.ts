@@ -14,6 +14,8 @@ import {
   normalizeWalletName,
   readCsvTable,
   specBuilder,
+  walletKey,
+  type BrokenTransferRow,
   type ImportContext,
   type ImportFormat,
   type ParsedFile,
@@ -212,7 +214,21 @@ function parseSpendeeCsv(fileText: string, ctx: ImportContext): ParsedFile {
     const note =
       bareNote === undefined ? undefined : check(() => normalizeNote(joinNote(bareNote, labels)), (m) => problem(noteLabel, `${m.replace(/\.$/, "")} (with the labels added).`));
 
-    if (out.problems.length > problemsBefore) continue;
+    if (out.problems.length > problemsBefore) {
+      // Remember a broken transfer row, so its partner is not reported as unpaired as well (finalize).
+      if (type === "out" || type === "in") {
+        out.brokenTransferRows.push({
+          direction: type,
+          walletKey: walletName !== undefined && currency ? walletKey(walletName, currency) : null,
+          currency,
+          amountMinor,
+          instant: ts?.instant ?? null,
+          matchKey: bareNote === undefined ? null : (bareNote ?? ""),
+          loc: { line },
+        });
+      }
+      continue;
+    }
     if (wasRounded) addTally(out, `rounded:${currency}`);
     if (labels) addTally(out, "labels");
     if (ts!.converted) addTally(out, "tz-converted");
@@ -378,7 +394,28 @@ function pairTransfers(combined: ParsedFile, ctx: ImportContext): void {
     });
   }
 
-  const unpaired = legs.map((_, k) => k).filter((k) => !used.has(k));
+  // A leftover row that could have paired with a transfer row that has its own problem is not reported again: that
+  // row's problem is the one mistake. Each broken row covers at most one leftover (the closest in time).
+  const brokenUsed = new Set<BrokenTransferRow>();
+  const coveredByBroken = (leg: TransferLeg) => {
+    let best: BrokenTransferRow | null = null;
+    let bestD = Infinity;
+    for (const b of combined.brokenTransferRows) {
+      if (brokenUsed.has(b) || b.direction === leg.direction) continue;
+      if (b.walletKey !== null && b.walletKey === combined.wallets[leg.wallet].key) continue;
+      if (b.matchKey !== null && b.matchKey !== leg.matchKey) continue;
+      const d = b.instant === null ? TRANSFER_PAIR_WINDOW_MS : Math.abs(b.instant - leg.instant);
+      if (d > TRANSFER_PAIR_WINDOW_MS) continue;
+      if (b.amountMinor !== null && b.currency === leg.currency && b.amountMinor !== leg.amountMinor) continue;
+      if (d < bestD) {
+        best = b;
+        bestD = d;
+      }
+    }
+    if (best) brokenUsed.add(best);
+    return best !== null;
+  };
+  const unpaired = legs.map((_, k) => k).filter((k) => !used.has(k) && !coveredByBroken(legs[k]));
   combined.unpairedTransferRows += unpaired.length;
   if (unpaired.length === 0) return;
   if (ctx.unpairedTransfersAsEntries) {
@@ -426,11 +463,14 @@ function addNotices(combined: ParsedFile, ctx: ImportContext): void {
   const converted = t.get("tz-converted") ?? 0;
   if (converted > 0) {
     const shifted = t.get("tz-shifted") ?? 0;
-    const zone = ctx.timeZoneFallback
-      ? "UTC (your browser's time zone was not recognised)"
-      : ctx.timeZone === "UTC"
-        ? "UTC"
-        : `your time zone, ${ctx.timeZone}`;
+    const zone =
+      ctx.timeZoneSource === "account"
+        ? `your account's time zone, ${ctx.timeZone}`
+        : ctx.timeZoneSource === "browser"
+          ? `this browser's time zone, ${ctx.timeZone} (set one in Account settings so every browser dates them alike)`
+          : ctx.timeZoneFallback
+            ? "UTC (this browser's time zone was not recognised; set one in Account settings)"
+            : "UTC (set a time zone in Account settings)";
     combined.notices.push({
       code: "time-zone",
       count: converted,

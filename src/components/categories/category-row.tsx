@@ -1,7 +1,13 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { deleteCategoryAction, renameCategoryAction } from "@/app/(app)/categories/actions";
+import {
+  changeCategoryKindAction,
+  deleteCategoryAction,
+  renameCategoryAction,
+  setCategoryArchivedAction,
+} from "@/app/(app)/categories/actions";
+import { NEW_CATEGORY_VALUE } from "@/app/(app)/categories/form-input";
 import { Button, FieldError, FormError, Input, Label, Select, SubmitButton } from "@/components/ui";
 import { useExpandableRow } from "@/components/ui/expandable-row";
 import type { RowShare } from "@/lib/category-split";
@@ -12,7 +18,14 @@ import type { CategoryWithMonthUsage, CategoryWithUsage } from "@/server/categor
 
 export const MAX_CATEGORY_NAME = 40;
 
-export type Announce = (message: string | undefined, opts?: { focusHeading?: boolean }) => void;
+/**
+ * A success message for the card's status line. `focusHeading`: the row left the list (removal, (un)archive), so focus
+ * goes to the card's heading. `movedTo`: the row moved to the other kind's card, which announces it and focuses it.
+ */
+export type Announce = (
+  message: string | undefined,
+  opts?: { focusHeading?: boolean; movedTo?: { kind: "expense" | "income"; id: number } },
+) => void;
 
 
 const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
@@ -80,10 +93,11 @@ export function CategorySummary({
 }
 
 /**
- * The open row: the rename form, then (under a divider) the remove flow — an unused category is removed after a
- * confirm(); one with transactions needs a replacement of the same kind first. Focus goes into the name on open;
- * Escape and Cancel close the row and return focus to it (`ExpandableRow`); after a removal focus goes to the
- * section heading.
+ * The open row: the rename form; then (under a divider) the kind and archive controls; then the remove flow — an
+ * unused category is removed after a confirm(); one with transactions needs a replacement of the same kind first (an
+ * existing one or a new one named here). Focus goes into the name on open; Escape and Cancel close the row and
+ * return focus to it (`ExpandableRow`); after a removal or (un)archiving the row leaves its list, so focus goes to the
+ * section heading; after a kind change the other kind's card announces it and focuses the row there.
  */
 export function CategoryPanel({
   category,
@@ -91,11 +105,16 @@ export function CategoryPanel({
   announce,
 }: {
   category: CategoryWithUsage;
-  /** The other categories of the same kind (possible replacements). */
+  /** The other active categories of the same kind (possible replacements). */
   others: CategoryWithUsage[];
   announce: Announce;
 }) {
   const row = useExpandableRow();
+  // The row is about to move or disappear: no focus back to its button; the heading takes it.
+  const leave = (message?: string) => {
+    row.close({ restoreFocus: false });
+    announce(message, { focusHeading: true });
+  };
   return (
     <div className="px-4 pt-1 pb-4 sm:px-[18px]">
       <RenameForm
@@ -106,18 +125,94 @@ export function CategoryPanel({
           announce(message);
         }}
       />
-      <div className="mt-4 border-t border-border pt-3">
-        <RemoveControls
+      <div className="mt-4 space-y-3 border-t border-border pt-3">
+        <KindControls
           category={category}
-          others={others}
-          onRemoved={(message) => {
-            // The row is about to disappear: no focus back to its button; the heading takes it.
+          onChanged={(message) => {
             row.close({ restoreFocus: false });
-            announce(message, { focusHeading: true });
+            announce(message, { movedTo: { kind: OTHER_KIND[category.kind], id: category.id } });
           }}
         />
+        <ArchiveControls category={category} onChanged={leave} />
+      </div>
+      <div className="mt-4 border-t border-border pt-3">
+        <RemoveControls category={category} others={others} onRemoved={leave} />
       </div>
     </div>
+  );
+}
+
+const OTHER_KIND = { expense: "income", income: "expense" } as const;
+
+/**
+ * Switch expense ↔ income: offered only while nothing uses the category; with transactions a line says why it stays
+ * (the service refuses too, e.g. when an entry was added meanwhile — the error shows here).
+ */
+function KindControls({ category, onChanged }: { category: CategoryWithUsage; onChanged: (message?: string) => void }) {
+  const [state, formAction] = useActionState(async (prev: FormState, formData: FormData) => {
+    const next = await changeCategoryKindAction(category.id, prev, formData);
+    if (next.ok) onChanged(next.message);
+    return next;
+  }, initialFormState);
+  const target = OTHER_KIND[category.kind];
+  const count = category.transactionCount;
+  const error = state.fieldErrors?.kind ?? (state.ok ? undefined : state.message);
+  const errorId = `category-${category.id}-kind-error`;
+
+  if (count > 0 && !error) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Used by {plural(count)}, so it stays an {category.kind} category: changing it would turn{" "}
+        {count === 1 ? "that entry" : "those entries"} into {target}.
+      </p>
+    );
+  }
+  return (
+    <form action={formAction} className="space-y-1.5">
+      <input type="hidden" name="kind" value={target} />
+      {count === 0 && (
+        <SubmitButton variant="secondary" pendingLabel="Changing…" aria-describedby={error ? errorId : undefined}>
+          Make it an {target} category
+        </SubmitButton>
+      )}
+      {error && (
+        <p id={errorId} role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/** Archive (hide from the entry form, keep the history) or unarchive. No confirm: it is undone with one click. */
+function ArchiveControls({ category, onChanged }: { category: CategoryWithUsage; onChanged: (message?: string) => void }) {
+  const archived = category.archivedAt !== null;
+  const [state, formAction] = useActionState(async () => {
+    const next = await setCategoryArchivedAction(category.id, !archived);
+    if (next.ok) onChanged(next.message);
+    return next;
+  }, initialFormState);
+  const descriptionId = `category-${category.id}-archive-note`;
+  return (
+    <form action={formAction} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <SubmitButton
+        variant="secondary"
+        pendingLabel={archived ? "Unarchiving…" : "Archiving…"}
+        aria-describedby={descriptionId}
+      >
+        {archived ? "Unarchive" : "Archive"}
+      </SubmitButton>
+      <p id={descriptionId} className="min-w-0 flex-1 basis-48 text-sm text-muted-foreground">
+        {archived
+          ? "Archived: hidden from the entry form. Its entries stay in reports and history."
+          : "Hides it from the entry form; its entries stay in reports and history."}
+      </p>
+      {!state.ok && state.message && (
+        <p role="alert" className="w-full text-sm text-danger">
+          {state.message}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -173,10 +268,12 @@ function RenameForm({
   );
 }
 
+
 /**
- * Remove: unused → "Remove <name>" with a confirm(); used → the replacement select first; the only category of its
- * kind with transactions → an explanation. A removal of an "unused" category that gained transactions meanwhile is
- * refused (CONFLICT); the page refreshes, this switches to the replacement select and the error stays above it.
+ * Remove: unused → "Remove <name>" with a confirm(); used → a replacement first: an existing active category of the
+ * same kind or a new one named here (the only choice when there is no other). A removal of an "unused" category that
+ * gained transactions meanwhile is refused (CONFLICT); the page refreshes, this switches to the replacement form and
+ * the error stays above it.
  */
 function RemoveControls({
   category,
@@ -205,11 +302,6 @@ function RemoveControls({
           onError={setError}
           onRemoved={onRemoved}
         />
-      ) : others.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          “{category.name}” has {plural(count)} and is your only {category.kind} category, so there is nowhere to move{" "}
-          {count === 1 ? "it" : "them"}. Add another {category.kind} category below first, then remove this one.
-        </p>
       ) : (
         <MoveAndRemoveForm
           category={category}
@@ -262,6 +354,23 @@ function RemoveUnusedButton({
   );
 }
 
+// A small stable id per action result, to key the replacement form on (see MoveAndRemoveForm).
+const resultIds = new WeakMap<object, number>();
+let nextResultId = 0;
+function resultId(state: object): number {
+  let id = resultIds.get(state);
+  if (id === undefined) {
+    id = nextResultId++;
+    resultIds.set(state, id);
+  }
+  return id;
+}
+
+/**
+ * Remove a category in use, moving its entries. With other active categories of its kind: a select of them plus "A
+ * new category…", which shows a name field; without any: only the name field. Either way one server call creates (if
+ * needed), moves and deletes in one DB transaction.
+ */
 function MoveAndRemoveForm({
   category,
   others,
@@ -281,32 +390,63 @@ function MoveAndRemoveForm({
     if (next.ok) onRemoved(next.message);
     return next;
   }, initialFormState);
-  const selectRef = useRef<HTMLSelectElement>(null);
-  const id = `move-category-${category.id}`;
-  const error = state.fieldErrors?.moveToCategoryId;
+  const hasSelect = others.length > 0;
   const v = state.values ?? {};
+  // Controlled, so the choice (and the name field it shows) survives React's reset of the form after the action.
+  const [choice, setChoice] = useState(hasSelect ? "" : NEW_CATEGORY_VALUE);
+  const naming = choice === NEW_CATEGORY_VALUE;
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const selectId = `move-category-${category.id}`;
+  const nameId = `move-category-${category.id}-new-name`;
+  const selectError = state.fieldErrors?.moveToCategoryId;
+  const nameError = state.fieldErrors?.moveToNewCategoryName;
+  const kind = category.kind;
+  const archived = category.archivedAt !== null;
 
-  // Back to the select after a rejected removal (not on open: the name input has focus then), or on mount when this
-  // replaced the plain Remove button because the category turned out to be in use.
+  // Back to the field at fault after a rejected removal (not on open: the name input has focus then), or on mount when
+  // this replaced the plain Remove button because the category turned out to be in use.
   useEffect(() => {
-    if (state !== initialFormState || focusOnMount) selectRef.current?.focus();
-  }, [state, focusOnMount]);
+    if (state === initialFormState && !focusOnMount) return;
+    if (naming && (nameError || !hasSelect)) nameRef.current?.focus();
+    else selectRef.current?.focus();
+  }, [state, focusOnMount, naming, nameError, hasSelect]);
+
+  const nameField = (
+    <Input
+      ref={nameRef}
+      id={nameId}
+      name="moveToNewCategoryName"
+      required
+      maxLength={MAX_CATEGORY_NAME}
+      autoComplete="off"
+      // Uncontrolled; keyed on the result so the echoed name is applied again after React resets the form.
+      key={`name-${v.moveToNewCategoryName ?? ""}`}
+      defaultValue={v.moveToNewCategoryName ?? ""}
+      error={nameError}
+    />
+  );
 
   return (
-    <form action={formAction} noValidate className="space-y-1.5">
-      <Label htmlFor={id}>Remove, moving its {plural(category.transactionCount)} to</Label>
-      <div className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1 basis-48">
+    <form
+      // React resets the form after the action, which puts the select's DOM back on its first option while `choice`
+      // (and the name field it shows) stays: remount the form per result so the select shows `choice` again.
+      key={resultId(state)}
+      action={formAction}
+      noValidate
+      className="space-y-1.5"
+    >
+      {hasSelect ? (
+        <>
+          <Label htmlFor={selectId}>Remove, moving its {plural(category.transactionCount)} to</Label>
           <Select
             ref={selectRef}
-            id={id}
+            id={selectId}
             name="moveToCategoryId"
             required
-            // Uncontrolled: React resets the form after the action and only defaultValue survives, applied on mount
-            // only — hence the key on the echoed value.
-            key={v.moveToCategoryId ?? "initial"}
-            defaultValue={v.moveToCategoryId ?? ""}
-            error={error}
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
+            error={selectError}
           >
             <option value="" disabled>
               Choose a category…
@@ -316,13 +456,34 @@ function MoveAndRemoveForm({
                 {o.name}
               </option>
             ))}
+            <option value={NEW_CATEGORY_VALUE}>A new {kind} category…</option>
           </Select>
-        </div>
-        <SubmitButton variant="ghost" className={removeButtonClass} pendingLabel="Removing…">
-          <span className="truncate">Remove {category.name}</span>
-        </SubmitButton>
-      </div>
-      <FieldError id={id}>{error}</FieldError>
+          <FieldError id={selectId}>{selectError}</FieldError>
+          {naming && (
+            <div className="space-y-1.5 pt-1">
+              <Label htmlFor={nameId}>Name of the new {kind} category</Label>
+              {nameField}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <Label htmlFor={nameId}>
+            Remove, moving its {plural(category.transactionCount)} to a new {kind} category named
+          </Label>
+          {nameField}
+        </>
+      )}
+      {naming && <FieldError id={nameId}>{nameError}</FieldError>}
+      <SubmitButton variant="ghost" className={removeButtonClass} pendingLabel="Removing…">
+        <span className="truncate">Remove {category.name}</span>
+      </SubmitButton>
+      {!archived && (
+        <p className="text-sm text-muted-foreground">
+          {hasSelect ? "" : `It is your only active ${kind} category. `}
+          To keep its entries where they are, archive it instead.
+        </p>
+      )}
       <FormError message={state.message} />
     </form>
   );

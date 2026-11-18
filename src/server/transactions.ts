@@ -6,7 +6,7 @@ import { categories, transactions, wallets, type CategoryKind, type TransactionK
 import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
-import { getOwnedWalletRow, signedAmountSql } from "./wallets";
+import { closedWalletMessage, getOwnedWalletRow, signedAmountSql } from "./wallets";
 
 export type TransactionView = {
   id: number;
@@ -239,7 +239,7 @@ async function validateInput(
   userId: number,
   input: TransactionInput,
   tx: DBOrTx,
-  previousWalletId?: number,
+  previous?: { walletId: number; categoryId: number | null },
 ): Promise<ValidatedInput> {
   const kind = input.kind as CategoryKind;
   if (kind !== "expense" && kind !== "income") {
@@ -252,17 +252,24 @@ async function validateInput(
   const note = normalizeNote(input.note);
 
   const wallet = await getOwnedWalletRow(userId, walletId, tx);
-  // An archived wallet only stays valid for a transaction that already belonged to it.
-  if (wallet.archivedAt && wallet.id !== previousWalletId) {
-    throw new ServiceError("VALIDATION", "This wallet is archived.", "walletId");
+  // An archived wallet (or one in an archived group) only stays valid for a transaction that already belonged to it.
+  const closed = closedWalletMessage(wallet, "This wallet");
+  if (closed && wallet.id !== previous?.walletId) {
+    throw new ServiceError("VALIDATION", closed, "walletId");
   }
+  // FOR SHARE: a concurrent kind change (`changeCategoryKind`, FOR UPDATE) waits for this entry, then sees it.
   const [category] = await tx
-    .select({ kind: categories.kind })
+    .select({ kind: categories.kind, name: categories.name, archivedAt: categories.archivedAt })
     .from(categories)
-    .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)));
+    .where(and(eq(categories.id, categoryId), eq(categories.userId, userId)))
+    .for("share");
   if (!category) throw new ServiceError("NOT_FOUND", "Category not found.", "categoryId");
   if (category.kind !== kind) {
     throw new ServiceError("VALIDATION", `Choose an ${kind} category.`, "categoryId");
+  }
+  // Same rule as wallets: an archived category only stays valid for a transaction that already belonged to it.
+  if (category.archivedAt && categoryId !== previous?.categoryId) {
+    throw new ServiceError("VALIDATION", `“${category.name}” is archived. Choose another category.`, "categoryId");
   }
   return { walletId, kind, categoryId, amountMinor, date, note };
 }
@@ -284,7 +291,12 @@ async function getEditableRow(userId: number, id: number, tx: DBOrTx) {
   const [row] = !isPgId(id)
     ? []
     : await tx
-    .select({ id: transactions.id, walletId: transactions.walletId, transferId: transactions.transferId })
+    .select({
+      id: transactions.id,
+      walletId: transactions.walletId,
+      categoryId: transactions.categoryId,
+      transferId: transactions.transferId,
+    })
     .from(transactions)
     .where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
   if (!row) throw new ServiceError("NOT_FOUND", "Transaction not found.");
@@ -299,7 +311,7 @@ export async function updateTransaction(userId: number, id: number, input: Trans
   const db = await getDb();
   await db.transaction(async (tx) => {
     const existing = await getEditableRow(userId, id, tx);
-    const v = await validateInput(userId, input, tx, existing.walletId);
+    const v = await validateInput(userId, input, tx, existing);
     await tx
       .update(transactions)
       .set(v)

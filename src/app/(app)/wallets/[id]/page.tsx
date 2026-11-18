@@ -12,10 +12,11 @@ import { getCurrentUser, requireUser } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { currencyName } from "@/lib/currencies";
 import { currentMonth, formatMonth, isValidMonth, todayISO } from "@/lib/dates";
-import { balanceAfterLabel } from "@/lib/day-labels";
+import { walletDayAside } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
+import { toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
@@ -58,11 +59,15 @@ export default async function WalletPage({ params, searchParams }: Props) {
   if (!data) notFound();
 
   const archived = wallet.archivedAt !== null;
+  // A wallet of an archived group is hidden like an archived one (the pickers do not offer it), so no add buttons.
+  const hidden = archived || wallet.groupArchived;
   const self = `/wallets/${wallet.id}`;
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
   const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
   const closingByDate = new Map(data.days.map((d) => [d.date, d.closingMinor]));
+  // Days after today: the balance the future-dated entries lead to, labelled "projected".
+  const projectedByDate = new Map(data.projectedDays.map((d) => [d.date, d.closingMinor]));
   const endMinor = data.days.at(-1)?.closingMinor ?? data.openingMinor;
   const sinceStart = endMinor - data.openingMinor;
   const name = monthName(month);
@@ -71,14 +76,15 @@ export default async function WalletPage({ params, searchParams }: Props) {
     id: w.id,
     name: w.name,
     currency: w.currency,
-    archived: w.archivedAt !== null,
+    archived: w.archivedAt !== null || w.groupArchived,
   }));
-  const categoryOptions = (await listCategories(user.id)).map(({ id, name, kind }) => ({ id, name, kind }));
+  // Archived included and flagged: each row editor keeps only the one its entry uses (`InlineEditPanel`).
+  const categoryOptions = toCategoryOptions(await listCategories(user.id, undefined, { includeArchived: true }));
   const transactionsHref = `/transactions?wallet=${wallet.id}&month=${month}`;
 
   return (
     <>
-      {!archived && <AddButton href={`/transactions/new?wallet=${wallet.id}`} />}
+      {!hidden && <AddButton href={`/transactions/new?wallet=${wallet.id}`} />}
 
       <nav aria-label="Breadcrumb" className="mb-3 text-sm">
         <ol className="flex min-w-0 items-center gap-1.5">
@@ -132,7 +138,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {!archived &&
+              {!hidden &&
                 KIND_PILLS.map((p) => (
                   <LinkButton
                     key={p.kind}
@@ -156,6 +162,16 @@ export default async function WalletPage({ params, searchParams }: Props) {
             <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">
               This wallet is archived: it&apos;s hidden from the Overview and the pickers and can&apos;t take new
               entries. Unarchive it from the ⋯ menu to use it again.
+            </p>
+          )}
+          {!archived && wallet.groupArchived && (
+            <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">
+              This wallet&apos;s group “{wallet.groupName}” is archived, so the wallet is hidden from the Overview and the
+              pickers. Unarchive the group under “Archived groups” on the{" "}
+              <Link href="/wallets" className="font-semibold text-foreground underline">
+                Wallets
+              </Link>{" "}
+              page to use it again.
             </p>
           )}
 
@@ -201,7 +217,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
 
         <section aria-labelledby="wallet-entries" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1">
-            <h2 id="wallet-entries" className="text-[15px] font-bold text-foreground">
+            <h2 id="wallet-entries" data-list-heading="" tabIndex={-1} className="text-[15px] font-bold text-foreground">
               Entries in {formatMonth(month)}
             </h2>
             <Link href={transactionsHref} className="text-[13px] font-semibold text-accent-hover hover:underline">
@@ -210,7 +226,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
           </div>
           {items.length === 0 ? (
             <p className="rounded-[18px] border border-border bg-surface px-4 py-8 text-center text-sm text-muted-foreground">
-              {archived
+              {hidden
                 ? `No entries in ${formatMonth(month)}.`
                 : `No entries in ${formatMonth(month)}. Add one with the buttons above.`}
             </p>
@@ -221,10 +237,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 today={today}
                 returnTo={pageHref}
                 showWallet={false}
-                aside={(date) => {
-                  const closing = closingByDate.get(date);
-                  return closing === undefined ? null : balanceAfterLabel(closing, wallet.currency);
-                }}
+                aside={(date) => walletDayAside(date, closingByDate, projectedByDate, wallet.currency)}
               />
             </InlineEditProvider>
           )}

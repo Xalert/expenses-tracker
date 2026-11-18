@@ -12,7 +12,7 @@ const nameSchema = z
   .string({ error: "Enter a name." })
   .trim()
   .min(1, "Enter a name.")
-  .max(MAX_NAME, `Keep the name under ${MAX_NAME} characters.`);
+  .max(MAX_NAME, `Keep the name to ${MAX_NAME} characters or fewer.`);
 
 const createSchema = z.object({
   name: nameSchema,
@@ -126,4 +126,13 @@ export const parseGroupId = parseWalletId;
 export function groupNameField(formData: FormData): string {
   const v = formData.get("name");
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * The `color` field of the group forms: undefined when the form has none (keep the colour), "" for "None" (the
+ * service reads it as no colour), else the raw value (the service checks it against the palette).
+ */
+export function groupColorField(formData: FormData): string | undefined {
+  const v = formData.get("color");
+  return typeof v === "string" ? v : undefined;
 }

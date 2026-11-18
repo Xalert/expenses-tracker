@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,11 @@ type RowContext = {
   close(opts?: { restoreFocus?: boolean }): void;
   /** Close the row after a successful save and announce `message` in the list's status line. */
   saved(message?: string): void;
+  /**
+   * The row is about to go away (a confirmed Delete): when it leaves the list, `message` is announced with the
+   * focus move to the next row.
+   */
+  removing(message: string): void;
 };
 
 const ExpandableListContext = createContext<ListContext | null>(null);
@@ -34,6 +40,92 @@ const ExpandableRowContext = createContext<RowContext | null>(null);
 /** Clicking a row's button: open it, or close it when it already is the open one. */
 export function toggleOpen(current: string | null, id: string): string | null {
   return current === id ? null : id;
+}
+
+/**
+ * Where focus goes when the row `id` leaves the list while it held the focus (or was open): the same row if it
+ * came back elsewhere (a save that moved it to another day), else the rows after it, then the rows before it
+ * (nearest first). `order` is every row id in document order just before the removal.
+ */
+export function focusCandidates(order: string[], id: string): string[] {
+  const i = order.indexOf(id);
+  if (i < 0) return [id];
+  return [id, ...order.slice(i + 1), ...order.slice(0, i).reverse()];
+}
+
+/** The first of `candidates` still in the list (`present`), or null: focus the list heading then. */
+export function pickFocusTarget(candidates: string[], present: (id: string) => boolean): string | null {
+  return candidates.find(present) ?? null;
+}
+
+const ROW_ATTR = "data-expandable-row";
+const FIELD_SELECTOR = [
+  "input:not([type=hidden]):not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "button:not([disabled])",
+  "a[href]",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+/** The first control of an opened panel; a radio group gives its checked option (as Tab would). */
+function firstField(root: HTMLElement): HTMLElement | null {
+  const first = root.querySelector<HTMLElement>(FIELD_SELECTOR);
+  if (first instanceof HTMLInputElement && first.type === "radio" && !first.checked && first.name) {
+    const checked = root.querySelector<HTMLInputElement>(`input[type=radio][name="${CSS.escape(first.name)}"]:checked`);
+    if (checked) return checked;
+  }
+  return first;
+}
+
+/** A polite live region outside React, so the message survives the list itself unmounting (an emptied page). */
+function announcePolitely(message: string) {
+  let region = document.getElementById("expandable-row-announcer");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "expandable-row-announcer";
+    region.setAttribute("role", "status");
+    region.setAttribute("aria-live", "polite");
+    region.className = "sr-only";
+    document.body.appendChild(region);
+  }
+  const target = region;
+  target.textContent = "";
+  // A beat later, so screen readers notice the change in a region that may have just been created.
+  window.setTimeout(() => {
+    target.textContent = message;
+  }, 100);
+}
+
+/**
+ * After a row that held the focus left the DOM: once the update has landed, focus the row `pickFocusTarget` gives
+ * (its button), else the list heading (`[data-list-heading]`, else the page's `<h1>`). Only when the focus was
+ * actually lost (it is on `<body>`) and the page is still the one the row was on.
+ */
+function restoreFocusAfterRemoval(order: string[], id: string, pathname: string, notice: string | null) {
+  window.setTimeout(() => {
+    if (window.location.pathname !== pathname) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const button = (rowId: string) => document.querySelector<HTMLElement>(`[${ROW_ATTR}="${CSS.escape(rowId)}"]`);
+    const target = pickFocusTarget(focusCandidates(order, id), (rowId) => button(rowId) !== null);
+    if (target === id) {
+      button(id)?.focus();
+      return;
+    }
+    if (target !== null) {
+      button(target)?.focus();
+    } else {
+      const heading = document.querySelector<HTMLElement>("[data-list-heading]") ?? document.querySelector<HTMLElement>("main h1");
+      if (heading) {
+        if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1");
+        heading.focus();
+      }
+    }
+    announcePolitely(
+      `${notice ?? "That entry is no longer in this list."} ${target !== null ? "Focus is on the next entry." : "The list is empty."}`,
+    );
+  }, 0);
 }
 
 /**
@@ -88,7 +180,40 @@ export function ExpandableRow({
   const open = openId === id;
   const rowRef = useRef<HTMLLIElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
+  // Set by a click that opens the row: focus moves into the panel once it has rendered.
+  const focusOnOpen = useRef(false);
+  // Read by the unmount cleanup below (it has no fresh props then).
+  const openRef = useRef(open);
+  const pathnameRef = useRef("");
+  const noticeRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    openRef.current = open;
+    pathnameRef.current = window.location.pathname;
+  });
+
+  useEffect(() => {
+    if (!open || !focusOnOpen.current) return;
+    focusOnOpen.current = false;
+    const panel = panelRef.current;
+    if (panel) firstField(panel)?.focus();
+  }, [open]);
+
+  // Leaving the DOM (a Delete, or a save that moved the entry off this page or month) while the row held the focus
+  // or was open: hand the focus to a neighbour instead of letting it fall back to <body>. A layout-effect cleanup
+  // runs before React detaches the row's nodes, so the neighbours can still be read in document order here.
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    return () => {
+      if (!row || !row.isConnected) return;
+      const active = document.activeElement;
+      if (!openRef.current && !(active && row.contains(active))) return;
+      const order = [...document.querySelectorAll<HTMLElement>(`[${ROW_ATTR}]`)].map((el) => el.getAttribute(ROW_ATTR)!);
+      restoreFocusAfterRemoval(order, id, pathnameRef.current, noticeRef.current);
+    };
+  }, [id]);
 
   const close = useCallback(
     (opts: { restoreFocus?: boolean } = {}) => {
@@ -116,7 +241,13 @@ export function ExpandableRow({
       close,
       saved(message) {
         close();
-        if (message) announce(message);
+        if (message) {
+          announce(message);
+          noticeRef.current = `${message}. It is no longer in this list.`;
+        }
+      },
+      removing(message) {
+        noticeRef.current = message;
       },
     }),
     [close, announce],
@@ -129,7 +260,11 @@ export function ExpandableRow({
         type="button"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        onClick={() => setOpenId((current) => toggleOpen(current, id))}
+        {...{ [ROW_ATTR]: id }}
+        onClick={() => {
+          focusOnOpen.current = !open;
+          setOpenId((current) => toggleOpen(current, id));
+        }}
         className={cn(
           "flex w-full items-center gap-3 text-left transition-colors",
           "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
@@ -141,7 +276,7 @@ export function ExpandableRow({
       </button>
       {after}
       {open && (
-        <div id={panelId} role="region" aria-label={panelLabel} data-expandable-open="">
+        <div ref={panelRef} id={panelId} role="region" aria-label={panelLabel} data-expandable-open="">
           <ExpandableRowContext.Provider value={row}>{panel}</ExpandableRowContext.Provider>
         </div>
       )}

@@ -51,7 +51,7 @@ export default async function EditTransactionPage({
       />
       <EntryForm
         wallets={await walletOptions(user.id, [t.walletId])}
-        categories={await categoryOptions(user.id)}
+        categories={await categoryOptions(user.id, [t.categoryId])}
         initial={{
           kind: t.kind,
           walletId: t.walletId,
@@ -65,6 +65,7 @@ export default async function EditTransactionPage({
         returnTo={returnTo}
         submitLabel="Save changes"
         canTransfer={false}
+        draftKey={`edit-${t.id}`}
       />
     </div>
   );

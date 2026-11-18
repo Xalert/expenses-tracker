@@ -2,7 +2,9 @@ import "server-only";
 import { BACKUP_APP, BACKUP_VERSION, backupSchema, formatIssuePath } from "@/lib/backup-format";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidDate } from "@/lib/dates";
+import { RATES_BASE, parseRateInput } from "@/lib/fx";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
+import { isGroupColor } from "@/lib/group-colors";
 import { currencyDecimals, parseAmount } from "@/lib/money";
 import { normalizeName, normalizeNote } from "../_validate";
 import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
@@ -100,10 +102,28 @@ function parseBackup(body: string): ParsedFile {
       currency,
       initialBalanceMinor: w.initialBalanceMinor,
       archived: w.archived,
+      ...(w.archived && w.archivedAt ? { archivedAt: new Date(w.archivedAt).toISOString() } : {}),
       ...(group === undefined ? {} : { group }),
+      detailsLoc: { path: p },
       key: walletKey(name, currency),
     });
   });
+
+  // Groups (optional list; two spellings of one name ignoring case become one, the first wins)
+  if (data.groups) {
+    const seen = new Set<string>();
+    const groups: NonNullable<ParsedFile["groups"]> = [];
+    data.groups.forEach((g, i) => {
+      const name = check(
+        () => normalizeName(g.name, "name", MAX_GROUP_NAME_LENGTH),
+        (m) => problem(`groups[${i}].name`, m),
+      );
+      if (name === undefined || seen.has(name.toLowerCase())) return;
+      seen.add(name.toLowerCase());
+      groups.push({ name, color: isGroupColor(g.color) ? g.color : null, archived: g.archived });
+    });
+    out.groups = groups;
+  }
 
   // Categories (two file categories with the same kind + name ignoring case become one)
   const categoryIndex = new Map<number, number>();
@@ -121,10 +141,18 @@ function parseBackup(body: string): ParsedFile {
     }
     const key = categoryKey(c.kind, name);
     let idx = categoryByKey.get(key);
+    const archivedAt = c.archived && c.archivedAt ? new Date(c.archivedAt).toISOString() : undefined;
     if (idx === undefined) {
       idx = out.categories.length;
       categoryByKey.set(key, idx);
-      out.categories.push({ name, kind: c.kind, key });
+      out.categories.push({ name, kind: c.kind, key, archived: c.archived, ...(archivedAt ? { archivedAt } : {}) });
+    } else {
+      // Merged with an earlier one: archived only when every file category merged into it is (on the latest date).
+      const merged = out.categories[idx];
+      merged.archived = merged.archived && c.archived;
+      const latest = [merged.archivedAt, archivedAt].filter((d) => d !== undefined).sort().pop();
+      if (merged.archived && latest) merged.archivedAt = latest;
+      else delete merged.archivedAt;
     }
     categoryIndex.set(c.id, idx);
   });
@@ -190,6 +218,35 @@ function parseBackup(body: string): ParsedFile {
       loc: { path: p },
     });
   });
+
+  // The user's own exchange rates (optional list): the rules of `setManualRate`, except that the currencies need not
+  // be held (a wallet may have been deleted since the rate was set; an unused rate is harmless).
+  if (data.manualRates) {
+    const seen = new Map<string, string>();
+    out.manualRates = [];
+    data.manualRates.forEach((r, i) => {
+      const p = `manualRates[${i}]`;
+      const before = out.problems.length;
+      const currency = r.currency.trim().toUpperCase();
+      const base = r.base.trim().toUpperCase();
+      if (!isValidCurrency(currency)) problem(`${p}.currency`, `“${r.currency}” is not a supported ISO 4217 currency code.`);
+      else if (currency === RATES_BASE) problem(`${p}.currency`, `${RATES_BASE} needs no rate: it is what the other rates are counted in.`);
+      if (!isValidCurrency(base)) problem(`${p}.base`, `“${r.base}” is not a supported ISO 4217 currency code.`);
+      else if (base === currency) problem(`${p}.base`, "The rate's base must be a different currency.");
+      date(`${p}.effectiveDate`, r.effectiveDate);
+      const rate = parseRateInput(r.rate);
+      if (rate === null) problem(`${p}.rate`, `“${r.rate}” is not a rate greater than zero (a decimal such as 3.25).`);
+      if (out.problems.length > before) return;
+      const key = `${currency}|${r.effectiveDate}`;
+      const earlier = seen.get(key);
+      if (earlier !== undefined) {
+        problem(p, `${currency} already has a rate from ${r.effectiveDate} on in ${earlier}.`);
+        return;
+      }
+      seen.set(key, p);
+      out.manualRates!.push({ currency, base, effectiveDate: r.effectiveDate, rate: rate!, loc: { path: p } });
+    });
+  }
 
   return out;
 }

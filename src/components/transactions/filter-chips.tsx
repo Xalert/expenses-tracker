@@ -11,6 +11,7 @@ import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
 import { formatMonth, shiftMonth } from "@/lib/dates";
 import { listHref, monthHref, resolveView, viewLabel, type ListParams } from "./list-params";
+import { NO_SCRIPT_MONTH_ID } from "./no-script-filters";
 
 type Option = { href: string; label: string; selected: boolean };
 type OptionGroup = { label?: string; options: Option[] };
@@ -41,8 +42,14 @@ function Chip({
   panelClassName,
   before,
   after,
+  noScriptHref,
   children,
 }: {
+  /**
+   * Without JavaScript the popover cannot open: the button is hidden (`data-needs-js`) and a link with the same label
+   * to `noScriptHref` (the `<noscript>` filter form's matching select) stands in for it.
+   */
+  noScriptHref?: string;
   name: string;
   /** Shown instead of `name` when set. */
   value?: string;
@@ -60,8 +67,25 @@ function Chip({
   const panelId = useId();
   const close = () => setOpen(false);
   const grouped = Boolean(before || after);
+  const triggerClass = cn(
+    grouped
+      ? "inline-flex min-h-11 cursor-pointer items-center gap-1 px-2 text-sm font-semibold transition-colors hover:bg-surface-muted sm:min-h-10"
+      : cn(pillClasses({ selected: active }), "gap-1 pr-3"),
+    "max-w-[16rem]",
+    focusRing,
+  );
+  const label = value ? (
+    <>
+      <span className="sr-only">{name}: </span>
+      <span className="truncate">{value}</span>
+    </>
+  ) : (
+    name
+  );
   const chip = (
-    <div ref={anchor} className="relative">
+    // `data-needs-js`: hidden without JavaScript (the page's <noscript> filter form takes over the listbox chips, and
+    // `noScriptHref` the others).
+    <div ref={anchor} className="relative" data-needs-js={popup === "listbox" || noScriptHref ? "" : undefined}>
       <button
         ref={trigger}
         type="button"
@@ -69,22 +93,9 @@ function Chip({
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((o) => !o)}
-        className={cn(
-          grouped
-            ? "inline-flex min-h-11 cursor-pointer items-center gap-1 px-2 text-sm font-semibold transition-colors hover:bg-surface-muted sm:min-h-10"
-            : cn(pillClasses({ selected: active }), "gap-1 pr-3"),
-          "max-w-[16rem]",
-          focusRing,
-        )}
+        className={triggerClass}
       >
-        {value ? (
-          <>
-            <span className="sr-only">{name}: </span>
-            <span className="truncate">{value}</span>
-          </>
-        ) : (
-          name
-        )}
+        {label}
         <ChevronDown />
       </button>
       <Popover
@@ -101,7 +112,22 @@ function Chip({
       </Popover>
     </div>
   );
-  if (!grouped) return chip;
+  const fallback = noScriptHref && (
+    <noscript>
+      <a href={noScriptHref} className={triggerClass}>
+        {label}
+        <ChevronDown />
+      </a>
+    </noscript>
+  );
+  if (!grouped) {
+    return (
+      <>
+        {chip}
+        {fallback}
+      </>
+    );
+  }
   return (
     <div
       className={cn(
@@ -111,6 +137,7 @@ function Chip({
     >
       {before}
       {chip}
+      {fallback}
       {after}
     </div>
   );
@@ -140,7 +167,8 @@ function OptionList({ groups, onPick }: { groups: OptionGroup[]; onPick: () => v
     const root = ref.current;
     if (!root) return;
     const options = () => [...root.querySelectorAll<HTMLElement>('[role="option"]')];
-    (root.querySelector<HTMLElement>('[aria-selected="true"]') ?? options()[0])?.focus();
+    // No scrolling: this runs before the Popover is placed (see CalendarPanel in date-picker.tsx).
+    (root.querySelector<HTMLElement>('[aria-selected="true"]') ?? options()[0])?.focus({ preventScroll: true });
     function onKeyDown(e: KeyboardEvent) {
       const all = options();
       const i = all.indexOf(document.activeElement as HTMLElement);
@@ -338,6 +366,7 @@ export function FilterChips({
         active={view.type !== "month" || view.month !== thisMonth}
         popup="dialog"
         panelClassName="w-72 max-w-[calc(100vw-16px)]"
+        noScriptHref={`#${NO_SCRIPT_MONTH_ID}`}
         before={
           prevMonth && (
             <StepLink
@@ -421,6 +450,7 @@ export function FilterChips({
               ["from", params.from],
               ["to", params.to],
               ["currency", params.currency],
+              ["view", params.view],
             ] as const
           ).map(([name, value]) =>
             value !== undefined ? <input key={name} type="hidden" name={name} value={String(value)} /> : null,

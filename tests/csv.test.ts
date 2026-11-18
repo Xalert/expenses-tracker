@@ -44,9 +44,32 @@ describe("parseCsv", () => {
     expect(cells('a,5" screen\n')).toEqual([["a", '5" screen']]);
   });
 
-  it("reports an unterminated quoted cell with the line it starts on", () => {
+  it("reports an unterminated quoted cell with the line it starts on, then reads on from the next line", () => {
     const r = parseCsv('a,b\n1,"never closed\n2,3\n');
     expect(r.errors).toEqual([{ line: 2, message: expect.stringContaining("never closed") }]);
+    expect(r.records).toEqual([
+      { line: 1, cells: ["a", "b"] },
+      { line: 3, cells: ["2", "3"] },
+    ]);
+  });
+
+  it("resyncs after every broken record, so all quoting problems are reported at once", () => {
+    const r = parseCsv('a,b\r\n1,"open\r\n"x"y,2\r\n3,4\r\n5,"also open\r\n6,7\r\n');
+    // Line 2's quote is closed by the one opening line 3 (then "y" is stray text): one broken record, lines 2–3.
+    expect(r.errors.map((e) => e.line)).toEqual([3, 5]);
+    expect(r.records.map((x) => [x.line, x.cells])).toEqual([
+      [1, ["a", "b"]],
+      [4, ["3", "4"]],
+      [6, ["6", "7"]],
+    ]);
+    // A well-formed multi-line cell still counts its lines.
+    const ok = parseCsv('a\n"two\nlines"\n"x"y\nz\n');
+    expect(ok.errors).toEqual([{ line: 4, message: expect.stringMatching(/closing quote/) }]);
+    expect(ok.records.map((x) => [x.line, x.cells])).toEqual([
+      [1, ["a"]],
+      [2, ["two\nlines"]],
+      [5, ["z"]],
+    ]);
   });
 
   it("reports text after a closing quote", () => {

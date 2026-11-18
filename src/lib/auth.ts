@@ -6,7 +6,9 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
+import { deleteExpiredSessions, sessionTouchDue, touchSession } from "@/server/users";
 import { shouldUseSecureCookie } from "./config";
+import { storedUserAgent } from "./user-agent";
 import { displayName } from "./user-id";
 
 export const SESSION_COOKIE = "et_session";
@@ -27,17 +29,27 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/** Create a DB session for `userId` and set the session cookie. Call from a Server Action only. */
+/**
+ * Create a DB session for `userId` and set the session cookie; the user's expired sessions are deleted first. The
+ * request's `User-Agent` is stored with it (the Devices list on /account). Call from a Server Action only.
+ */
 export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await (await getDb()).insert(sessions).values({ tokenHash: hashToken(token), userId, expiresAt });
+  const requestHeaders = await headers();
+  await deleteExpiredSessions(userId);
+  await (await getDb()).insert(sessions).values({
+    tokenHash: hashToken(token),
+    userId,
+    expiresAt,
+    userAgent: storedUserAgent(requestHeaders.get("user-agent")),
+  });
 
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     // COOKIE_SECURE=auto|true|false; auto = secure only when the request came in over HTTPS (reverse proxy).
-    secure: shouldUseSecureCookie((await headers()).get("x-forwarded-proto")),
+    secure: shouldUseSecureCookie(requestHeaders.get("x-forwarded-proto")),
     path: "/",
     expires: expiresAt,
   });
@@ -51,7 +63,21 @@ export async function destroySession(): Promise<void> {
   store.delete(SESSION_COOKIE);
 }
 
-/** The signed-in user, or null. Cached for the duration of a request. */
+/** Clear the session cookie without touching the database (after the account and its sessions were deleted). */
+export async function clearSessionCookie(): Promise<void> {
+  (await cookies()).delete(SESSION_COOKIE);
+}
+
+/** sha256 of the current request's session cookie token (what `sessions.tokenHash` stores), or null when there is no cookie. */
+export async function currentSessionTokenHash(): Promise<string | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  return token ? hashToken(token) : null;
+}
+
+/**
+ * The signed-in user, or null. Cached for the duration of a request. Marks the session used (`lastUsedAt`) when its
+ * last mark is older than `SESSION_TOUCH_INTERVAL_MS`, so most requests write nothing.
+ */
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -61,6 +87,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     .select({
       sessionId: sessions.id,
       expiresAt: sessions.expiresAt,
+      lastUsedAt: sessions.lastUsedAt,
       id: users.id,
       username: users.username,
       email: users.email,
@@ -73,10 +100,12 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     .limit(1);
 
   if (!row) return null;
-  if (row.expiresAt.getTime() <= Date.now()) {
+  const now = new Date();
+  if (row.expiresAt.getTime() <= now.getTime()) {
     await db.delete(sessions).where(eq(sessions.id, row.sessionId));
     return null;
   }
+  if (sessionTouchDue(row.lastUsedAt, now)) await touchSession(row.sessionId, now);
   const { id, username, email, firstName, lastName } = row;
   return { id, username, email, firstName, lastName, displayName: displayName(row) };
 });

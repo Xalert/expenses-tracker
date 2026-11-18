@@ -36,7 +36,7 @@ export default async function DataPage() {
               <ExportRow
                 format="CSV"
                 title="Transactions"
-                description="Every expense, income and transfer as one spreadsheet row, without initial balances, archived state or unused categories (use the backup to move a whole account, and Export CSV on the Transactions page for a filtered list)."
+                description="Every expense, income and transfer as one spreadsheet row, after one row per wallet with its initial balance, group and archived date; unused categories stay out (use the backup to move a whole account, and Export CSV on the Transactions page for a filtered list)."
                 action={<DownloadLink href="/api/export/transactions" label="Download CSV" />}
               />
               <ExportRow

@@ -18,7 +18,10 @@ export function ConfirmDeleteForm({
   className,
   "aria-label": ariaLabel,
   title,
+  onConfirmed,
 }: {
+  /** Called once the user has confirmed, just before the form posts. */
+  onConfirmed?: () => void;
   action: (formData: FormData) => Promise<void>;
   id: number;
   returnTo: string;
@@ -36,6 +39,7 @@ export function ConfirmDeleteForm({
       action={action}
       onSubmit={(e) => {
         if (!window.confirm(confirmMessage)) e.preventDefault();
+        else onConfirmed?.();
       }}
     >
       <input type="hidden" name="id" value={id} />

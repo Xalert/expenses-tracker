@@ -13,7 +13,9 @@ export const BACKUP_VERSION = 1;
 /** Caps for untrusted files (also enforced for CSV where they apply). */
 export const BACKUP_LIMITS = {
   wallets: 1_000,
+  groups: 1_000,
   categories: 1_000,
+  manualRates: 10_000,
   /** transactions + transfers together. */
   entries: IMPORT_MAX_ROWS,
 } as const;
@@ -34,21 +36,61 @@ const decimal = z.string({ error: "Expected a decimal string." }).max(40, { erro
 const isoDate = z.string({ error: "Expected a YYYY-MM-DD date." }).max(10, { error: "Expected a YYYY-MM-DD date." });
 const note = text.nullable().optional();
 
+const currencyCode = z.string({ error: "Expected a currency code." }).max(10, { error: "Expected a currency code." });
+/**
+ * Optional (added after version 1 shipped): when an archived wallet / category was archived, as an ISO timestamp.
+ * Restored on import; absent (older files) or on an active one it is ignored, and an archived one is archived as of
+ * the import.
+ */
+const archivedAt = z
+  .string({ error: "Expected an ISO timestamp." })
+  .max(64, { error: "Expected an ISO timestamp." })
+  .refine((v) => /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)), {
+    error: "Expected an ISO timestamp such as 2026-03-01T10:00:00.000Z.",
+  })
+  .nullable()
+  .optional();
+
 export const backupWalletSchema = z.object({
   id: localId,
   name: text,
-  currency: z.string({ error: "Expected a currency code." }).max(10, { error: "Expected a currency code." }),
+  currency: currencyCode,
   initialBalanceMinor: safeInt,
   initialBalance: decimal.optional(),
   archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
+  archivedAt,
   /** Optional: the name of the wallet group the wallet belongs to (added after version 1 shipped; old files lack it). */
   group: text.nullable().optional(),
+});
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): the wallet groups in display order (the array order is
+ * the position), with their colour (one of `GROUP_COLORS`; anything else reads as none) and archived flag.
+ */
+export const backupGroupSchema = z.object({
+  name: text,
+  color: z.string({ error: "Expected text." }).max(40, { error: "Text is too long." }).nullable().optional(),
+  archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
 });
 
 export const backupCategorySchema = z.object({
   id: localId,
   name: text,
   kind: z.enum(["expense", "income"], { error: "Expected expense or income." }),
+  /** Optional: added after version 1 shipped (old files lack it, and the version stays 1). */
+  archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
+  archivedAt,
+});
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): the user's own exchange rates (/rates), "1 `currency` =
+ * `rate` `base` from `effectiveDate` on", with the rate as the exact decimal string stored.
+ */
+export const backupManualRateSchema = z.object({
+  currency: currencyCode,
+  base: currencyCode,
+  effectiveDate: isoDate,
+  rate: decimal,
 });
 
 export const backupTransactionSchema = z.object({
@@ -78,6 +120,10 @@ export const backupSchema = z.object({
   version: z.literal(BACKUP_VERSION),
   exportedAt: z.string().max(64).optional(),
   wallets: z.array(backupWalletSchema).max(BACKUP_LIMITS.wallets, { error: `At most ${BACKUP_LIMITS.wallets} wallets.` }),
+  groups: z
+    .array(backupGroupSchema)
+    .max(BACKUP_LIMITS.groups, { error: `At most ${BACKUP_LIMITS.groups} groups.` })
+    .optional(),
   categories: z
     .array(backupCategorySchema)
     .max(BACKUP_LIMITS.categories, { error: `At most ${BACKUP_LIMITS.categories} categories.` }),
@@ -87,13 +133,19 @@ export const backupSchema = z.object({
   transfers: z.array(backupTransferSchema).max(BACKUP_LIMITS.entries, {
     error: `At most ${BACKUP_LIMITS.entries} transfers.`,
   }),
+  manualRates: z
+    .array(backupManualRateSchema)
+    .max(BACKUP_LIMITS.manualRates, { error: `At most ${BACKUP_LIMITS.manualRates} exchange rates.` })
+    .optional(),
 });
 
 export type Backup = z.output<typeof backupSchema>;
 export type BackupWallet = Backup["wallets"][number];
+export type BackupGroup = NonNullable<Backup["groups"]>[number];
 export type BackupCategory = Backup["categories"][number];
 export type BackupTransaction = Backup["transactions"][number];
 export type BackupTransfer = Backup["transfers"][number];
+export type BackupManualRate = NonNullable<Backup["manualRates"]>[number];
 
 /** `transactions[3].amountMinor` from a zod issue path. */
 export function formatIssuePath(path: readonly PropertyKey[]): string {

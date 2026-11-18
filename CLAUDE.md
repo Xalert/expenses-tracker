@@ -16,12 +16,16 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — a landing page, kept short: what the app is, the Compose quick start, a pointer to
-  `docs/SELF-HOSTING.md`, and one link per other doc. No dev commands or long-form material; those go in a `docs/` file.
+  `docs/SELF-HOSTING.md`, the everyday `make` shortcuts (each its own one-line `bash` block, explanation above), and one link per other doc. No other dev
+  commands or long-form material; those go in a `docs/` file.
 - `docs/DEVELOPMENT.md` — working from a clone: run it (demo login, reset), debugging, the script table, the code
   layout. Each command there is its own one-line `bash` block with the explanation above it.
 - `docs/SELF-HOSTING.md` — long-form operations: settings, reverse proxy and `COOKIE_SECURE`, closing registration,
   where the data lives (the Postgres volume), `pg_dump` / `pg_restore` backup and restore, upgrading (and Postgres
   major upgrades), moving from the old SQLite versions via JSON backups, the standalone build without Docker.
+- `docs/IMPORTING.md` — the user guide to import and export (linked from /data). Keep it in line with SPEC's
+  "Import / export" when an import rule changes.
+- `CHANGELOG.md` — `## Unreleased` collects user-visible changes; `make release` turns it into a version section.
 - `docs/STATEMENT-IMPORTER.md` — the claude.ai Artifact in `tools/statement-importer/` that turns bank statements
   into this app's CSV (prompts, memory, harness). Not part of the Next.js app; eslint ignores `tools/**`, and
   `tests/statement-importer-csv.test.ts` keeps its CSV writer in line with `src/lib/csv.ts`.
@@ -29,7 +33,7 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 ## Commands
 
 ```bash
-npm run db:up                                 # development Postgres in Docker (compose.dev.yaml, 127.0.0.1:5432), waits until healthy
+npm run db:up                                 # development Postgres in Docker (compose.dev.yaml, 127.0.0.1:5433), waits until healthy
 npm run db:down                               # stop it (data stays in the expenses-dev-pg volume)
 npm run dev                                   # dev server on :3000 on database `expenses` (the owner's REAL data — see below); needs db:up
 npm run dev:demo                              # seed database `expenses_demo` if needed, then the dev server on it
@@ -39,6 +43,7 @@ npm run db:reset -- --demo | --clean          # REAL DB: wipe every row, then de
 npm run typecheck                             # tsc --noEmit
 npm run lint                                  # eslint
 npm test                                      # vitest run (whole suite, a few seconds; PGlite, no Docker or Postgres needed)
+npm run test:e2e                              # Playwright browser tests: own Postgres (5434, tmpfs), build, run, teardown (docs/DEVELOPMENT.md)
 npx vitest run tests/money.test.ts            # one file
 npx vitest run tests/money.test.ts -t "JPY"   # tests whose name matches
 npm run build                                 # production build → .next/standalone (forces NODE_ENV=production)
@@ -47,18 +52,27 @@ docker compose up -d --build                  # the real deployment artefact
 npx tsx --conditions=react-server script.ts   # run a one-off script that imports src/server/* (needed for `server-only`)
 ```
 
-The database is migrated on first request. `dev:demo` and `demo:reset` put
-`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo` inside the npm script, so they never reach
+The `Makefile` wraps these (`make` lists the targets; `make check`, `make test FILE=… NAME=…`, `make dev` on the
+demo database, `make reset-password ID=…` on the demo database). `make dev-real` and `make psql DB=expenses` reach
+the real data: never run them from an agent. `make release VERSION=x.y.z` (`scripts/release.mjs`) cuts a release —
+bump, CHANGELOG, commit, tag — and pushes only with `PUSH=1`; never run it without the owner asking.
+
+The database is migrated on first request. `dev:demo` and `demo:reset` run each step through
+`scripts/with-demo-db.mjs`, which sets `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` (an
+inherited `DATABASE_URL` is replaced; a `DEMO_DATABASE_URL` naming any other database is refused), so they never reach
 `expenses`.
 
-`build` and `start` set `NODE_ENV=production` inline on purpose: a globally exported `NODE_ENV=development`
-breaks `next build`. A production build is best validated with `docker build .`, which runs it on Linux.
+`build` and `start` go through `scripts/next-production.mjs`, which forces `NODE_ENV=production` (a globally exported
+`NODE_ENV=development` breaks `next build`) and works in Windows `cmd` too. A production build is best validated with `docker build .`, which runs it on Linux.
 
 ## Architecture
 
 **Request flow.** There is no REST layer. Pages are Server Components that call the service layer directly;
 mutations are Server Actions. The only route handlers are `GET /api/health` and the three `GET /api/export/*`
 downloads — route handlers are not covered by the `(app)` layout, so they check the session themselves.
+`src/proxy.ts` (Next 16's middleware) does only two things: it explains a reverse proxy that drops `Host` (the
+Server Action origin check, `src/lib/origin-check.ts`) and answers an over-limit import upload with the app's
+message. It is not an auth layer.
 
 ```
 page.tsx (Server Component) ──────────────► src/server/*.ts ──► Drizzle ──► PostgreSQL
@@ -77,9 +91,10 @@ names so errors land on the right control.
 **Money.** Integer minor units everywhere (`amountMinor`), never floats; decimals come from the currency
 (`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored as `bigint` (`mode: "number"`). Stored amounts are positive and the transaction kind gives the sign.
 User input goes through `parseAmount(value, currency)` with the currency of the wallet looked up server-side.
-There is no currency conversion except the Overview's "All in <currency>" view (`src/lib/fx.ts`, rates from
-`src/server/exchange-rates.ts`, the `convert` option of the month services); every other total is grouped per
-currency and nothing converted is stored.
+Currency conversion exists only in the "All in <currency>" views of the Overview, the /transactions day strip and
+/categories (`src/lib/fx.ts`, provider rates stored in `exchange_rates` by `src/server/exchange-rates.ts`, manual
+rates from `/rates` in `src/server/manual-rates.ts`, the `convert` option of the month services); wallet pages and
+every other total stay per currency, and nothing converted is stored.
 
 **Transfers** are one `transfers` row plus two `transactions` legs (`transfer_out`, `transfer_in`) written in
 one DB transaction; legs are only edited or deleted through the transfer. Cross-currency transfers store both
@@ -87,8 +102,8 @@ amounts. A check constraint ties `kind`, `categoryId` and `transferId` together.
 
 **Database (`src/db/index.ts`).** PostgreSQL through `pg` (a `Pool`) and Drizzle; SQLite support is gone.
 `getDb()` is a memoized *promise* on `globalThis`: it connects to `DATABASE_URL` (required in production; in
-development it defaults to `DEFAULT_DEV_DATABASE_URL`, `postgres://expenses:expenses@localhost:5432/expenses`),
-applies the migrations in `drizzle/` once, then resolves; a failed attempt clears it so the next call retries. DDL is
+development it defaults to `DEFAULT_DEV_DATABASE_URL`, `postgres://expenses:expenses@localhost:5433/expenses`),
+applies the migrations in `drizzle/` once (logging a warning that lists pending ones on an existing database), then resolves; a failed attempt clears it so the next call retries. DDL is
 transactional and foreign keys are always on; there is no pre-migration copy. Timestamps are `timestamptz`, calendar
 dates stay `text`. Inside `await db.transaction(async (tx) => …)` await every statement and use only `tx`.
 `createDatabase(url)` is for scripts, `createTestDatabase()` (PGlite) for tests. Migrations must ship with the build
@@ -100,7 +115,10 @@ prompts (rename vs create) need a TTY.
 token stored. Email, first name and surname are optional; show people by `user.displayName` (rules in
 `src/lib/user-id.ts`), never by assembling names yourself.
 `requireUser()` is called in the `(app)` layout **and** in every Server Action. `COOKIE_SECURE` and
-`ALLOW_REGISTRATION` are read through `src/lib/config.ts`.
+`ALLOW_REGISTRATION` are read through `src/lib/config.ts`. Sign-in and the current-password checks on `/account` go
+through the in-memory limiter in `src/lib/rate-limit.ts` (per process). There is no email: a forgotten password is
+reset by the administrator with `scripts/reset-password.mjs` (plain ESM shipped in the image; it must hash exactly
+like `src/lib/password.ts`, which `tests/reset-password.test.ts` checks).
 
 **Import pipeline (`src/server/import.ts` + `src/server/import-formats/`).** Each format is a module with
 `detect` + `parse` that produces the same parsed form (plus an optional `finalize` that runs once on the merged
@@ -117,7 +135,10 @@ service (volume `pg-data`, port not published, `POSTGRES_PASSWORD` default `expe
 runtime configuration is environment variables (`.env.example`). The image is pure JavaScript, multi-arch.
 `.github/workflows/docker-image.yml` tests and publishes the multi-arch image to `ghcr.io` (`latest` from `main`,
 versions from `vX.Y.Z` tags); `deploy/compose.yaml` runs that image without a clone, `docker-compose.yml` builds
-from source. Keep the two Compose files' environment blocks in step.
+from source. Keep the two Compose files' environment blocks — and their identical `backup` service (profile
+`backup`, `pg_dump` into `./backups`; a test compares them) — in step. `deploy/pg-major-upgrade.sh` moves the
+database to a new Postgres major on a new volume. Operator scripts are copied into `.next/standalone/scripts` in
+the Dockerfile's build stage and may import only what the standalone output ships (e.g. `pg`).
 
 ## Conventions and gotchas
 
@@ -158,7 +179,7 @@ from source. Keep the two Compose files' environment blocks in step.
 - **The `expenses` database on the development Postgres is the developer's real data. Never run a database script
   (`db:seed`, `db:reset`, one-off `tsx` scripts) or a dev server against it from an agent.** Use `expenses_demo`
   (what `dev:demo` / `demo:reset` do) or a throwaway database, with `DATABASE_URL=<url>` inline on the
-  same command every time (`DATABASE_URL=postgres://expenses:expenses@localhost:5432/expenses_demo npm run db:reset
+  same command every time (`DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo npm run db:reset
   -- --demo --yes`), never via `export` or earlier in a `&&` chain: a failed step before it silently leaves the
   default database as the target. `db:reset --yes` refuses the default database (`DEFAULT_DEV_DATABASE_URL` or an
   unset `DATABASE_URL`) for this reason. There is no file to copy before a reset: take a `pg_dump` or the JSON

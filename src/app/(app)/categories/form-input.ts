@@ -20,12 +20,30 @@ export function nameField(formData: FormData): string {
   return typeof v === "string" ? v : "";
 }
 
+/** The replacement select's value for "a new category" (then `moveToNewCategoryName` holds its name). */
+export const NEW_CATEGORY_VALUE = "new";
+
 /**
- * `moveToCategoryId` field: missing/empty → undefined (no replacement chosen), a valid id → that id,
+ * `moveToCategoryId` field: missing/empty/"new" → undefined (no existing replacement chosen), a valid id → that id,
  * anything else → 0, which the service rejects as an invalid replacement.
  */
 export function parseMoveTo(formData: FormData): number | undefined {
   const raw = formData.get("moveToCategoryId");
-  if (raw === null || raw === "") return undefined;
+  if (raw === null || raw === "" || raw === NEW_CATEGORY_VALUE) return undefined;
   return parseCategoryId(raw) ?? 0;
+}
+
+/**
+ * The removal's replacement: an existing category (`moveToCategoryId`), or a new one named by `moveToNewCategoryName`
+ * — used when the select says "new" or when the form has no select (the category is the only active one of its
+ * kind, so the name field is all there is).
+ */
+export function parseReplacement(formData: FormData): { moveToCategoryId?: number; moveToNewCategoryName?: string } {
+  const select = formData.get("moveToCategoryId");
+  const name = formData.get("moveToNewCategoryName");
+  if ((select === null || select === NEW_CATEGORY_VALUE) && typeof name === "string") {
+    return { moveToNewCategoryName: name };
+  }
+  const moveToCategoryId = parseMoveTo(formData);
+  return moveToCategoryId === undefined ? {} : { moveToCategoryId };
 }

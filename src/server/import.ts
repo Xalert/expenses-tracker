@@ -1,22 +1,26 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
+import { categories, manualRates, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
+import { parseRateInput } from "@/lib/fx";
 import { listTransferRows } from "./export";
 import { assertId } from "./_validate";
-import { getDefaultGroupId, getOwnedGroupRow } from "./wallet-groups";
+import { getUserTimeZone } from "./users";
+import { getDefaultGroupId, getOpenGroupRow, nextGroupPosition } from "./wallet-groups";
 import { backupFormat } from "./import-formats/backup";
 import {
   addTally,
   categoryKey,
+  type CategorySpec,
   emptyParsed,
   fmtCount,
   specBuilder,
   walletKey,
   type EntrySpec,
+  type GroupSpec,
   type ImportContext,
   type ImportFormat,
   type ImportFormatId,
@@ -24,8 +28,10 @@ import {
   type ImportProblem,
   type ImportSource,
   type Loc,
+  type ManualRateSpec,
   type ParsedFile,
   type TransferSpec,
+  type WalletSpec,
 } from "./import-formats/shared";
 import { spendeeFormat } from "./import-formats/spendee";
 import { transactionsCsvFormat } from "./import-formats/transactions-csv";
@@ -42,8 +48,8 @@ export type ImportOptions = {
   /** Skip entries that already exist in the account (multiset comparison). Default true. */
   skipDuplicates?: boolean;
   /**
-   * The importing browser's IANA time zone. Timestamps with a UTC offset (Spendee) are dated in it. Missing or
-   * invalid → UTC (with a notice saying so).
+   * The importing browser's IANA time zone. Spendee's UTC timestamps are dated in the account's time zone when it has
+   * one, else in this one; missing or invalid (and no account zone) → UTC.
    */
   timeZone?: string;
   /** Import transfer rows that have no partner as income / expense in a "Transfer" category. Default false. */
@@ -82,11 +88,24 @@ export type ImportPreview = {
   transfersToAdd: number;
   duplicateTransactions: number;
   duplicateTransfers: number;
-  /** `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). */
-  walletsToCreate: { name: string; currency: string; archived: boolean; group: string }[];
-  /** Groups named by a backup that the account does not have yet; created by the import. */
+  /**
+   * `group` is the name of the group the wallet goes into (an existing one, or one of `groupsToCreate`). `described`:
+   * the file gives the wallet's initial balance and archived state (a backup always; a CSV in a `wallet` row);
+   * otherwise it starts at 0 and active.
+   */
+  walletsToCreate: { name: string; currency: string; archived: boolean; group: string; described: boolean }[];
+  /**
+   * Groups named by a backup (its `groups` list, then its wallets' `group`) or by a CSV's `group` cells that the account does not have yet;
+   * created by the import, last in the order, with the list's colour and archived state.
+   */
   groupsToCreate: string[];
-  categoriesToCreate: { name: string; kind: CategoryKind }[];
+  /** `archived: true` (present only then): a backup's archived category, or a CSV category row's, created archived. */
+  categoriesToCreate: { name: string; kind: CategoryKind; archived?: true }[];
+  /**
+   * Backup only: the file's own exchange rates the account lacks (a rate for a currency and date the account already
+   * has is kept as it is, never replaced).
+   */
+  manualRatesToAdd: number;
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -106,7 +125,7 @@ export type ImportInput = string | ImportFileInput[];
 
 /** Parse, validate and plan an import without writing anything. */
 export async function previewImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportPreview> {
-  const parsed = parseImportFiles(input, opts);
+  const parsed = parseImportFiles(input, opts, await getUserTimeZone(userId));
   if (parsed.file.problems.length) return summarize(parsed, null);
   const db = await getDb();
   // A transaction only so the read-only plan sees one consistent snapshot of the account.
@@ -118,7 +137,7 @@ export async function previewImport(userId: number, input: ImportInput, opts: Im
  * problems, write everything in one DB transaction. With problems nothing is written and `imported` is false.
  */
 export async function runImport(userId: number, input: ImportInput, opts: ImportOptions = {}): Promise<ImportResult> {
-  const parsed = parseImportFiles(input, opts);
+  const parsed = parseImportFiles(input, opts, await getUserTimeZone(userId));
   if (parsed.file.problems.length) return { ...summarize(parsed, null), imported: false };
   const db = await getDb();
   return await db.transaction(async (tx) => {
@@ -142,9 +161,15 @@ const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 
 type ParsedSelection = { file: ParsedFile; files: ImportFileSummary[] };
 
-function importContext(opts: ImportOptions): ImportContext {
+/** The account's zone (already checked) wins over the browser's; with neither, UTC. */
+function importContext(opts: ImportOptions, accountTimeZone: string | null): ImportContext {
+  const unpairedTransfersAsEntries = opts.unpairedTransfersAsEntries === true;
+  if (accountTimeZone) {
+    return { timeZone: accountTimeZone, timeZoneSource: "account", timeZoneFallback: false, unpairedTransfersAsEntries };
+  }
+  const sent = typeof opts.timeZone === "string" && opts.timeZone.trim() !== "";
   const { timeZone, fallback } = resolveTimeZone(opts.timeZone);
-  return { timeZone, timeZoneFallback: fallback, unpairedTransfersAsEntries: opts.unpairedTransfersAsEntries === true };
+  return { timeZone, timeZoneSource: sent && !fallback ? "browser" : "none", timeZoneFallback: fallback, unpairedTransfersAsEntries };
 }
 
 function makeSource(fileText: string): ImportSource | null {
@@ -162,16 +187,21 @@ function makeSource(fileText: string): ImportSource | null {
 const detectFormat = (source: ImportSource) => FORMATS.find((f) => f.detect(source)) ?? transactionsCsvFormat;
 
 /** Parse one file on its own (no selection-wide steps). Kept for callers that only need the parsed form. */
-export function parseImportFile(fileText: string, opts: ImportOptions = {}): ParsedFile {
-  return parseImportFiles(fileText, opts).file;
+export function parseImportFile(fileText: string, opts: ImportOptions = {}, accountTimeZone: string | null = null): ParsedFile {
+  return parseImportFiles(fileText, opts, accountTimeZone).file;
 }
 
 /**
  * Parse a selection into one `ParsedFile`: limits on the whole selection, identical files used once, a backup only
  * on its own, each file parsed by its detected format, then merged (wallets by name + currency, categories by
  * kind + name) and finished by each format's `finalize` (Spendee pairs transfer rows across files here).
+ * `accountTimeZone` is the account's zone (`getUserTimeZone`), which takes precedence over `opts.timeZone`.
  */
-export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): ParsedSelection {
+export function parseImportFiles(
+  input: ImportInput,
+  opts: ImportOptions = {},
+  accountTimeZone: string | null = null,
+): ParsedSelection {
   const fail = (message: string, files: ImportFileSummary[] = []): ParsedSelection => ({
     file: emptyParsed(null, [{ message }]),
     files,
@@ -191,7 +221,7 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
         : `The selected files are larger than ${MB} MB in total. Import them in smaller groups.`,
     );
   }
-  const ctx = importContext(opts);
+  const ctx = importContext(opts, accountTimeZone);
 
   // Classify every file; identical content is used once.
   const firstByText = new Map<string, string>();
@@ -242,11 +272,19 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
         entries: parsed.entries.map((e) => ({ ...e, loc: tag(e.loc) })),
         transfers: parsed.transfers.map((t) => ({ ...t, loc: tag(t.loc) })),
         transferLegs: parsed.transferLegs.map((l) => ({ ...l, loc: tag(l.loc) })),
+        brokenTransferRows: parsed.brokenTransferRows.map((b) => ({ ...b, loc: tag(b.loc) })),
+        wallets: parsed.wallets.map((w) => ({
+          ...w,
+          ...(w.detailsLoc ? { detailsLoc: tag(w.detailsLoc) } : {}),
+          ...(w.groupLoc ? { groupLoc: tag(w.groupLoc) } : {}),
+        })),
       });
       return;
     }
     const walletMap = parsed.wallets.map((w) => merger.walletFor(w.name, w.currency));
+    parsed.wallets.forEach((w, k) => mergeWalletDetails(combined, walletMap[k], w, tag));
     const categoryMap = parsed.categories.map((c) => merger.categoryFor(c.kind, c.name));
+    parsed.categories.forEach((c, k) => mergeCategoryDetails(combined, categoryMap[k], c, tag));
     combined.entries.push(
       ...parsed.entries.map((e) => ({ ...e, wallet: walletMap[e.wallet], category: categoryMap[e.category], loc: tag(e.loc) })),
     );
@@ -254,6 +292,7 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
       ...parsed.transfers.map((t) => ({ ...t, from: walletMap[t.from], to: walletMap[t.to], loc: tag(t.loc) })),
     );
     combined.transferLegs.push(...parsed.transferLegs.map((l) => ({ ...l, wallet: walletMap[l.wallet], loc: tag(l.loc) })));
+    combined.brokenTransferRows.push(...parsed.brokenTransferRows.map((b) => ({ ...b, loc: tag(b.loc) })));
     combined.problems.push(...parsed.problems.map(tag));
     combined.notices.push(...parsed.notices.map(tag));
     combined.rowCount += parsed.rowCount;
@@ -288,6 +327,65 @@ export function parseImportFiles(input: ImportInput, opts: ImportOptions = {}): 
   return { file: combined, files };
 }
 
+const where = (loc: Loc | undefined) =>
+  loc ? `${loc.file ? `“${loc.file}”, ` : ""}${loc.line !== undefined ? `line ${loc.line}` : (loc.path ?? "")}` : "another row";
+
+/**
+ * Merging a file's wallet into the selection's: its details (a CSV wallet row) and group are taken when the selection
+ * has none yet; two files that describe the same wallet differently are a problem at the later one.
+ */
+function mergeWalletDetails(combined: ParsedFile, idx: number, src: WalletSpec, tag: <T extends object>(x: T) => T) {
+  const dst = combined.wallets[idx];
+  const label = `“${dst.name}” (${dst.currency})`;
+  if (src.detailsLoc) {
+    if (!dst.detailsLoc) {
+      dst.initialBalanceMinor = src.initialBalanceMinor;
+      dst.archived = src.archived;
+      if (src.archivedAt) dst.archivedAt = src.archivedAt;
+      dst.detailsLoc = tag(src.detailsLoc);
+    } else if (
+      dst.initialBalanceMinor !== src.initialBalanceMinor ||
+      dst.archived !== src.archived ||
+      (dst.archivedAt ?? null) !== (src.archivedAt ?? null)
+    ) {
+      combined.problems.push(
+        tag({ ...src.detailsLoc, message: `wallet: Wallet ${label} is described differently in ${where(dst.detailsLoc)}.` }),
+      );
+    }
+  }
+  if (src.group !== undefined) {
+    if (dst.group === undefined) {
+      dst.group = src.group;
+      dst.groupLoc = src.groupLoc ? tag(src.groupLoc) : undefined;
+    } else if (dst.group.toLowerCase() !== src.group.toLowerCase()) {
+      combined.problems.push(
+        tag({
+          ...(src.groupLoc ?? {}),
+          message: `group: Wallet ${label} is put in group “${dst.group}” in ${where(dst.groupLoc)}; a wallet can only be in one group.`,
+        }),
+      );
+    }
+  }
+}
+
+/** As `mergeWalletDetails`, for a CSV category row (kind + archived date): the first file's wins, a different one is a problem. */
+function mergeCategoryDetails(combined: ParsedFile, idx: number, src: CategorySpec, tag: <T extends object>(x: T) => T) {
+  if (!src.detailsLoc) return;
+  const dst = combined.categories[idx];
+  if (!dst.detailsLoc) {
+    dst.archived = src.archived;
+    if (src.archivedAt) dst.archivedAt = src.archivedAt;
+    dst.detailsLoc = tag(src.detailsLoc);
+  } else if (Boolean(dst.archived) !== Boolean(src.archived) || (dst.archivedAt ?? null) !== (src.archivedAt ?? null)) {
+    combined.problems.push(
+      tag({
+        ...src.detailsLoc,
+        message: `category: Category “${dst.name}” (${dst.kind}) is described differently in ${where(dst.detailsLoc)}.`,
+      }),
+    );
+  }
+}
+
 /** File order, then line order; problems without a line (whole-file problems) first within their file. */
 function sortByLocation<T extends Loc>(items: T[]): T[] {
   return items
@@ -299,7 +397,11 @@ function sortByLocation<T extends Loc>(items: T[]): T[] {
 // ---------------------------------------------------------------------------------------------------------
 // Planning: match against the account, find duplicates, apply the archived-wallet rule
 
-type WalletTarget = { id: number | null; archived: boolean };
+/**
+ * `archived`: the account's wallet takes no new entries (it is archived, or its group is: then `archivedGroup` names
+ * the group).
+ */
+type WalletTarget = { id: number | null; archived: boolean; archivedGroup?: string };
 
 type Plan = {
   walletTargets: WalletTarget[]; // per file wallet; id null → created
@@ -307,11 +409,21 @@ type Plan = {
   walletsToCreate: number[];
   /** Per file wallet to create: the target group's name, and its id (null → it is in `groupsToCreate`). */
   walletGroups: Map<number, { name: string; id: number | null }>;
-  /** Group names to create (first spelling wins), in file order. */
+  /**
+   * Group names to create (first spelling wins): a backup's `groups` list first (its order), then the groups only
+   * wallets name, in file order.
+   */
   groupsToCreate: string[];
-  /** Category key → existing id, or null when it will be created. */
+  /** Colour and archived state of a group to create, by lower-cased name (from the backup's `groups` list). */
+  groupDetails: Map<string, GroupSpec>;
+  /** Per file category: the existing id, or null when it will be created. */
   categoryTargets: (number | null)[];
+  /** Per file category: true when it matched an archived category of the account. */
+  categoryArchived: boolean[];
   categoriesToCreate: number[];
+  manualRatesToAdd: ManualRateSpec[];
+  /** Non-blocking notes from planning (e.g. rates the account already had for a date). */
+  notices: ImportNotice[];
   entriesToAdd: EntrySpec[];
   transfersToAdd: TransferSpec[];
   duplicateTransactions: number;
@@ -324,16 +436,26 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const problems: ImportProblem[] = [];
 
   // Wallets ------------------------------------------------------------------------------------------
+  // A wallet of an archived group counts as archived (as in the entry services): it takes no new entries.
   const existingWallets = await tx
-    .select({ id: wallets.id, name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
+    .select({
+      id: wallets.id,
+      name: wallets.name,
+      currency: wallets.currency,
+      archivedAt: wallets.archivedAt,
+      groupName: walletGroups.name,
+      groupArchivedAt: walletGroups.archivedAt,
+    })
     .from(wallets)
+    .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
     .where(eq(wallets.userId, userId))
     .orderBy(wallets.id);
-  const candidates = new Map<string, { id: number; archived: boolean }[]>();
+  const candidates = new Map<string, (WalletTarget & { id: number })[]>();
   for (const w of existingWallets) {
     const key = walletKey(w.name, w.currency);
     const list = candidates.get(key) ?? [];
-    list.push({ id: w.id, archived: w.archivedAt !== null });
+    const archivedGroup = w.archivedAt === null && w.groupArchivedAt !== null ? w.groupName : undefined;
+    list.push({ id: w.id, archived: w.archivedAt !== null || archivedGroup !== undefined, archivedGroup });
     candidates.set(key, list);
   }
   if (parsed.walletMatching === "merge") {
@@ -346,12 +468,12 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const targetGroupId =
     opts.groupId === undefined
       ? await getDefaultGroupId(userId, tx)
-      : (await getOwnedGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx)).id;
+      : (await getOpenGroupRow(userId, assertId(opts.groupId, "groupId", "group"), tx)).id;
   parsed.wallets.forEach((w, i) => {
     const k = used.get(w.key) ?? 0;
     used.set(w.key, k + 1);
     const match = candidates.get(w.key)?.[parsed.walletMatching === "by-position" ? k : 0];
-    if (match) walletTargets.push({ id: match.id, archived: match.archived });
+    if (match) walletTargets.push(match);
     else {
       walletTargets.push({ id: null, archived: false });
       walletsToCreate.push(i);
@@ -369,6 +491,15 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   const walletGroups_ = new Map<number, { name: string; id: number | null }>();
   const groupsToCreate: string[] = [];
   const plannedGroups = new Set<string>();
+  // A backup's own list: every group it names that the account lacks is created (empty ones too), in its order.
+  const groupDetails = new Map<string, GroupSpec>();
+  for (const g of parsed.groups ?? []) {
+    const folded = g.name.toLowerCase();
+    if (groupByFolded.has(folded) || plannedGroups.has(folded)) continue;
+    plannedGroups.add(folded);
+    groupsToCreate.push(g.name);
+    groupDetails.set(folded, g);
+  }
   for (const i of walletsToCreate) {
     const named = parsed.wallets[i].group;
     if (named === undefined) {
@@ -390,17 +521,48 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   }
 
   // Categories ---------------------------------------------------------------------------------------
-  const existingCategories = new Map<string, number>();
+  const existingCategories = new Map<string, { id: number; archived: boolean }>();
   for (const c of await tx
-    .select({ id: categories.id, name: categories.name, kind: categories.kind })
+    .select({ id: categories.id, name: categories.name, kind: categories.kind, archivedAt: categories.archivedAt })
     .from(categories)
     .where(eq(categories.userId, userId))
     .orderBy(categories.id)) {
     const key = categoryKey(c.kind, c.name);
-    if (!existingCategories.has(key)) existingCategories.set(key, c.id);
+    if (!existingCategories.has(key)) existingCategories.set(key, { id: c.id, archived: c.archivedAt !== null });
   }
-  const categoryTargets = parsed.categories.map((c) => existingCategories.get(c.key) ?? null);
+  const categoryTargets = parsed.categories.map((c) => existingCategories.get(c.key)?.id ?? null);
+  const categoryArchived = parsed.categories.map((c) => existingCategories.get(c.key)?.archived ?? false);
   const categoriesToCreate = categoryTargets.flatMap((id, i) => (id === null ? [i] : []));
+
+  // Manual exchange rates (backup): added when the account has none for that currency and date; an existing one is
+  // kept, even when it differs (import adds, never changes).
+  const manualRatesToAdd: ManualRateSpec[] = [];
+  const notices: ImportNotice[] = [];
+  if (parsed.manualRates?.length) {
+    const existingRates = new Map(
+      (
+        await tx
+          .select({ currency: manualRates.currency, effectiveDate: manualRates.effectiveDate, base: manualRates.base, rate: manualRates.rate })
+          .from(manualRates)
+          .where(eq(manualRates.userId, userId))
+      ).map((r) => [`${r.currency}|${r.effectiveDate}`, r]),
+    );
+    let kept = 0;
+    for (const r of parsed.manualRates) {
+      const existing = existingRates.get(`${r.currency}|${r.effectiveDate}`);
+      if (!existing) manualRatesToAdd.push(r);
+      else if (existing.base !== r.base || parseRateInput(existing.rate) !== r.rate) kept++;
+    }
+    if (kept > 0) {
+      notices.push({
+        code: "manual-rates-kept",
+        count: kept,
+        message:
+          `${kept === 1 ? "1 exchange rate" : `${fmtCount(kept)} exchange rates`} in the backup differ from the rate you ` +
+          `already have for that currency and date; your own ${kept === 1 ? "is" : "are"} kept. Change ${kept === 1 ? "it" : "them"} on the Rates page if needed.`,
+      });
+    }
+  }
 
   // Existing entries as multisets (only needed when skipping duplicates) ------------------------------
   // In a CSV a wallet *is* its name + currency, so two same-named wallets of the account count as one for
@@ -450,10 +612,24 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
   };
   const archivedProblem = (loc: Loc, fileWallet: number) => {
     const w = parsed.wallets[fileWallet];
+    const group = walletTargets[fileWallet].archivedGroup;
     problems.push({
       ...loc,
       message:
-        `Wallet “${w.name}” (${w.currency}) is archived in your account, so nothing new can be added to it. ` +
+        group === undefined
+          ? `Wallet “${w.name}” (${w.currency}) is archived in your account, so nothing new can be added to it. ` +
+            "Unarchive it first, or remove these rows."
+          : `Wallet “${w.name}” (${w.currency}) is in the archived group “${group}” in your account, so nothing new ` +
+            "can be added to it. Unarchive the group first, or remove these rows.",
+    });
+  };
+  // Same rule for categories: an archived category of the account takes no new entries (duplicates still skip).
+  const archivedCategoryProblem = (loc: Loc, fileCategory: number) => {
+    const c = parsed.categories[fileCategory];
+    problems.push({
+      ...loc,
+      message:
+        `Category “${c.name}” (${c.kind}) is archived in your account, so nothing new can be added to it. ` +
         "Unarchive it first, or remove these rows.",
     });
   };
@@ -473,6 +649,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
       continue;
     }
     if (wallet.archived) archivedProblem(e.loc, e.wallet);
+    else if (categoryArchived[e.category]) archivedCategoryProblem(e.loc, e.category);
     entriesToAdd.push(e);
   }
 
@@ -510,8 +687,12 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     walletsToCreate,
     walletGroups: walletGroups_,
     groupsToCreate,
+    groupDetails,
     categoryTargets,
+    categoryArchived,
     categoriesToCreate,
+    manualRatesToAdd,
+    notices,
     entriesToAdd,
     transfersToAdd,
     duplicateTransactions,
@@ -542,16 +723,24 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
     duplicateTransfers: plan?.duplicateTransfers ?? 0,
     walletsToCreate: (plan?.walletsToCreate ?? []).map((i) => {
       const w = parsed.wallets[i];
-      return { name: w.name, currency: w.currency, archived: w.archived, group: plan!.walletGroups.get(i)!.name };
+      return {
+        name: w.name,
+        currency: w.currency,
+        archived: w.archived,
+        group: plan!.walletGroups.get(i)!.name,
+        described: w.detailsLoc !== undefined,
+      };
     }),
     groupsToCreate: plan?.groupsToCreate ?? [],
     categoriesToCreate: (plan?.categoriesToCreate ?? []).map((i) => ({
       name: parsed.categories[i].name,
       kind: parsed.categories[i].kind,
+      ...(parsed.categories[i].archived ? { archived: true as const } : {}),
     })),
+    manualRatesToAdd: plan?.manualRatesToAdd.length ?? 0,
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
-    notices: parsed.notices.map(publicLocation),
+    notices: [...parsed.notices, ...(plan?.notices ?? [])].map(publicLocation),
     unpairedTransfers: parsed.unpairedTransferRows,
   };
 }
@@ -580,10 +769,19 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
   const now = new Date();
 
   const createdGroupIds = new Map<string, number>();
+  let position = await nextGroupPosition(tx, userId);
   for (const name of plan.groupsToCreate) {
+    const details = plan.groupDetails.get(name.toLowerCase());
     const [group] = await tx
       .insert(walletGroups)
-      .values({ userId, name, createdAt: now })
+      .values({
+        userId,
+        name,
+        position: position++,
+        color: details?.color ?? null,
+        archivedAt: details?.archived ? now : null,
+        createdAt: now,
+      })
       .returning({ id: walletGroups.id });
     createdGroupIds.set(name.toLowerCase(), group.id);
   }
@@ -600,9 +798,10 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
         name: w.name,
         currency: w.currency,
         initialBalanceMinor: w.initialBalanceMinor,
-        // A backup restores archived wallets as archived (their history is inserted below, bypassing the
+        // A backup (or a CSV wallet row) restores archived wallets as archived (their history is inserted below, bypassing the
         // "no new transactions on archived wallets" rule on purpose: it is a restore, not new activity).
-        archivedAt: w.archived ? now : null,
+        // The original archived date when the file has one (backup `archivedAt`, CSV `archived`), else the import's.
+        archivedAt: w.archived ? (w.archivedAt ? new Date(w.archivedAt) : now) : null,
         createdAt: now,
       })
       .returning({ id: wallets.id });
@@ -614,9 +813,25 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
     const c = parsed.categories[i];
     const [created] = await tx
       .insert(categories)
-      .values({ userId, name: c.name, kind: c.kind, createdAt: now })
+      // An archived category (backup flag, CSV category row) is restored archived, with its history (a restore, as for
+      // wallets), on the file's date when it has one, else as of the import.
+      .values({
+        userId,
+        name: c.name,
+        kind: c.kind,
+        archivedAt: c.archived ? (c.archivedAt ? new Date(c.archivedAt) : now) : null,
+        createdAt: now,
+      })
       .returning({ id: categories.id });
     categoryIds[i] = created.id;
+  }
+
+  for (const chunk of chunks(plan.manualRatesToAdd)) {
+    await tx
+      .insert(manualRates)
+      .values(chunk.map((r) => ({ userId, currency: r.currency, base: r.base, effectiveDate: r.effectiveDate, rate: r.rate, createdAt: now })))
+      // Planned against this transaction's snapshot; a rate set meanwhile for the same date is kept.
+      .onConflictDoNothing({ target: [manualRates.userId, manualRates.currency, manualRates.effectiveDate] });
   }
 
   for (const chunk of chunks(plan.entriesToAdd)) {

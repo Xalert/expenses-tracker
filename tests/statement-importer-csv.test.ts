@@ -10,6 +10,7 @@ import { contextSchema } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
 import { buildContext } from "@/server/export";
 import { previewImport, runImport } from "@/server/import";
+import { archiveCategory } from "@/server/categories";
 import { archiveWallet, createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
@@ -37,6 +38,7 @@ type TrackerExport = {
   wallets: Wallet[];
   categories: { name: string; kind: string }[];
   archivedSkipped: number;
+  archivedCategoriesSkipped: number;
   unreadable: number;
   exportedAt: string | null;
 };
@@ -243,6 +245,19 @@ describe("statement importer reads the tracker's wallets & categories", () => {
     expect(r.wallets).toEqual([{ name: "Main", currency: "EUR" }]);
     expect(r.archivedSkipped).toBe(1);
     expect(r.categories.length).toBeGreaterThan(5);
+  });
+
+  it("leaves out the categories the app's context file flags as archived, and counts them", async () => {
+    const db = await useFreshDb();
+    const user = await makeUser(db, "ctx-cat@example.com");
+    await archiveCategory(user.id, user.cat("Bills"));
+    const r = read(JSON.stringify(await buildContext(user.id)));
+    expect(r.categories.some((c) => c.name === "Bills")).toBe(false);
+    expect(r.categories).toContainEqual({ name: "Food", kind: "expense" });
+    expect(r.archivedCategoriesSkipped).toBe(1);
+    expect(r.unreadable).toBe(0);
+    // An older context file without the flag: every category is offered, as before.
+    expect(read(fixture("tracker-context.json")).archivedCategoriesSkipped).toBe(0);
   });
 
   it("refuses junk with a clear error", () => {

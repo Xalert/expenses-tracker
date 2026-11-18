@@ -20,14 +20,63 @@ PostgreSQL database; there is nothing to clone or build.
 
 [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) covers running it for real: settings (database password, port,
 closing registration), HTTPS behind a reverse proxy, backup and restore, upgrading, building from source and
-running without Docker. Take a backup before upgrading. **Instances from before the move to PostgreSQL cannot be
-upgraded in place**; carry each account across with its JSON backup
+running without Docker. Take a backup before upgrading (`docker compose run --rm backup`). **Instances from before
+the move to PostgreSQL cannot be upgraded in place**; carry each account across with its JSON backup
 ([how](docs/SELF-HOSTING.md#moving-from-sqlite-older-versions)).
+
+## Development
+
+From a clone, with Node 20.9+ and Docker. `make` lists every shortcut; details in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+Run the app on demo data at http://localhost:3000 (sign in as `demo` / `demo-password`):
+
+```bash
+make dev
+```
+
+Typecheck, lint and run the whole test suite:
+
+```bash
+make check
+```
+
+One test file, optionally only the tests whose name matches:
+
+```bash
+make test FILE=tests/users.test.ts NAME=changePassword
+```
+
+Run the browser tests (Playwright, against a production build and a throwaway database):
+
+```bash
+make test-e2e
+```
+
+Re-run the tests on every save:
+
+```bash
+make watch
+```
+
+Put the demo data back to its fresh state:
+
+```bash
+make demo-reset
+```
+
+Stop the development database (the data stays):
+
+```bash
+make down
+```
 
 ## More
 
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts, code
-  layout.
+- [`docs/IMPORTING.md`](docs/IMPORTING.md): importing and exporting your data — backups, the CSV, Spendee.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): running from source with demo data, debugging, npm scripts,
+  releasing, code layout.
+- [`CHANGELOG.md`](CHANGELOG.md): what changed in each release.
 - [`docs/SPEC.md`](docs/SPEC.md): how everything works, including the
   [import and export formats](docs/SPEC.md#import--export); [`docs/DECISIONS.md`](docs/DECISIONS.md) has the
   reasons and the known gaps.

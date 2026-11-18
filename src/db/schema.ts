@@ -4,7 +4,9 @@ import {
   check,
   index,
   integer,
+  numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -19,17 +21,35 @@ export type CategoryKind = (typeof CATEGORY_KINDS)[number];
 export const TRANSACTION_KINDS = ["expense", "income", "transfer_out", "transfer_in"] as const;
 export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 
-export const users = pgTable("users", {
-  id: id(),
-  /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
-  username: text("username").notNull().unique(),
-  /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
-  email: text("email").unique(),
-  firstName: text("first_name"),
-  lastName: text("last_name"),
-  passwordHash: text("password_hash").notNull(),
-  createdAt: createdAt(),
-});
+/** Names of the unique indexes on `users` (src/server/users.ts maps a lost registration race by them). */
+export const USERNAME_UNIQUE_INDEX = "users_username_lower_uq";
+export const EMAIL_UNIQUE_INDEX = "users_email_lower_uq";
+
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    /** The "user ID" people sign in with: lowercased, 3–32 of a–z 0–9 . _ - (see src/lib/user-id.ts). */
+    username: text("username").notNull(),
+    /** Optional; lowercased. NULL (never '') when absent, so several accounts without email don't collide. */
+    email: text("email"),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    passwordHash: text("password_hash").notNull(),
+    /**
+     * The account's IANA time zone (canonical spelling, e.g. "Europe/Bucharest"), or NULL when not set. Checked by
+     * src/lib/time-zone.ts; used by the Spendee import to date UTC timestamps.
+     */
+    timeZone: text("time_zone"),
+    createdAt: createdAt(),
+  },
+  // Unique on lower(...): sign-in and the duplicate checks compare `lower(username)` / `lower(email)`, so these
+  // indexes serve those lookups and make case-only duplicates impossible in the database too.
+  (t) => [
+    uniqueIndex(USERNAME_UNIQUE_INDEX).on(sql`lower(${t.username})`),
+    uniqueIndex(EMAIL_UNIQUE_INDEX).on(sql`lower(${t.email})`),
+  ],
+);
 
 export const sessions = pgTable(
   "sessions",
@@ -41,6 +61,10 @@ export const sessions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
     createdAt: createdAt(),
+    /** The browser's `User-Agent` at sign-in, truncated to 256 characters; null when none was sent. */
+    userAgent: text("user_agent"),
+    /** Last request made with this session; written at most once per `SESSION_TOUCH_INTERVAL_MS` (src/server/users.ts). */
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
@@ -53,6 +77,11 @@ export const walletGroups = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /** Display order within the user's groups (ascending, then id); new groups go last. */
+    position: integer("position").notNull().default(0),
+    /** One of `GROUP_COLORS` (src/lib/group-colors.ts) or null for none; checked by the service. */
+    color: text("color"),
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: createdAt(),
   },
   (t) => [index("wallet_groups_user_idx").on(t.userId)],
@@ -90,6 +119,8 @@ export const categories = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     kind: text("kind", { enum: CATEGORY_KINDS }).notNull(),
+    /** Set while archived: hidden from the entry form's pickers, still in reports, history and exports. */
+    archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -147,9 +178,71 @@ export const transactions = pgTable(
   ],
 );
 
+// Exchange rates (src/server/exchange-rates.ts, src/server/manual-rates.ts). Rates are exact decimals (`numeric`, read
+// back as strings): what the provider published or the user typed, never a binary float. They are only ever used to
+// show a converted figure; no converted amount is stored.
+
+/**
+ * The provider's daily reference rates (Frankfurter / ECB), shared by every user: `rate` units of `quote` for one
+ * `base` on the publication day `rate_date` (`YYYY-MM-DD`). Weekends and holidays have no rows.
+ */
+export const exchangeRates = pgTable(
+  "exchange_rates",
+  {
+    base: text("base").notNull(),
+    quote: text("quote").notNull(),
+    rateDate: text("rate_date").notNull(),
+    rate: numeric("rate").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.base, t.quote, t.rateDate] }),
+    check("exchange_rates_rate_positive", sql`${t.rate} > 0`),
+  ],
+);
+
+/**
+ * Every calendar day the provider has been asked about, and when: tells a day with no rates (weekend, holiday) from
+ * one not fetched yet, so a stored range is never fetched again (see `isFinal` in src/server/exchange-rates.ts).
+ */
+export const exchangeRateDays = pgTable(
+  "exchange_rate_days",
+  {
+    base: text("base").notNull(),
+    date: text("date").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.base, t.date] })],
+);
+
+/**
+ * A user's own rate for a currency the provider does not quote: 1 `currency` = `rate` `base` from `effective_date`
+ * on (the latest one on or before a date applies). One per currency and date.
+ */
+export const manualRates = pgTable(
+  "manual_exchange_rates",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    base: text("base").notNull(),
+    effectiveDate: text("effective_date").notNull(),
+    rate: numeric("rate").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("manual_exchange_rates_user_currency_date_uq").on(t.userId, t.currency, t.effectiveDate),
+    check("manual_exchange_rates_rate_positive", sql`${t.rate} > 0`),
+    check("manual_exchange_rates_currencies", sql`length(${t.currency}) = 3 and length(${t.base}) = 3 and ${t.currency} <> ${t.base}`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type WalletGroup = typeof walletGroups.$inferSelect;
 export type Wallet = typeof wallets.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type Transfer = typeof transfers.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type ManualRateRow = typeof manualRates.$inferSelect;

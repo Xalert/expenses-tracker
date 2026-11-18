@@ -50,9 +50,16 @@ class RedirectSignal extends Error {
 }
 
 const { selectGroupAction } = await import("@/app/(app)/actions");
-const { createGroupAction, renameGroupAction, deleteGroupAction, createWalletAction, updateWalletAction } = await import(
-  "@/app/(app)/wallets/actions"
-);
+const {
+  createGroupAction,
+  renameGroupAction,
+  deleteGroupAction,
+  createWalletAction,
+  updateWalletAction,
+  moveGroupAction,
+  archiveGroupAction,
+  unarchiveGroupAction,
+} = await import("@/app/(app)/wallets/actions");
 const { getGroupScope, GROUP_COOKIE } = await import("@/lib/group-scope");
 
 function fd(entries: [string, string][]): FormData {
@@ -152,7 +159,7 @@ describe("selectGroupAction and getGroupScope", () => {
     jar.values.set(GROUP_COOKIE, "4242");
     // React `cache` is per request; outside one it does not memoise, so this reads the cookie again.
     expect((await getGroupScope()).selected).toBeNull();
-    expect((await getGroupScope()).groups.map((g) => g.name)).toEqual(["Business", "Personal"]);
+    expect((await getGroupScope()).groups.map((g) => g.name)).toEqual(["Personal", "Business"]);
   });
 });
 
@@ -258,5 +265,50 @@ describe("exportCsvHref with a group", () => {
     expect(exportCsvHref(parseListParams({ month: "all", q: "rent" }), "2026-11", 7)).toBe(
       "/api/export/transactions?q=rent&group=7",
     );
+  });
+});
+
+describe("order, colour and archive actions", () => {
+  it("selectGroupAction refuses an archived group (All); getGroupScope falls back to All for a cookie naming one", async () => {
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
+    jar.values.set(GROUP_COOKIE, String(business));
+    expect((await getGroupScope()).selected?.id).toBe(business);
+    expect((await archiveGroupAction(business)).ok).toBe(true);
+    const scope = await getGroupScope();
+    expect(scope.selected).toBeNull();
+    expect(scope.groups.map((g) => g.name)).toEqual(["Personal"]);
+    expect(scope.archivedGroups.map((g) => g.name)).toEqual(["Business"]);
+    expect(await redirectOf(selectGroupAction(fd([["groupId", String(business)], ["returnTo", "/wallets"]])))).toBe("/wallets");
+    expect(jar.values.has(GROUP_COOKIE)).toBe(false);
+  });
+
+  it("create and rename carry the colour; a form without the field keeps it", async () => {
+    await createGroupAction({}, fd([["name", "Business"], ["color", "green"]]));
+    const business = (await listWalletGroups(user.id)).find((g) => g.name === "Business")!;
+    expect(business.color).toBe("green");
+    await renameGroupAction(business.id, {}, fd([["name", "Work"]]));
+    expect((await listWalletGroups(user.id)).find((g) => g.id === business.id)!.color).toBe("green");
+    await renameGroupAction(business.id, {}, fd([["name", "Work"], ["color", ""]]));
+    expect((await listWalletGroups(user.id)).find((g) => g.id === business.id)!.color).toBeNull();
+    const bad = await createGroupAction({}, fd([["name", "X"], ["color", "pink"]]));
+    expect(bad.fieldErrors?.color).toMatch(/colour/);
+  });
+
+  it("moveGroupAction moves, revalidates and goes back to /wallets; junk changes nothing", async () => {
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
+    expect(await redirectOf(moveGroupAction(business, "up"))).toBe("/wallets");
+    expect((await listWalletGroups(user.id)).map((g) => g.name)).toEqual(["Business", "Personal"]);
+    expect(jar.revalidated).toContainEqual(["/", "layout"]);
+    expect(await redirectOf(moveGroupAction(business, "sideways"))).toBe("/wallets");
+    expect(await redirectOf(moveGroupAction(9999, "down"))).toBe("/wallets");
+    expect((await listWalletGroups(user.id)).map((g) => g.name)).toEqual(["Business", "Personal"]);
+  });
+
+  it("archive / unarchive actions: the last unarchived group is refused with a message", async () => {
+    expect((await archiveGroupAction(personal)).fieldErrors?.groupId).toMatch(/at least one group that is not archived/);
+    const business = (await createWalletGroup(user.id, { name: "Business" })).id;
+    expect(await archiveGroupAction(business)).toEqual({ ok: true, message: "Archived the group “Business”." });
+    expect(await unarchiveGroupAction(business)).toEqual({ ok: true, message: "Unarchived the group “Business”." });
+    expect((await unarchiveGroupAction(0)).message).toMatch(/not found/i);
   });
 });

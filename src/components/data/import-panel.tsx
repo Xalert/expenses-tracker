@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState, useTransition, type DragEvent } from "react";
 import { previewImportAction, runImportAction, type ImportActionState } from "@/app/(app)/data/actions";
 import { Button, Card, FormError } from "@/components/ui";
-import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
+import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS, IMPORT_TOO_LARGE_MESSAGE } from "@/lib/constants";
+import type { ImportPreview } from "@/server/import";
 import { cn } from "@/lib/cn";
 import {
   ImportSuccess,
   PreviewCard,
+  PreviewDifferences,
   UnpairedOption,
   fileSize,
   hasSomethingToImport,
@@ -17,7 +19,13 @@ import {
 
 const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 
-/** The browser's IANA time zone; Spendee timestamps are dated in it (the server validates it, UTC otherwise). */
+/** The user guide to importing (formats, Spendee, time zones, limits); the app does not serve its docs itself. */
+export const IMPORTING_GUIDE_URL = "https://github.com/xalert/expenses-tracker/blob/main/docs/IMPORTING.md";
+
+/**
+ * The browser's IANA time zone. Spendee timestamps are dated in the account's time zone when it has one, else in
+ * this one (the server validates it, UTC otherwise).
+ */
 function browserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
@@ -45,6 +53,8 @@ export function ImportPanel({
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [unpairedAsEntries, setUnpairedAsEntries] = useState(false);
   const [state, setState] = useState<ImportActionState | null>(null);
+  /** The preview the user confirmed, to say so when the confirmation's numbers differ from it. */
+  const [previewed, setPreviewed] = useState<ImportPreview | null>(null);
   const [step, setStep] = useState<"preview" | "import" | null>(null);
   const [dragging, setDragging] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -92,6 +102,7 @@ export function ImportPanel({
     fd.set("unpairedTransfers", unpaired ? "on" : "off");
     fd.set("timeZone", browserTimeZone());
     setStep(kind);
+    setPreviewed(kind === "import" ? (state?.preview ?? null) : null);
     startTransition(async () => {
       try {
         const next = await (kind === "preview" ? previewImportAction(fd) : runImportAction(fd));
@@ -101,9 +112,14 @@ export function ImportPanel({
           setUnpairedAsEntries(false);
           if (inputRef.current) inputRef.current.value = "";
         }
-      } catch {
+      } catch (err) {
+        // src/proxy.ts refuses an oversized upload with this exact message (a text/plain 413 the client turns into
+        // an Error); anything else is a connection or proxy problem.
         setState({
-          error: "The upload failed. Check your connection (and any proxy upload limit) and try again.",
+          error:
+            err instanceof Error && err.message === IMPORT_TOO_LARGE_MESSAGE
+              ? IMPORT_TOO_LARGE_MESSAGE
+              : "The upload failed. Check your connection (and any proxy upload limit) and try again.",
         });
       }
     });
@@ -177,7 +193,7 @@ export function ImportPanel({
             name="file"
             type="file"
             multiple
-            accept=".json,.csv,.tsv,.txt,application/json,text/csv,text/tab-separated-values,text/plain"
+            accept=".json,.csv,.tsv,.txt,.zip,application/json,text/csv,text/tab-separated-values,text/plain,application/zip"
             aria-labelledby="import-file-label"
             aria-describedby="import-file-hint"
             aria-invalid={tooBig || tooMany || undefined}
@@ -190,7 +206,7 @@ export function ImportPanel({
             <span className="text-accent-hover underline-offset-2 hover:underline">choose files</span>
           </span>
           <span id="import-file-hint" className="text-xs text-muted-foreground">
-            A backup JSON, transactions CSVs, or all of Spendee&rsquo;s per-wallet CSVs at once
+            A backup JSON, transactions CSVs, or all of Spendee&rsquo;s per-wallet CSVs at once (or a .zip of them)
           </span>
         </label>
 
@@ -237,9 +253,21 @@ export function ImportPanel({
             </p>
             <p>
               Leaving Spendee? Select <strong className="font-semibold text-foreground">all</strong> of its per-wallet
-              CSV files together: a transfer&rsquo;s two sides are in different wallets&rsquo; files and are paired into
-              one transfer. Dates are taken in your time zone, labels are added to the note, amounts are rounded to the
-              currency&rsquo;s decimals, and missing wallets (starting at a balance of 0) and categories are created.
+              CSV files together, or one .zip of them: a transfer&rsquo;s two sides are in different wallets&rsquo;
+              files and are paired into one transfer. Dates are taken as written in the files, labels are added to the
+              note, amounts are rounded to the currency&rsquo;s decimals, and missing wallets (starting at a balance of
+              0) and categories are created.
+            </p>
+            <p>
+              <a
+                href={IMPORTING_GUIDE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-accent-hover underline underline-offset-2"
+              >
+                The importing guide
+              </a>{" "}
+              explains every format and rule in detail.
             </p>
           </div>
         </details>
@@ -289,11 +317,12 @@ export function ImportPanel({
             className="rounded-2xl outline-none not-empty:mt-4 focus-visible:outline-2 focus-visible:outline-ring"
           >
             {state?.error && <FormError message={state.error} />}
-            {imported && state?.result && <ImportSuccess result={state.result} />}
+            {imported && state?.result && <ImportSuccess result={state.result} previewed={previewed} />}
             {!imported && preview && (
               <PreviewCard
                 preview={preview}
                 groupCount={groupCount}
+                note={state?.result ? <PreviewDifferences previewed={previewed} result={state.result} /> : undefined}
                 option={unpairedOption}
                 actions={
                   preview.ok ? (

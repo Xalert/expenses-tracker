@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: expenses
       POSTGRES_DB: expenses
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"   # host 5433, so another project's Postgres can keep 5432
     volumes:
       - expenses-dev-pg:/var/lib/postgresql/data
       - ./scripts/dev-db-init.sql:/docker-entrypoint-initdb.d/10-demo-db.sql:ro

@@ -35,12 +35,66 @@ services:
       # Session cookie `Secure` flag: auto = only when the request came in over HTTPS (X-Forwarded-Proto: https).
       # Use true only if every request reaches the app through HTTPS; false never marks it secure.
       COOKIE_SECURE: auto
+      # Which X-Forwarded-For hop is the client, for the per-address sign-in limit: false = no proxy trusted (that
+      # limit is off; the per-account one always applies), 1 = one proxy in front (nginx, Caddy, Traefik), N = N proxies.
+      TRUST_PROXY: "false"
       # Set to "false" once your accounts exist to close sign-ups.
       ALLOW_REGISTRATION: "true"
       # "false" stops the requests to api.frankfurter.dev for the converted "All in" view on Overview.
       EXCHANGE_RATES: "true"
       # Port the server listens on inside the container (keep the right side of `ports:` in sync).
       PORT: 3000
+
+  # Profile `backup`, so a plain `up` never starts it. `docker compose run --rm backup` writes
+  # ./backups/expenses-<UTC date-time>.dump (pg_dump custom format; restore: docs/SELF-HOSTING.md#restore) and keeps
+  # the newest BACKUP_KEEP of those files (default 10, 0 keeps all). Run it before every upgrade.
+  # Scheduled: set BACKUP_INTERVAL_HOURS (e.g. 24) and run `docker compose --profile backup up -d backup`; it then
+  # dumps, prunes and sleeps in a loop until stopped. The dumps are on the same disk: copy ./backups elsewhere too.
+  backup:
+    # Same image as `db`: pg_dump has to be at least the server's major version.
+    image: postgres:17-alpine
+    profiles: ["backup"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: expenses
+      PGDATABASE: expenses
+      PGPASSWORD: ${POSTGRES_PASSWORD:-expenses}
+      BACKUP_KEEP: ${BACKUP_KEEP:-10}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        case "$$BACKUP_KEEP" in ""|*[!0-9]*) echo "BACKUP_KEEP must be a whole number, got '$$BACKUP_KEEP'" >&2; exit 1;; esac
+        case "$$BACKUP_INTERVAL_HOURS" in ""|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) echo "BACKUP_INTERVAL_HOURS must be a whole number of hours from 1 to 999 (or unset), got '$$BACKUP_INTERVAL_HOURS'" >&2; exit 1;; esac
+        umask 077
+        backup() {
+          name="expenses-$$(date -u +%Y%m%d-%H%M%S).dump"
+          pg_dump -Fc -f "/backups/$$name.partial" || { rm -f "/backups/$$name.partial"; return 1; }
+          mv "/backups/$$name.partial" "/backups/$$name" || return 1
+          echo "Backup written: backups/$$name ($$(du -h "/backups/$$name" | cut -f1))"
+          if [ "$$BACKUP_KEEP" -gt 0 ]; then
+            ls -1 /backups/expenses-*.dump | sort -r | tail -n +$$((BACKUP_KEEP + 1)) | while read -r old; do
+              rm -f -- "$$old" && echo "Removed old backup: backups/$${old#/backups/}"
+            done
+          fi
+        }
+        if [ -z "$$BACKUP_INTERVAL_HOURS" ]; then
+          backup
+          exit 0
+        fi
+        trap 'exit 0' TERM INT
+        echo "Backing up every $$BACKUP_INTERVAL_HOURS h (BACKUP_INTERVAL_HOURS); stop with: docker compose --profile backup stop backup"
+        while true; do
+          backup || echo "Backup failed; trying again in $$BACKUP_INTERVAL_HOURS h." >&2
+          sleep $$((BACKUP_INTERVAL_HOURS * 3600)) &
+          wait $$!
+        done
 
 volumes:
   pg-data:

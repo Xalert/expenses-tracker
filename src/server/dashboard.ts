@@ -1,10 +1,12 @@
 import "server-only";
-import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { categories, transactions, wallets } from "@/db/schema";
-import { currentMonth, isValidMonth, monthRange } from "@/lib/dates";
+import { compareCategoryNames } from "@/lib/category-order";
+import { currentMonth,isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { listTransactions, type TransactionView } from "./transactions";
+import { walletInOpenGroupSql } from "./wallet-groups";
 import { listWallets, type WalletView } from "./wallets";
 
 export type CurrencyTotals = { currency: string; balanceMinor: number; incomeMinor: number; expenseMinor: number };
@@ -46,6 +48,7 @@ export async function getDashboard(
     eq(transactions.userId, userId),
     eq(wallets.userId, userId),
     isNull(wallets.archivedAt),
+    walletInOpenGroupSql, // a wallet in an archived group counts as archived
     opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId),
     gte(transactions.date, from),
     lte(transactions.date, to),
@@ -68,7 +71,9 @@ export async function getDashboard(
     else t.expenseMinor += f.amountMinor;
   }
 
-  const expenseByCategory = await db
+  // Largest first; ties by the category order's name rule (not the database collation), then id.
+  const expenseByCategory = (
+    await db
     .select({
       currency: wallets.currency,
       categoryId: categories.id,
@@ -80,7 +85,10 @@ export async function getDashboard(
     .innerJoin(categories, eq(categories.id, transactions.categoryId))
     .where(and(inMonthOnActive, eq(transactions.kind, "expense")))
     .groupBy(wallets.currency, categories.id)
-    .orderBy(desc(sql`sum(${transactions.amountMinor})`), categories.name);
+  ).sort(
+    (a, b) =>
+      b.amountMinor - a.amountMinor || compareCategoryNames(a.categoryName, b.categoryName) || a.categoryId - b.categoryId,
+  );
 
   return {
     month,

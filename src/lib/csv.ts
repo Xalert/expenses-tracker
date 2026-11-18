@@ -19,7 +19,10 @@ export type CsvParseResult = {
   delimiter: CsvDelimiter;
   /** Records in file order, header included. Completely empty lines are skipped. */
   records: CsvRecord[];
-  /** Malformed quoting. When non-empty, `records` stops at the first broken record. */
+  /**
+   * Malformed quoting, one error per broken record. A broken record is left out of `records`, and reading resumes
+   * on the next physical line (after the line the broken quote is on), so every problem of a file is reported at once.
+   */
   errors: CsvParseError[];
 };
 
@@ -73,6 +76,7 @@ export function parseCsv(
     const cells: string[] = [];
     let cell = "";
     let endOfRecord = false;
+    let broken = false;
 
     while (!endOfRecord) {
       if (i >= n) {
@@ -82,6 +86,7 @@ export function parseCsv(
       const ch = text[i];
       if (ch === '"' && cell === "") {
         // Quoted cell: runs to the next lone quote; `""` is an escaped quote.
+        const quoteStart = i;
         i++;
         const quoteLine = line;
         let closed = false;
@@ -110,13 +115,20 @@ export function parseCsv(
         }
         if (!closed) {
           errors.push({ line: quoteLine, message: "A quoted cell is never closed (missing closing quote)." });
-          return { delimiter, records, errors };
+          // Resync: drop this record and carry on with the line after the one the quote opened on.
+          i = nextLineStart(text, quoteStart);
+          line = quoteLine + 1;
+          broken = true;
+          break;
         }
         // After the closing quote only a delimiter, a line break or the end of the file may follow.
         const next = text[i];
         if (i < n && next !== delimiter && next !== "\n" && next !== "\r") {
           errors.push({ line, message: "Unexpected text after a closing quote. Quotes inside a cell must be doubled (\"\")." });
-          return { delimiter, records, errors };
+          i = nextLineStart(text, i);
+          line++;
+          broken = true;
+          break;
         }
         continue;
       }
@@ -138,12 +150,23 @@ export function parseCsv(
       i++;
     }
 
+    if (broken) continue;
     if (cells.length === 1 && cells[0] === "") continue; // blank line
     records.push({ line: startLine, cells });
     if (records.length > maxRecords) break;
   }
 
   return { delimiter, records, errors };
+}
+
+/** Index just after the first line break (CRLF, LF or CR) at or after `from`; the end of the text when there is none. */
+function nextLineStart(text: string, from: number): number {
+  for (let k = from; k < text.length; k++) {
+    const c = text[k];
+    if (c === "\n") return k + 1;
+    if (c === "\r") return text[k + 1] === "\n" ? k + 2 : k + 1;
+  }
+  return text.length;
 }
 
 function quoteCell(value: string, delimiter: string): string {

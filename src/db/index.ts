@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -13,7 +14,7 @@ export type DB = PgDatabase<PgQueryResultHKT, typeof schema>;
 export type DBOrTx = DB | Parameters<Parameters<DB["transaction"]>[0]>[0];
 
 /** What `npm run dev` connects to when DATABASE_URL is unset outside production (the owner's real dev data). */
-export const DEFAULT_DEV_DATABASE_URL = "postgres://expenses:expenses@localhost:5432/expenses";
+export const DEFAULT_DEV_DATABASE_URL = "postgres://expenses:expenses@localhost:5433/expenses";
 
 /** Migrations folder: `MIGRATIONS_DIR` or `<cwd>/drizzle` (also correct for the standalone server). */
 export function resolveMigrationsDir(): string {
@@ -44,6 +45,47 @@ export function describeDatabase(url = process.env.DATABASE_URL || DEFAULT_DEV_D
   }
 }
 
+/** Which migrations in `migrationsFolder` the database has not applied yet, and whether it already holds any. */
+export type MigrationStatus = { existing: boolean; pending: string[] };
+
+/**
+ * Compare the migrations folder's journal with drizzle's own table, the way drizzle's migrator does: a migration
+ * is pending when its journal timestamp is newer than the last one recorded. Read-only (no table is created).
+ */
+export async function migrationStatus(db: DBOrTx, migrationsFolder = resolveMigrationsDir()): Promise<MigrationStatus> {
+  const journal = JSON.parse(readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")) as {
+    entries: { tag: string; when: number }[];
+  };
+  const result = (await db.execute(
+    sql`select to_regclass('drizzle.__drizzle_migrations') is not null as present`,
+  )) as unknown as { rows: { present: boolean }[] };
+  let last: number | null = null;
+  if (result.rows[0]?.present) {
+    const max = (await db.execute(
+      sql`select max(created_at) as last from drizzle.__drizzle_migrations`,
+    )) as unknown as { rows: { last: string | number | null }[] };
+    last = max.rows[0]?.last == null ? null : Number(max.rows[0].last);
+  }
+  return {
+    existing: last !== null,
+    pending: journal.entries.filter((e) => last === null || e.when > last).map((e) => e.tag),
+  };
+}
+
+/** The line logged before migrating, or null when nothing is pending. An existing database gets a warning. */
+export function migrationNotice(status: MigrationStatus): { warn: boolean; text: string } | null {
+  if (status.pending.length === 0) return null;
+  const list = status.pending.join(", ");
+  if (!status.existing) {
+    return { warn: false, text: `[db] Empty database: applying ${status.pending.length} migration(s): ${list}` };
+  }
+  const text =
+    `[db] WARNING: applying ${status.pending.length} pending migration(s) to the existing database: ${list}. ` +
+    "They run in one transaction and only move forward; the way back is a backup taken before this start " +
+    "(docs/SELF-HOSTING.md#backup).";
+  return { warn: true, text };
+}
+
 /** Open a pooled connection and apply pending migrations (one transaction; rolled back as a whole on error). */
 export async function createDatabase(url?: string): Promise<DB> {
   const pool = new Pool({ connectionString: resolveDatabaseUrl(url), max: 10 });
@@ -51,7 +93,10 @@ export async function createDatabase(url?: string): Promise<DB> {
   pool.on("error", (err) => console.error("[db] idle client error:", err.message));
   const db = drizzlePg({ client: pool, schema });
   try {
-    await migrate(db, { migrationsFolder: resolveMigrationsDir() });
+    const migrationsFolder = resolveMigrationsDir();
+    const notice = migrationNotice(await migrationStatus(db, migrationsFolder));
+    if (notice) (notice.warn ? console.warn : console.log)(notice.text);
+    await migrate(db, { migrationsFolder });
   } catch (err) {
     await pool.end().catch(() => {});
     const e = err as Error;

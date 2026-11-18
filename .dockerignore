@@ -23,6 +23,11 @@ npm-debug.log*
 # not needed to build the app
 docs
 tests
+e2e
+playwright.config.ts
+compose.e2e.yaml
+playwright-report
+test-results
 *.md
 Dockerfile
 .dockerignore
@@ -30,3 +35,6 @@ docker-compose*.yml
 compose*.yml
 .github
 deploy
+
+# database dumps written by the Compose `backup` service
+backups
