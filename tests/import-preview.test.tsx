@@ -19,6 +19,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     walletsToCreate: [],
     groupsToCreate: [],
     categoriesToCreate: [],
+    manualRatesToAdd: 0,
     problems: [],
     problemCount: 0,
     notices: [],
@@ -96,6 +97,31 @@ describe("PreviewCard", () => {
     expect(text(html)).toContain("The CSV has no wallet rows for 1 new wallet, so it starts at a balance of 0 and active.");
   });
 
+  it("says which new categories will be archived, and how many exchange rates a backup adds", () => {
+    const html = renderToStaticMarkup(
+      <PreviewCard
+        preview={preview({
+          format: "backup",
+          categoriesToCreate: [
+            { name: "Old rent", kind: "expense", archived: true },
+            { name: "Gifts", kind: "income" },
+            { name: "Transfer", kind: "expense" },
+            { name: "Transfer", kind: "income", archived: true },
+          ],
+          manualRatesToAdd: 3,
+        })}
+      />,
+    );
+    expect(text(html)).toContain("New categories: Old rent (archived) , Gifts , Transfer (expense) , Transfer (income, archived)");
+    expect(text(html)).toContain("Your own exchange rates: 3 to add to the Rates page.");
+    // Only rates to add is still something to import.
+    const onlyRates = renderToStaticMarkup(
+      <PreviewCard preview={preview({ transactionsToAdd: 0, transfersToAdd: 0, manualRatesToAdd: 1 })} actions={<button>Import</button>} />,
+    );
+    expect(text(onlyRates)).not.toContain("Nothing to import");
+    expect(onlyRates).toContain("<button>Import</button>");
+  });
+
   it("says when there is nothing to import and drops the save sentence", () => {
     const html = renderToStaticMarkup(
       <PreviewCard
@@ -138,6 +164,9 @@ describe("ImportSuccess", () => {
     );
     expect(html).toContain('href="/"');
     expect(html).toContain('href="/transactions"');
+    expect(text(renderToStaticMarkup(<ImportSuccess result={preview({ manualRatesToAdd: 2 })} />))).toContain(
+      "Added 2 exchange rates.",
+    );
   });
 });
 

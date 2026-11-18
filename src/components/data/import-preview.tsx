@@ -14,14 +14,23 @@ export const fileSize = (bytes: number) =>
       ? `${Math.ceil(bytes / 1024)} KB`
       : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+/** " (income)", " (archived)", " (expense, archived)" or "" after a new category's name. */
+function categoryNote(kind: string | null, archived: boolean): string {
+  const parts = [kind, archived ? "archived" : null].filter(Boolean);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 /** Entries the confirm button imports: transactions + transfers. */
 export function entriesToImport(p: ImportPreview): number {
   return p.transactionsToAdd + p.transfersToAdd;
 }
 
-/** Whether confirming would change anything (entries, or only new wallets / categories). */
+/** Whether confirming would change anything (entries, or only new wallets / categories / exchange rates). */
 export function hasSomethingToImport(p: ImportPreview): boolean {
-  return entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length > 0;
+  return (
+    entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length + p.manualRatesToAdd >
+    0
+  );
 }
 
 export function importLabel(p: ImportPreview): string {
@@ -48,6 +57,7 @@ export function previewDifferences(previewed: ImportPreview, result: ImportPrevi
     [result.walletsToCreate.length, previewed.walletsToCreate.length, "new wallet", "new wallets"],
     [result.groupsToCreate.length, previewed.groupsToCreate.length, "new group", "new groups"],
     [result.categoriesToCreate.length, previewed.categoriesToCreate.length, "new category", "new categories"],
+    [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
   ];
   return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
 }
@@ -149,9 +159,16 @@ export function PreviewCard({
                 {i > 0 && ", "}
                 <strong className="font-semibold text-foreground">{c.name}</strong>
                 {/* The kind only when the same name is created as both (e.g. Spendee's unpaired "Transfer"). */}
-                {(categoryKinds.get(c.name.toLowerCase())?.size ?? 0) > 1 && ` (${c.kind})`}
+                {categoryNote((categoryKinds.get(c.name.toLowerCase())?.size ?? 0) > 1 ? c.kind : null, c.archived === true)}
               </span>
             ))}
+          </p>
+        )}
+        {p.manualRatesToAdd > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            Your own exchange rates:{" "}
+            <strong className="font-semibold text-foreground">{p.manualRatesToAdd.toLocaleString("en-US")}</strong> to add
+            to the Rates page.
           </p>
         )}
         {option}
@@ -368,6 +385,7 @@ export function ImportSuccess({ result: r, previewed }: { result: ImportPreview;
           {r.groupsToCreate.length > 0 && ` Created ${plural(r.groupsToCreate.length, "group", "groups")}.`}
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
+          {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}
         </p>
       </div>

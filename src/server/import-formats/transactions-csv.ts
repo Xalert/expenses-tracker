@@ -29,9 +29,11 @@ export const transactionsCsvFormat: ImportFormat = {
 };
 
 const REQUIRED_COLUMNS = ["date", "type", "wallet", "currency", "amount"] as const;
-const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount", "group", "archived"] as const;
+const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount", "group", "archived", "kind"] as const;
 /** Cells a `wallet` row must leave empty (it describes a wallet, not money moving). */
 const NOT_ON_WALLET_ROWS = ["category", "note", "to_wallet", "to_currency", "to_amount"] as const;
+/** Cells a `category` row must leave empty (it describes a category). */
+const NOT_ON_CATEGORY_ROWS = ["wallet", "currency", "amount", "note", "to_wallet", "to_currency", "to_amount", "group"] as const;
 type Column = (typeof REQUIRED_COLUMNS)[number] | (typeof OPTIONAL_COLUMNS)[number];
 
 /** `YYYY-MM-DD` or `DD.MM.YYYY` (what European spreadsheets write back) → ISO, else null. */
@@ -74,11 +76,49 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
     }
   };
 
+  /** The `archived` cell of a wallet / category row: a date, or empty (active). Reports a bad date. */
+  const archivedCell = (raw: string, what: string, problem: (c: string, m: string) => void): string | null => {
+    const v = raw.trim();
+    if (!v) return null;
+    const date = parseImportDate(v);
+    if (!date) {
+      problem("archived", `“${v}” is not a valid date. Use YYYY-MM-DD (2026-03-31) or DD.MM.YYYY, or leave it empty for an active ${what}.`);
+    }
+    return date;
+  };
+
   for (const { line, cells } of table.rows) {
     const problemsBefore = out.problems.length;
     const problem = (column: string, message: string) => out.problems.push({ line, message: `${column}: ${message}` });
     const get = cellReader(table.col, cells);
     const textCell = (c: Column) => unescapeFormula(get(c));
+
+    if (get("type").trim().toLowerCase() === "category") {
+      // A category row: the category's kind and archived date. Only used when the import creates the category; the
+      // `date` cell is ignored.
+      const name = check(() => normalizeCategoryName(textCell("category")), (m) => problem("category", m === "Enter a name." ? "Required: the category's name." : m));
+      const rawKind = get("kind").trim().toLowerCase();
+      const kind = rawKind === "expense" || rawKind === "income" ? rawKind : null;
+      if (!kind) {
+        problem("kind", rawKind ? `“${get("kind").trim()}” is not a kind. Use expense or income.` : "Required on a category row: expense or income.");
+      }
+      const archivedOn = archivedCell(get("archived"), "category", problem);
+      const filled = NOT_ON_CATEGORY_ROWS.filter((c) => get(c).trim() !== "");
+      if (filled.length) problem(filled[0], `A category row only describes a category; leave ${filled.join(", ")} empty.`);
+      if (out.problems.length > problemsBefore) continue;
+      const idx = categoryFor(kind!, name!);
+      const c = out.categories[idx];
+      if (c.detailsLoc) {
+        problem("category", `Category “${c.name}” (${c.kind}) is already described on line ${c.detailsLoc.line}.`);
+        continue;
+      }
+      c.archived = archivedOn !== null;
+      if (archivedOn) c.archivedAt = `${archivedOn}T00:00:00.000Z`;
+      c.detailsLoc = { line };
+      continue;
+    }
+    if (get("kind").trim()) problem("kind", "Only category rows (type category) have a kind.");
+
     const rawGroup = textCell("group").trim();
     const group = rawGroup
       ? check(() => normalizeName(rawGroup, "group", MAX_GROUP_NAME_LENGTH), (m) => problem("group", m))
@@ -95,11 +135,7 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
         initial = parseAmount(rawAmount, currency, { allowNegative: true });
         if (initial === null) problem("amount", `“${rawAmount}” is not a valid ${currency} initial balance (${amountHint(currency)}).`);
       }
-      const rawArchived = get("archived").trim();
-      const archivedOn = rawArchived ? parseImportDate(rawArchived) : null;
-      if (rawArchived && !archivedOn) {
-        problem("archived", `“${rawArchived}” is not a valid date. Use YYYY-MM-DD (2026-03-31) or DD.MM.YYYY, or leave it empty for an active wallet.`);
-      }
+      const archivedOn = archivedCell(get("archived"), "wallet", problem);
       const filled = NOT_ON_WALLET_ROWS.filter((c) => get(c).trim() !== "");
       if (filled.length) {
         problem(filled[0], `A wallet row only describes a wallet; leave ${filled.join(", ")} empty.`);
@@ -118,7 +154,9 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       setGroup(idx, group, line);
       continue;
     }
-    if (get("archived").trim()) problem("archived", "Only wallet rows (type wallet) can carry an archived date.");
+    if (get("archived").trim()) {
+      problem("archived", "Only wallet and category rows (type wallet or category) can carry an archived date.");
+    }
 
     const rawDate = get("date").trim();
     const date = parseImportDate(rawDate);
@@ -137,8 +175,8 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       problem(
         "type",
         rawType
-          ? `“${get("type").trim()}” is not a type. Use expense, income, transfer or wallet.`
-          : "Required: expense, income, transfer or wallet.",
+          ? `“${get("type").trim()}” is not a type. Use expense, income, transfer, wallet or category.`
+          : "Required: expense, income, transfer, wallet or category.",
       );
     }
 

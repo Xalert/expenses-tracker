@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, transfers, walletGroups, wallets } from "@/db/schema";
+import { categories, manualRates, transactions, transfers, walletGroups, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
 import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
@@ -10,8 +10,9 @@ import { minorToInputValue } from "@/lib/money";
 import { filterConditions, type TransactionFilters } from "./transactions";
 
 /**
- * Column order of the transactions CSV (export writes exactly these; import requires the first five). `group` and
- * `archived` were added later and are optional on import, so older files still import unchanged.
+ * Column order of the transactions CSV (export writes exactly these; import requires the first five). `group`,
+ * `archived` and `kind` (category rows) were added later and are optional on import, so older files still import
+ * unchanged.
  */
 export const CSV_COLUMNS = [
   "date",
@@ -26,6 +27,7 @@ export const CSV_COLUMNS = [
   "to_amount",
   "group",
   "archived",
+  "kind",
 ] as const;
 
 /** Read-only transactions of the exports see one consistent snapshot. */
@@ -88,6 +90,11 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       .where(and(eq(transactions.userId, userId), isNull(transactions.transferId)))
       .orderBy(asc(transactions.date), asc(transactions.id));
     const transferRows = await listTransferRows(userId, tx);
+    const rateRows = await tx
+      .select({ currency: manualRates.currency, base: manualRates.base, effectiveDate: manualRates.effectiveDate, rate: manualRates.rate })
+      .from(manualRates)
+      .where(eq(manualRates.userId, userId))
+      .orderBy(asc(manualRates.currency), asc(manualRates.effectiveDate));
 
     const walletRef = new Map(walletRows.map((w, i) => [w.id, i + 1]));
     const currencyOf = new Map(walletRows.map((w) => [w.id, w.currency]));
@@ -114,6 +121,7 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         name: c.name,
         kind: c.kind,
         archived: c.archivedAt !== null,
+        ...(c.archivedAt ? { archivedAt: c.archivedAt.toISOString() } : {}),
       })),
       transactions: txRows.map((t) => ({
         date: t.date,
@@ -134,12 +142,14 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         receivedAmountMinor: t.receivedAmountMinor,
         receivedAmount: minorToInputValue(t.receivedAmountMinor, currencyOf.get(t.toWalletId)!),
       })),
+      // The user's own exchange rates (/rates); the provider's rates are shared and not part of an account.
+      manualRates: rateRows.map((r) => ({ currency: r.currency, base: r.base, effectiveDate: r.effectiveDate, rate: r.rate })),
     };
   }, SNAPSHOT);
 }
 
 /**
- * The "Wallets & categories" context file: every wallet (name, currency, archived, group) and category (name, kind) of the
+ * The "Wallets & categories" context file: every wallet (name, currency, archived, group) and category (name, kind, archived) of the
  * account, in creation order, and nothing else (no ids, balances or transactions). Made for companion tools such as
  * the Statement Importer artifact.
  */
@@ -153,7 +163,7 @@ export async function buildContext(userId: number, now: Date = new Date()): Prom
       .where(eq(wallets.userId, userId))
       .orderBy(asc(wallets.id));
     const categoryRows = await tx
-      .select({ name: categories.name, kind: categories.kind })
+      .select({ name: categories.name, kind: categories.kind, archivedAt: categories.archivedAt })
       .from(categories)
       .where(eq(categories.userId, userId))
       .orderBy(asc(categories.id));
@@ -163,7 +173,7 @@ export async function buildContext(userId: number, now: Date = new Date()): Prom
       version: CONTEXT_VERSION,
       exportedAt: now.toISOString(),
       wallets: walletRows.map((w) => ({ name: w.name, currency: w.currency, archived: w.archivedAt !== null, group: w.group })),
-      categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind })),
+      categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind, archived: c.archivedAt !== null })),
     };
   }, SNAPSHOT);
 }
@@ -173,7 +183,8 @@ export type CsvExportFilters = Omit<TransactionFilters, "limit" | "offset">;
 /**
  * Transactions as CSV (UTF-8 with BOM, CRLF), oldest first. Same filters as `/transactions`, no pagination.
  * A transfer is one row (`wallet` → `to_wallet`) and is included when either of its legs matches the filters.
- * Wallet rows (type `wallet`: initial balance, group, archived date) come first, before the entries.
+ * Wallet rows (type `wallet`: initial balance, group, archived date) come first, then category rows (type `category`:
+ * kind and archived date, for the archived categories the rows use), then the entries.
  * Text cells are protected against spreadsheet formula injection (`escapeFormula`).
  */
 export async function buildTransactionsCsv(userId: number, filters: CsvExportFilters = {}): Promise<string> {
@@ -202,14 +213,14 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
     for (const w of [...walletRows].sort((a, b) => Number(a.archivedAt !== null) - Number(b.archivedAt !== null) || a.id - b.id)) {
       if (!groupOfKey.has(keyOf(w))) groupOfKey.set(keyOf(w), w.group);
     }
-    const categoryName = new Map(
-      (
-        await tx
-          .select({ id: categories.id, name: categories.name })
-          .from(categories)
-          .where(eq(categories.userId, userId))
-      ).map((c) => [c.id, c.name]),
-    );
+    const categoryRows = await tx
+      .select({ id: categories.id, name: categories.name, kind: categories.kind, archivedAt: categories.archivedAt })
+      .from(categories)
+      .where(eq(categories.userId, userId))
+      .orderBy(asc(categories.id));
+    const categoryName = new Map(categoryRows.map((c) => [c.id, c.name]));
+    /** Categories the exported rows use, for the category rows of the archived ones. */
+    const usedCategories = new Set<number>();
 
     const matching = await tx
       .select({
@@ -238,6 +249,7 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
       if (r.transferId === null) {
         const w = walletById.get(r.walletId)!;
         usedWallets.add(w.id);
+        usedCategories.add(r.categoryId!);
         entryRows.push([
           r.date,
           r.kind,
@@ -250,6 +262,7 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
           "",
           "",
           text(groupOfKey.get(keyOf(w))),
+          "",
           "",
         ]);
         continue;
@@ -273,6 +286,7 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
         to.currency,
         minorToInputValue(t.receivedAmountMinor, to.currency),
         text(groupOfKey.get(keyOf(from))),
+        "",
         "",
       ]);
     }
@@ -309,8 +323,14 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
         "",
         text(groupOfKey.get(keyOf(main))),
         archived ? archived.toISOString().slice(0, 10) : "",
+        "",
       ];
     });
-    return toCsv([[...CSV_COLUMNS], ...walletLines, ...entryRows]);
+    // Category rows (type `category`) next: one per archived category the exported rows use, with its kind and the
+    // date it was archived, so an import that creates it archives it too. Active categories need no row.
+    const categoryLines = categoryRows
+      .filter((c) => c.archivedAt !== null && usedCategories.has(c.id))
+      .map((c) => ["", "category", "", "", "", text(c.name), "", "", "", "", "", c.archivedAt!.toISOString().slice(0, 10), c.kind]);
+    return toCsv([[...CSV_COLUMNS], ...walletLines, ...categoryLines, ...entryRows]);
   }, SNAPSHOT);
 }

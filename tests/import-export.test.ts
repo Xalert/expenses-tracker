@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
 import { categories, transactions, transfers, users, wallets } from "@/db/schema";
 import { parseCsv, toCsv } from "@/lib/csv";
-import { listCategories } from "@/server/categories";
+import { archiveCategory, createCategory, listCategories } from "@/server/categories";
 import { buildBackup, buildTransactionsCsv } from "@/server/export";
 import { IMPORT_MAX_BYTES, MAX_PROBLEMS_SHOWN, previewImport, runImport, type ImportPreview } from "@/server/import";
-import { createTransaction } from "@/server/transactions";
+import { listManualRates, setManualRate } from "@/server/manual-rates";
+import { createTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { createWalletGroup, listWalletGroups } from "@/server/wallet-groups";
 import { archiveWallet, createWallet, listWallets } from "@/server/wallets";
@@ -157,7 +158,7 @@ describe("buildTransactionsCsv", () => {
   it("writes one row per entry and per transfer, with a BOM, CRLF and protected formulas", async () => {
     await seedAlice();
     const out = await buildTransactionsCsv(alice.id);
-    expect(out.startsWith("﻿date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived\r\n")).toBe(true);
+    expect(out.startsWith("﻿date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind\r\n")).toBe(true);
     const all = parseCsv(out).records.slice(1).map((r) => r.cells);
     // Wallet rows first: one per name + currency (the two "Main" EUR wallets share one, initial balances summed).
     const walletRows = all.filter((r) => r[1] === "wallet");
@@ -177,9 +178,9 @@ describe("buildTransactionsCsv", () => {
     expect(rows.find((r) => r[6] === "'=SUM(A1:A9)")).toBeTruthy();
     expect(rows.find((r) => r[6] === "'-5 refund later")).toBeTruthy();
     expect(rows.find((r) => r[6] === "'+plus @at")).toBeTruthy();
-    expect(rows.find((r) => r[6] === "Ramen")).toEqual(["2026-02-01", "expense", "Tokyo", "JPY", "1500", "Food", "Ramen", "", "", "", "Personal", ""]);
+    expect(rows.find((r) => r[6] === "Ramen")).toEqual(["2026-02-01", "expense", "Tokyo", "JPY", "1500", "Food", "Ramen", "", "", "", "Personal", "", ""]);
     expect(rows.find((r) => r[6] === "Three decimals")?.[4]).toBe("1.234");
-    expect(rows.find((r) => r[6] === "ATM")).toEqual(["2026-01-05", "transfer", "Main", "EUR", "100.00", "", "ATM", "Cash", "EUR", "100.00", "Personal", ""]);
+    expect(rows.find((r) => r[6] === "ATM")).toEqual(["2026-01-05", "transfer", "Main", "EUR", "100.00", "", "ATM", "Cash", "EUR", "100.00", "Personal", "", ""]);
     // Oldest first.
     expect(rows[0][0]).toBe("2025-12-01");
   });
@@ -892,7 +893,7 @@ describe("CSV wallet rows and groups", () => {
         { line: 3, message: /^archived: “31\/12\/2025” is not a valid date/ },
         { line: 4, message: /^category: A wallet row only describes a wallet; leave category, note empty\./ },
         { line: 6, message: /^wallet: Wallet “D” \(EUR\) is already described on line 5\./ },
-        { line: 7, message: /^archived: Only wallet rows/ },
+        { line: 7, message: /^archived: Only wallet and category rows/ },
         { line: 9, message: /^group: Wallet “F” \(EUR\) is put in group “One” on line 8; a wallet can only be in one group\./ },
         { line: 10, message: /^group: / },
         { line: 11, message: /^wallet: / },
@@ -950,6 +951,180 @@ describe("archived dates in the backup", () => {
     expect(w?.archivedAt?.getTime()).toBeGreaterThanOrEqual(before - 1000);
     const bad = await previewImport(alice.id, file({ archivedAt: "yesterday" }));
     expectProblems(bad, [{ path: "wallets[0].archivedAt", message: /ISO timestamp/ }]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Archived categories in the CSV (category rows) and the backup (archivedAt); manual exchange rates in the backup
+
+const HEADER3 = `${HEADER2},kind`;
+const csv3 = (...rows: string[]) => [HEADER3, ...rows].join("\n");
+
+describe("CSV category rows", () => {
+  const category = async (userId: number, name: string) =>
+    (await listCategories(userId, undefined, { includeArchived: true })).find((c) => c.name === name);
+
+  it("the export writes one for each archived category the rows use, and an import into another account restores it", async () => {
+    const main = await createWallet(alice.id, { name: "Main", currency: "EUR", initialBalanceMinor: 0 });
+    const pets = await createCategory(alice.id, { name: "=Pets", kind: "expense" });
+    await createTransaction(alice.id, { walletId: main.id, kind: "expense", categoryId: pets.id, amountMinor: 900, date: "2026-01-02" });
+    await createTransaction(alice.id, { walletId: main.id, kind: "expense", categoryId: alice.cat("Food"), amountMinor: 100, date: "2026-01-03" });
+    await archiveCategory(alice.id, pets.id);
+    await archiveCategory(alice.id, alice.cat("Bills")); // archived but unused: no row
+    await db.update(categories).set({ archivedAt: new Date("2026-02-10T15:00:00.000Z") }).where(eq(categories.id, pets.id));
+    const out = await buildTransactionsCsv(alice.id);
+    const rows = parseCsv(out).records.slice(1).map((r) => r.cells);
+    expect(rows.filter((r) => r[1] === "category")).toEqual([["", "category", "", "", "", "'=Pets", "", "", "", "", "", "2026-02-10", "expense"]]);
+    // Wallet rows, then category rows, then entries.
+    expect(rows.map((r) => r[1])).toEqual(["wallet", "category", "expense", "expense"]);
+
+    const bob = await makeUser(db, "bob@example.com");
+    const p = await previewImport(bob.id, out);
+    expect(p).toMatchObject({ ok: true, transactionsToAdd: 2 });
+    expect(p.categoriesToCreate).toEqual([{ name: "=Pets", kind: "expense", archived: true }]);
+    expect((await runImport(bob.id, out)).imported).toBe(true);
+    const restored = await category(bob.id, "=Pets");
+    expect(restored?.archivedAt?.toISOString()).toBe("2026-02-10T00:00:00.000Z");
+    // Its history is inserted (a restore); re-importing the same file adds nothing and reports nothing.
+    expect((await listTransactions(bob.id, { categoryId: restored!.id })).items).toHaveLength(1);
+    expect(await previewImport(bob.id, out)).toMatchObject({ ok: true, transactionsToAdd: 0, duplicateTransactions: 2 });
+  });
+
+  it("creates a described category (archived or active, used or not) and never changes an existing one", async () => {
+    const text = csv3(
+      ",category,,,,Old rent,,,,,,31.12.2025,expense",
+      ",category,,,,Gifts,,,,,,,income",
+      ",category,,,,food,,,,,,2020-01-01,expense", // exists (active): left alone
+      "2025-12-01,expense,Cash,EUR,500.00,Old rent,,,,,,,",
+    );
+    const p = await previewImport(alice.id, text);
+    expect(p).toMatchObject({ ok: true, transactionsToAdd: 1 });
+    expect(p.categoriesToCreate).toEqual([
+      { name: "Old rent", kind: "expense", archived: true },
+      { name: "Gifts", kind: "income" },
+    ]);
+    expect((await runImport(alice.id, text)).imported).toBe(true);
+    expect((await category(alice.id, "Old rent"))?.archivedAt?.toISOString()).toBe("2025-12-31T00:00:00.000Z");
+    expect((await category(alice.id, "Gifts"))?.archivedAt).toBeNull();
+    expect((await category(alice.id, "Food"))?.archivedAt).toBeNull();
+  });
+
+  it("an existing archived category still takes no new rows, whatever the file says", async () => {
+    await archiveCategory(alice.id, alice.cat("Bills"));
+    const p = await previewImport(alice.id, csv3(",category,,,,Bills,,,,,,,expense", "2026-01-01,expense,Cash,EUR,1.00,Bills,,,,,,,"));
+    expectProblems(p, [{ line: 3, message: /^Category “Bills” \(expense\) is archived in your account/ }]);
+  });
+
+  it("reports category rows it cannot use", async () => {
+    const before = await snapshot();
+    const text = csv3(
+      ",category,,,,,,,,,,,expense", // 2: no name
+      ",category,,,,A,,,,,,,", // 3: no kind
+      ",category,,,,B,,,,,,,transfer", // 4: bad kind
+      ",category,,,,C,,,,,,2026/01/01,expense", // 5: slashed date
+      ",category,Cash,EUR,1,D,,,,,,,expense", // 6: wallet cells on a category row
+      ",category,,,,E,,,,,,,income", // 7: fine
+      ",category,,,,e,,,,,,2026-01-01,income", // 8: E again
+      "2026-01-01,expense,Cash,EUR,1,Food,,,,,,,expense", // 9: kind on an entry
+    );
+    const p = await previewImport(alice.id, text);
+    expectProblems(p, [
+      { line: 2, message: /^category: Required: the category's name\./ },
+      { line: 3, message: /^kind: Required on a category row/ },
+      { line: 4, message: /^kind: “transfer” is not a kind/ },
+      { line: 5, message: /^archived: “2026\/01\/01” is not a valid date.*active category\./ },
+      { line: 6, message: /^wallet: A category row only describes a category; leave wallet, currency, amount empty\./ },
+      { line: 8, message: /^category: Category “E” \(income\) is already described on line 7\./ },
+      { line: 9, message: /^kind: Only category rows/ },
+    ]);
+    expect((await runImport(alice.id, text)).imported).toBe(false);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("merges category rows across files and reports files that disagree", async () => {
+    const a = { name: "a.csv", text: csv3(",category,,,,Old,,,,,,2025-01-01,expense", "2025-01-01,expense,Cash,EUR,1.00,Old,,,,,,,") };
+    const b = { name: "b.csv", text: csv3(",category,,,,old,,,,,,2025-01-01,expense") };
+    expect((await previewImport(alice.id, [a, b])).categoriesToCreate).toEqual([{ name: "Old", kind: "expense", archived: true }]);
+    const c = { name: "c.csv", text: csv3(",category,,,,Old,,,,,,,expense") };
+    expect((await previewImport(alice.id, [a, c])).problems).toEqual([
+      { file: "c.csv", line: 2, message: "category: Category “Old” (expense) is described differently in “a.csv”, line 2." },
+    ]);
+  });
+});
+
+describe("archived categories in the backup", () => {
+  it("writes archivedAt and restores it; a file without it archives as of the import", async () => {
+    await archiveCategory(alice.id, alice.cat("Bills"));
+    await db.update(categories).set({ archivedAt: new Date("2024-05-06T07:08:09.000Z") }).where(eq(categories.id, alice.cat("Bills")));
+    const backup = await buildBackup(alice.id);
+    const bills = backup.categories.find((c) => c.name === "Bills");
+    expect(bills).toMatchObject({ archived: true, archivedAt: "2024-05-06T07:08:09.000Z" });
+    expect(backup.categories.find((c) => c.name === "Food")).not.toHaveProperty("archivedAt");
+    const bob = await makeUser(db, "bob@example.com");
+    // Bob's own (default) Bills is active and is left so; a new archived one gets the file's date.
+    const renamed = { ...backup, categories: backup.categories.map((c) => (c.name === "Bills" ? { ...c, name: "Old bills" } : c)) };
+    expect((await runImport(bob.id, json(renamed))).imported).toBe(true);
+    const restored = (await listCategories(bob.id, undefined, { includeArchived: true })).find((c) => c.name === "Old bills");
+    expect(restored?.archivedAt?.toISOString()).toBe("2024-05-06T07:08:09.000Z");
+
+    const before = Date.now();
+    const older = { ...renamed, categories: [{ id: 1, name: "Older", kind: "expense", archived: true }] };
+    expect((await runImport(bob.id, json(older))).imported).toBe(true);
+    const o = (await listCategories(bob.id, undefined, { includeArchived: true })).find((c) => c.name === "Older");
+    expect(o?.archivedAt?.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    const bad = await previewImport(bob.id, json({ ...older, categories: [{ ...older.categories[0], archivedAt: "soon" }] }));
+    expectProblems(bad, [{ path: "categories[0].archivedAt", message: /ISO timestamp/ }]);
+  });
+});
+
+describe("manual exchange rates in the backup", () => {
+  const empty = { app: "expenses-tracker", version: 1, wallets: [], categories: [], transactions: [], transfers: [] };
+
+  it("writes the user's rates and restores them additively, keeping a rate the account already has", async () => {
+    await createWallet(alice.id, { name: "Kuwait", currency: "KWD", initialBalanceMinor: 0 });
+    await createWallet(alice.id, { name: "Dollars", currency: "USD", initialBalanceMinor: 0 });
+    await setManualRate(alice.id, { currency: "KWD", base: "EUR", effectiveDate: "2026-11-01", rate: "3,25" });
+    await setManualRate(alice.id, { currency: "KWD", base: "USD", effectiveDate: "2026-10-01", rate: "3.3" });
+    const backup = await buildBackup(alice.id);
+    expect(backup.manualRates).toEqual([
+      { currency: "KWD", base: "USD", effectiveDate: "2026-10-01", rate: "3.3" },
+      { currency: "KWD", base: "EUR", effectiveDate: "2026-11-01", rate: "3.25" },
+    ]);
+
+    const bob = await makeUser(db, "bob@example.com");
+    await createWallet(bob.id, { name: "K", currency: "KWD", initialBalanceMinor: 0 });
+    await setManualRate(bob.id, { currency: "KWD", base: "EUR", effectiveDate: "2026-11-01", rate: "3.5" });
+    const p = await previewImport(bob.id, json(backup));
+    expect(p).toMatchObject({ ok: true, manualRatesToAdd: 1 });
+    expect(p.notices).toEqual([expect.objectContaining({ code: "manual-rates-kept", count: 1 })]);
+    expect((await runImport(bob.id, json(backup))).imported).toBe(true);
+    expect((await listManualRates(bob.id)).map((r) => [r.base, r.effectiveDate, r.rate])).toEqual([
+      ["EUR", "2026-11-01", "3.5"],
+      ["USD", "2026-10-01", "3.3"],
+    ]);
+    // Again: nothing to add, and an identical rate is no notice.
+    await setManualRate(bob.id, { currency: "KWD", base: "EUR", effectiveDate: "2026-11-01", rate: "3.25" });
+    expect(await previewImport(bob.id, json(backup))).toMatchObject({ ok: true, manualRatesToAdd: 0, notices: [] });
+  });
+
+  it("an older backup without rates imports as before; bad rates are problems", async () => {
+    expect(await previewImport(alice.id, json(empty))).toMatchObject({ ok: true, manualRatesToAdd: 0 });
+    const r = (o: Record<string, unknown>) => ({ currency: "KWD", base: "EUR", effectiveDate: "2026-01-01", rate: "3.25", ...o });
+    const p = await previewImport(
+      alice.id,
+      json({
+        ...empty,
+        manualRates: [r({ currency: "XXQ" }), r({ currency: "EUR" }), r({ base: "KWD" }), r({ effectiveDate: "2026-02-30" }), r({ rate: "-1" }), r({}), r({ rate: "4" })],
+      }),
+    );
+    expectProblems(p, [
+      { path: "manualRates[0].currency", message: /not a supported ISO 4217/ },
+      { path: "manualRates[1].currency", message: /EUR needs no rate/ },
+      { path: "manualRates[2].base", message: /different currency/ },
+      { path: "manualRates[3].effectiveDate", message: /not a valid date/ },
+      { path: "manualRates[4].rate", message: /not a rate greater than zero/ },
+      { path: "manualRates[6]", message: /KWD already has a rate from 2026-01-01 on in manualRates\[5\]/ },
+    ]);
   });
 });
 

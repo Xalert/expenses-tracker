@@ -327,7 +327,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
         <textarea id="setup-paste" rows="3" spellcheck="false" autocomplete="off" aria-label="Paste the copied wallets and categories" placeholder="…or paste what Copy put on your clipboard"></textarea>
         <button type="button" id="setup-paste-load">Load</button>
       </div>
-      <p class="small muted">The file and pasted text are not kept; archived wallets are left out.</p>
+      <p class="small muted">The file and pasted text are not kept; archived wallets and categories are left out.</p>
       <div id="setup-preview"></div>
     </div>
     <div class="two-col">
@@ -926,6 +926,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       var x = readWallet(w); if (!x || seenW.has(walletKey(x))) return; seenW.add(walletKey(x)); wallets.push(x);
     });
     (Array.isArray(o.categories) ? o.categories : []).slice(0, 1000).forEach(function (c) {
+      if (isPlainObject(c) && c.archived === true) return;
       var x = readCategory(c); var k = x && categoryKey(x);
       if (!x || seenC.has(k)) return; seenC.add(k); categories.push(x);
     });
@@ -935,9 +936,10 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
   var MAX_EXPORT_CHARS = 20 * 1024 * 1024;
   /**
    * A tracker export (text of a file or a paste) → { source: "context" | "backup", wallets, categories, archivedSkipped,
-   * unreadable, exportedAt } or { error }. `kind: "context"` is the small Wallets & categories file; anything else from
-   * the tracker with wallets[] and categories[] is read as a backup. Only names, currencies and kinds are read
-   * (unknown fields ignored); archived wallets are left out; invalid or repeated entries are counted in `unreadable`.
+   * archivedCategoriesSkipped, unreadable, exportedAt } or { error }. `kind: "context"` is the small Wallets & categories
+   * file; anything else from the tracker with wallets[] and categories[] is read as a backup. Only names, currencies and
+   * kinds are read (unknown fields ignored); archived wallets and categories (`archived: true`) are left out; invalid or
+   * repeated entries are counted in `unreadable`.
    */
   function readTrackerExport(text) {
     if (typeof text !== "string" || !text.trim()) return { error: "There is nothing to load: the file or the pasted text is empty." };
@@ -951,10 +953,11 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       return { error: source === "context" ? "This Wallets & categories file is incomplete: it has no wallets or categories list. Download or copy it again." : NOT_EXPORT };
     }
     var archived = data.wallets.filter(function (w) { return isPlainObject(w) && w.archived === true; }).length;
+    var archivedCats = data.categories.filter(function (c) { return isPlainObject(c) && c.archived === true; }).length;
     var cfg = readConfig({ wallets: data.wallets, categories: data.categories });
     return {
-      source: source, wallets: cfg.wallets, categories: cfg.categories, archivedSkipped: archived,
-      unreadable: Math.max(0, data.wallets.length - archived - cfg.wallets.length) + Math.max(0, data.categories.length - cfg.categories.length),
+      source: source, wallets: cfg.wallets, categories: cfg.categories, archivedSkipped: archived, archivedCategoriesSkipped: archivedCats,
+      unreadable: Math.max(0, data.wallets.length - archived - cfg.wallets.length) + Math.max(0, data.categories.length - archivedCats - cfg.categories.length),
       exportedAt: typeof data.exportedAt === "string" && isIsoDate(data.exportedAt.slice(0, 10)) ? data.exportedAt.slice(0, 10) : null,
     };
   }
@@ -1959,6 +1962,7 @@ table.mem { border-collapse: collapse; width: 100%; min-width: 620px; font-size:
       "Categories: " + d.newCategories.length + " new, " + d.knownCategories + " already here" + (d.newCategories.length ? ". New: " + nameList(d.newCategories, cLabel) : "") + ".",
     ];
     if (p.archivedSkipped) items.push(plural(p.archivedSkipped, "archived wallet") + " left out.");
+    if (p.archivedCategoriesSkipped) items.push(plural(p.archivedCategoriesSkipped, "archived category", "archived categories") + " left out.");
     if (p.unreadable) items.push(plural(p.unreadable, "entry", "entries") + " left out because " + (p.unreadable === 1 ? "it was" : "they were") + " invalid or repeated.");
     if (d.removedWallets.length || d.removedCategories.length) {
       items.push("Not in the file, so removed from the lists here: " + [d.removedWallets.length ? nameList(d.removedWallets, wLabel) : "", d.removedCategories.length ? nameList(d.removedCategories, cLabel) : ""].filter(Boolean).join("; ") + ".");
