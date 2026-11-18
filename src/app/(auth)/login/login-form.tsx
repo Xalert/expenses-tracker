@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Field, FormError, Input, SubmitButton } from "@/components/ui";
 import { initialFormState } from "@/lib/form";
+import { BrowserTimeZoneInput } from "../browser-time-zone-input";
 import { loginAction } from "./actions";
 
 export function LoginForm() {
@@ -12,6 +13,7 @@ export function LoginForm() {
   return (
     <form action={formAction} className="space-y-5" noValidate>
       <FormError message={state.message} />
+      <BrowserTimeZoneInput />
       <Field id="identifier" label="User ID or email" error={err.identifier}>
         <Input
           id="identifier"

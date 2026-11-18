@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
-import { categories, transactions, transfers, wallets } from "@/db/schema";
+import { categories, transactions, transfers, users, wallets } from "@/db/schema";
 import { toCsv } from "@/lib/csv";
 import { dateInTimeZone, resolveTimeZone } from "@/lib/dates";
 import { listCategories } from "@/server/categories";
@@ -245,10 +245,12 @@ describe("Spendee timestamps", () => {
       code: "time-zone",
       count: 1,
       message:
-        "Spendee records the time of each entry; dates are taken in your time zone, Europe/Brussels. 1 entry falls on a different day than the UTC date in the file.",
+        "Spendee records the time of each entry; dates are taken in this browser's time zone, Europe/Brussels (set one in Account settings so every browser dates them alike). 1 entry falls on a different day than the UTC date in the file.",
     });
     const q = await previewImport(alice.id, text, { timeZone: "Not/AZone" });
-    expect(q.notices.find((n) => n.code === "time-zone")?.message).toMatch(/taken in UTC \(your browser's time zone was not recognised\)\. No entry changes day/);
+    expect(q.notices.find((n) => n.code === "time-zone")?.message).toMatch(/taken in UTC \(this browser's time zone was not recognised; set one in Account settings\)\. No entry changes day/);
+    const none = await previewImport(alice.id, text);
+    expect(none.notices.find((n) => n.code === "time-zone")?.message).toMatch(/taken in UTC \(set a time zone in Account settings\)\. No entry/);
 
     await runImport(alice.id, text, BXL);
     expect((await entriesOf(alice.id))[0].date).toBe("2026-08-27");
@@ -260,6 +262,48 @@ describe("Spendee timestamps", () => {
     const o = await runImport(bob.id, older, BXL);
     expect(o.notices).toEqual([]);
     expect((await entriesOf(bob.id)).at(-1)?.date).toBe("2019-04-29");
+  });
+});
+
+describe("Spendee dates in the account's time zone", () => {
+  // 22:30 UTC is still the 26th in New York but already the 27th in Bucharest; 03:00 UTC on the 1st is the 31st in
+  // New York and the 1st in Bucharest. Both are near midnight for one of the two browsers.
+  const files = () => [
+    f("Joint.csv", joint("2026-08-26T22:30:00+00:00", "Expense", "-12.50000000", { category: "Food", note: "late dinner" }), joint("2026-09-01T03:00:00+00:00", "Expense", "-3.00000000", { category: "Food", note: "night snack" })),
+    f("Savings.csv", sav("2026-08-27T21:59:59+00:00", OUT, "-100.00000000", { note: "to joint" })),
+    f("Joint2.csv", joint("2026-08-27T21:59:59+00:00", IN, "100.00000000", { note: "to joint" })),
+  ];
+  const setZone = (id: number, zone: string | null) => db.update(users).set({ timeZone: zone }).where(eq(users.id, id));
+
+  it("uses the account's zone over the browser's, and the notice says which", async () => {
+    await setZone(alice.id, "Europe/Bucharest");
+    const p = await previewImport(alice.id, files(), { timeZone: "America/New_York" });
+    expect(p.notices.find((n) => n.code === "time-zone")?.message).toBe(
+      "Spendee records the time of each entry; dates are taken in your account's time zone, Europe/Bucharest. 3 entries fall on a different day than the UTC date in the file.",
+    );
+    await runImport(alice.id, files(), { timeZone: "America/New_York" });
+    expect((await entriesOf(alice.id)).map((e) => [e.note, e.date])).toEqual([
+      ["late dinner", "2026-08-27"],
+      ["night snack", "2026-09-01"],
+    ]);
+    expect((await transfersOf(alice.id)).map((t) => t.date)).toEqual(["2026-08-28"]);
+  });
+
+  it("re-importing the same files from a browser in another zone finds every entry and transfer a duplicate", async () => {
+    await setZone(alice.id, "Europe/Bucharest");
+    const first = await runImport(alice.id, files(), { timeZone: "Europe/Bucharest" });
+    expect(first).toMatchObject({ imported: true, transactionsToAdd: 2, transfersToAdd: 1 });
+    const before = await snapshot();
+
+    const again = await runImport(alice.id, files(), { timeZone: "America/New_York" });
+    expect(again).toMatchObject({ transactionsToAdd: 0, transfersToAdd: 0, duplicateTransactions: 2, duplicateTransfers: 1 });
+    expect(await snapshot()).toEqual(before);
+
+    // Without an account zone the browser's decides, and the same re-import would date them differently.
+    const bob = await makeUser(db, "bob@example.com");
+    await runImport(bob.id, files(), { timeZone: "Europe/Bucharest" });
+    const fromNewYork = await previewImport(bob.id, files(), { timeZone: "America/New_York" });
+    expect(fromNewYork.duplicateTransactions).toBeLessThan(2);
   });
 });
 

@@ -6,12 +6,15 @@ import { ServiceError } from "@/lib/errors";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { displayName } from "@/lib/user-id";
 import { listCategories } from "@/server/categories";
+import { canonicalTimeZone, listTimeZones } from "@/lib/time-zone";
 import {
+  adoptTimeZoneIfUnset,
   authenticateUser,
   changePassword,
   countOtherSessions,
   deleteAccount,
   deleteExpiredSessions,
+  getUserTimeZone,
   isWrongPasswordError,
   registerUser,
   signOutOtherSessions,
@@ -41,7 +44,7 @@ describe("passwords", () => {
 describe("registration", () => {
   it("needs only a user ID and a password; optional fields are stored as NULL", async () => {
     const u = await registerUser({ username: " Ana_1 ", password: PW, email: "", firstName: "  ", lastName: "" });
-    expect(u).toEqual({ id: u.id, username: "ana_1", email: null, firstName: null, lastName: null, displayName: "ana_1" });
+    expect(u).toEqual({ id: u.id, username: "ana_1", email: null, firstName: null, lastName: null, timeZone: null, displayName: "ana_1" });
     expect((await db.select().from(users))[0]).toMatchObject({ username: "ana_1", email: null, firstName: null, lastName: null });
     expect(await listCategories(u.id)).toHaveLength(8);
 
@@ -64,6 +67,7 @@ describe("registration", () => {
       email: "ana@example.com",
       firstName: "Ana Maria",
       lastName: "Pop",
+      timeZone: null,
       displayName: "Ana Maria Pop",
     });
   });
@@ -131,6 +135,50 @@ describe("registration", () => {
       registerUser({ username: "ana", password: PW, firstName: "x".repeat(80), lastName: "y".repeat(80) }),
     ).resolves.toMatchObject({ firstName: "x".repeat(80) });
     expect(await db.select().from(users)).toHaveLength(1);
+  });
+});
+
+describe("account time zone", () => {
+  it("accepts IANA zones in their canonical spelling, plus UTC; nothing else", () => {
+    expect(canonicalTimeZone("Europe/Bucharest")).toBe("Europe/Bucharest");
+    expect(canonicalTimeZone(" europe/bucharest ")).toBe("Europe/Bucharest");
+    expect(canonicalTimeZone("US/Eastern")).toBe("America/New_York");
+    expect(canonicalTimeZone("UTC")).toBe("UTC");
+    expect(canonicalTimeZone("Etc/UTC")).toBe("UTC");
+    for (const bad of [undefined, null, 42, "", "  ", "Mars/Olympus_Mons", "+02:00", "x".repeat(200)]) {
+      expect(canonicalTimeZone(bad), String(bad)).toBeNull();
+    }
+    const all = listTimeZones();
+    expect(all).toContain("UTC");
+    expect(all).toContain("Europe/Bucharest");
+    for (const z of all) expect(canonicalTimeZone(z), z).toBe(z);
+  });
+
+  it("registration stores a valid browser zone and ignores an invalid or missing one", async () => {
+    expect((await registerUser({ username: "ana", password: PW, timeZone: "Europe/Bucharest" })).timeZone).toBe("Europe/Bucharest");
+    expect((await registerUser({ username: "bob", password: PW, timeZone: "Not/AZone" })).timeZone).toBeNull();
+    expect((await registerUser({ username: "cat", password: PW })).timeZone).toBeNull();
+    expect((await db.select({ u: users.username, tz: users.timeZone }).from(users).orderBy(users.id))).toEqual([
+      { u: "ana", tz: "Europe/Bucharest" },
+      { u: "bob", tz: null },
+      { u: "cat", tz: null },
+    ]);
+  });
+
+  it("sign-in adopts the browser zone only while the account has none", async () => {
+    const ana = await registerUser({ username: "ana", password: PW });
+    const bob = await registerUser({ username: "bob", password: PW });
+    expect(await adoptTimeZoneIfUnset(ana.id, "Not/AZone")).toBe(false);
+    expect(await adoptTimeZoneIfUnset(ana.id, undefined)).toBe(false);
+    expect(await getUserTimeZone(ana.id)).toBeNull();
+    expect(await adoptTimeZoneIfUnset(ana.id, "Europe/Bucharest")).toBe(true);
+    expect(await adoptTimeZoneIfUnset(ana.id, "America/New_York")).toBe(false);
+    expect(await getUserTimeZone(ana.id)).toBe("Europe/Bucharest");
+    expect(await getUserTimeZone(bob.id)).toBeNull();
+    expect(await getUserTimeZone(9999)).toBeNull();
+    // A stored zone the runtime does not know counts as not set.
+    await db.update(users).set({ timeZone: "Gone/Zone" }).where(eq(users.id, bob.id));
+    expect(await getUserTimeZone(bob.id)).toBeNull();
   });
 });
 
@@ -322,8 +370,25 @@ describe("updateProfile", () => {
       email: "ana@example.com",
       firstName: "Maria",
       lastName: null,
+      timeZone: null,
       displayName: "Maria",
     });
+  });
+
+  it("sets, keeps and clears the time zone without a password; refuses an unknown zone on the field", async () => {
+    const u = await ana();
+    const base = { username: "ana", email: "ana@example.com", firstName: "Ana", lastName: "Pop" };
+    expect((await updateProfile(u.id, { ...base, timeZone: "europe/bucharest" })).timeZone).toBe("Europe/Bucharest");
+    // Omitted: unchanged.
+    expect((await updateProfile(u.id, base)).timeZone).toBe("Europe/Bucharest");
+    expect(await getUserTimeZone(u.id)).toBe("Europe/Bucharest");
+    for (const bad of ["Mars/Olympus_Mons", "+02:00", "x".repeat(200)]) {
+      await expect(updateProfile(u.id, { ...base, timeZone: bad })).rejects.toMatchObject({ code: "VALIDATION", field: "timeZone" });
+    }
+    expect(await getUserTimeZone(u.id)).toBe("Europe/Bucharest");
+    expect((await updateProfile(u.id, { ...base, timeZone: "" })).timeZone).toBeNull();
+    expect((await updateProfile(u.id, { ...base, timeZone: "Etc/UTC" })).timeZone).toBe("UTC");
+    expect((await updateProfile(u.id, { ...base, timeZone: null })).timeZone).toBeNull();
   });
 
   it("needs the current password to change the user ID, and then signs in with the new one", async () => {

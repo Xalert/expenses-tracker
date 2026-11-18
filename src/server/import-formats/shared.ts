@@ -28,11 +28,13 @@ export type ImportNotice = { code: string; message: string; count?: number; file
 /** What the importing request adds to the files: used by formats whose content depends on it (Spendee). */
 export type ImportContext = {
   /**
-   * A valid IANA time zone (already checked; "UTC" when the browser sent none or an invalid one). Only used for
-   * notices: no date depends on it.
+   * The valid IANA time zone Spendee's UTC timestamps are dated in: the account's when set, else the browser's, else
+   * "UTC".
    */
   timeZone: string;
-  /** True when a time zone was sent but was not a valid IANA zone, so UTC was used instead. */
+  /** Where `timeZone` came from ("none": UTC, because the account has none and the browser sent none or a bad one). */
+  timeZoneSource: "account" | "browser" | "none";
+  /** True when the browser sent a time zone that is not a valid IANA zone (and the account has none), so UTC was used. */
   timeZoneFallback: boolean;
   /** Import transfer rows that have no partner as plain income / expense in a "Transfer" category. */
   unpairedTransfersAsEntries: boolean;

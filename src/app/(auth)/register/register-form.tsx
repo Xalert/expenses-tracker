@@ -5,6 +5,7 @@ import { Field, FormError, Input, SubmitButton } from "@/components/ui";
 import { initialFormState } from "@/lib/form";
 import { MIN_PASSWORD_LENGTH } from "@/lib/constants";
 import { NAME_MAX, USER_ID_HINT, USER_ID_MAX } from "@/lib/user-id";
+import { BrowserTimeZoneInput } from "../browser-time-zone-input";
 import { registerAction } from "./actions";
 
 export function RegisterForm() {
@@ -15,6 +16,7 @@ export function RegisterForm() {
   return (
     <form action={formAction} className="space-y-5" noValidate>
       <FormError message={state.message} />
+      <BrowserTimeZoneInput />
       <Field id="username" label="User ID" hint={USER_ID_HINT} error={err.username}>
         <Input
           id="username"

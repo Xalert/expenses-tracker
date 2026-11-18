@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { Field, Input, SubmitButton } from "@/components/ui";
+import { Field, Input, Select, SubmitButton } from "@/components/ui";
 import { initialFormState } from "@/lib/form";
 import { NAME_MAX, USER_ID_HINT, USER_ID_MAX } from "@/lib/user-id";
 import { updateProfileAction } from "./actions";
@@ -12,13 +12,21 @@ export type ProfileFormProps = {
   email: string | null;
   firstName: string | null;
   lastName: string | null;
+  /** The account's IANA time zone, or null when not set. */
+  timeZone: string | null;
+  /**
+   * Every zone the select offers, grouped by region. Computed on the server and passed in, so the server HTML and
+   * the browser render the same list (browsers' `Intl` zone lists differ).
+   */
+  timeZones: { group: string; zones: { value: string; label: string }[] }[];
 };
 
 /**
  * User ID, email, first name and surname, prefilled. The current password is asked for below them and is only
- * needed when the user ID or the email changes (the service decides; the hint says so).
+ * needed when the user ID or the email changes (the service decides; the hint says so). The time zone needs no
+ * password; "Not set" (an empty value) lets each import use the browser's zone.
  */
-export function ProfileForm(user: ProfileFormProps) {
+export function ProfileForm({ timeZones, ...user }: ProfileFormProps) {
   const [state, formAction] = useActionState(updateProfileAction, initialFormState);
   const err = state.fieldErrors ?? {};
   const v = state.values ?? {
@@ -26,7 +34,11 @@ export function ProfileForm(user: ProfileFormProps) {
     email: user.email ?? "",
     firstName: user.firstName ?? "",
     lastName: user.lastName ?? "",
+    timeZone: user.timeZone ?? "",
   };
+  const zone = v.timeZone ?? "";
+  // A stored zone missing from this list (spelt differently by another ICU version) is still shown as selected.
+  const listed = zone === "" || timeZones.some((g) => g.zones.some((z) => z.value === zone));
 
   return (
     // Keyed on the action result so the inputs take the echoed (or saved) values and the password clears.
@@ -80,6 +92,32 @@ export function ProfileForm(user: ProfileFormProps) {
           />
         </Field>
       </div>
+      <Field
+        id="timeZone"
+        label="Time zone"
+        hint="Used to date imported Spendee entries, whose times are in UTC, so every browser dates them alike."
+        error={err.timeZone}
+      >
+        <Select
+          id="timeZone"
+          name="timeZone"
+          defaultValue={zone}
+          aria-describedby={err.timeZone ? undefined : "timeZone-hint"}
+          error={err.timeZone}
+        >
+          <option value="">Not set (use this browser&rsquo;s)</option>
+          {!listed && <option value={zone}>{zone}</option>}
+          {timeZones.map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.zones.map((z) => (
+                <option key={z.value} value={z.value}>
+                  {z.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </Select>
+      </Field>
       <Field
         id="profile-currentPassword"
         label="Current password"

@@ -22,7 +22,10 @@ const MB = IMPORT_MAX_BYTES / 1024 / 1024;
 /** The user guide to importing (formats, Spendee, time zones, limits); the app does not serve its docs itself. */
 export const IMPORTING_GUIDE_URL = "https://github.com/xalert/expenses-tracker/blob/main/docs/IMPORTING.md";
 
-/** The browser's IANA time zone; Spendee timestamps are dated in it (the server validates it, UTC otherwise). */
+/**
+ * The browser's IANA time zone. Spendee timestamps are dated in the account's time zone when it has one, else in
+ * this one (the server validates it, UTC otherwise).
+ */
 function browserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";

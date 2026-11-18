@@ -16,6 +16,8 @@ const schema = z.object({
   email: optional,
   firstName: optional,
   lastName: optional,
+  // The browser's zone (hidden field); registerUser keeps it only when valid.
+  timeZone: optional,
 });
 
 export async function registerAction(_prev: FormState, formData: FormData): Promise<FormState> {
