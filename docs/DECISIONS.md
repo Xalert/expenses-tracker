@@ -82,11 +82,29 @@ section holds what replaced it.
 | Decision | Why | Decided by |
 |---|---|---|
 | Categories are per user, seeded with eight defaults that get no special treatment | The owner wanted the defaults as a starting point and full control afterwards | owner |
-| Removing a category that has transactions moves them to a chosen replacement of the same kind, then deletes it | Chosen over archiving, blocking, or asking each time: the category is truly gone and there is no hidden state | owner |
+| Removing a category that has transactions moves them to a chosen replacement of the same kind, then deletes it | Chosen over archiving, blocking, or asking each time: the category is truly gone and there is no hidden state (archiving was added next to it on 2026-11-18, see below) | owner |
 | Names are unique per user and kind ignoring case, enforced in the service | Avoids "food" next to "Food" without a schema migration | planner |
-| A category's kind (expense / income) is fixed at creation | Changing it would invalidate its transactions | planner |
+| *(superseded 2026-11-18)* A category's kind (expense / income) is fixed at creation | Changing it would invalidate its transactions | planner |
 | All categories of a kind may be removed; the transaction form then shows an empty state | "Add or remove as they wish"; no artificial minimum | planner |
 | Rename and the replacement picker are inline, with no modal library | Works at phone width, keyboard-usable, no new dependency | built |
+
+Added 2026-11-18 (closing the category gaps):
+
+| Decision | Why | Decided by |
+|---|---|---|
+| A category's kind can be switched expense ↔ income only while no transaction uses it; with transactions the change is refused with the reason | Switching a used category would silently flip the sign of its entries; an unused one is just a mis-filed name | planner |
+| The kind change locks the category row (`FOR UPDATE`) and `createTransaction` reads it `FOR SHARE` | Without it an entry could be filed between the usage check and the switch, leaving an expense under an income category (no constraint ties the two kinds) | built |
+| The kind change is a one-click "Make it an income category" button with no confirm, under the rename form | Nothing is lost and it is undone the same way; a kind select would suggest it is always possible | built |
+| Categories can be archived (`archived_at`, migration `0001_categories_archive`), alongside removal | The owner's original "no hidden state" choice still holds for removal; archiving is the way to stop using a category without moving its history | planner |
+| Archived categories behave like archived wallets: out of the entry form's pickers and no new entries (service-enforced), but an entry that already has one keeps it, shown as "Name (archived)" | One rule for both kinds of archive; an edit must never silently change an entry's category | planner |
+| `listCategories` leaves archived categories out by default (`includeArchived` opt-in), as `listWallets`; `listCategoriesWithUsage`, `getCategory` and both exports include them | Pickers are the common caller; history, reports and exports must keep everything | built |
+| Archived categories are listed after the add row of their kind's card, under "Archived · N", and still count in the spending split | The page stays one list per kind; a month's spending in an archived category is still spending | built |
+| Archive / Unarchive have no confirm | One click undoes it and nothing is lost | built |
+| An archived category is not offered, nor accepted, as a removal's replacement | Moving entries into it would be new activity on an archived category | built |
+| Removing a used category can move its entries to a new category named in the removal form (create + move + delete in one DB transaction); the new name wins if both a name and an existing replacement are sent | Removes the dead end of the only category of its kind; the form only ever sends one of them | planner |
+| The new replacement may not reuse the removed category's own name (ignoring case) | It is created before the old one is deleted; renaming is the way to keep the name | built |
+| The backup carries `archived` per category (always written, optional on read, version stays 1); an import restores it on categories it creates and treats existing archived categories like archived wallets (new entries are a problem, duplicates skip) | Same contract as archived wallets; old backups keep importing (as active) | planner |
+| The "Top category" (Overview insight card) is ranked in JS by one function, `pickTopCategory` (amount, then the lower-cased name by UTF-16 code units, then id), in both the per-currency and the converted view | The SQL `lower()` order depends on the database collation and `localeCompare` on the locale, so the two views could name different categories on a tie | planner |
 
 ### Import and export
 
@@ -390,9 +408,9 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - **Conversion is only on Overview.** The Transactions strip, Categories and wallet pages stay per currency. The
   Overview Wallets card uses today's balances and the latest rates also for a past month.
-- **"Top category" in the converted view breaks ties by lower-cased name in JavaScript**, not SQLite's `nocase` (the SQLite era; see below);
-  the two can differ for non-ASCII names. (The SQL ordering that used `collate nocase` is now `lower(x)` on Postgres,
-  whose result also depends on the database's collation for non-ASCII names.)
+- **Category lists are ordered by SQL `lower(name)`**, whose order for non-ASCII names depends on the database's
+  collation. (The Overview's "Top category" tie-break no longer does: since 2026-11-18 both its views use
+  `pickTopCategory` in JS.)
 - **Frankfurter quotes about 30 currencies (the ECB list).** Wallets in other currencies (e.g. KWD) are left out of
   the converted figures with a note. There is no second provider and no way to enter a rate by hand.
 - **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
@@ -406,7 +424,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   show two entries for one mistake.
 - **Importing the same Spendee files from a browser in another time zone** can shift entries near midnight to a
   different date, so they would not be recognised as duplicates.
-- **A category's kind cannot be changed**, and categories cannot be archived.
+- **The context export does not flag archived categories**, so the Statement Importer can still suggest one; the
+  CSV import then reports those rows as a problem ("archived in your account"). Adding `archived` to the context's
+  categories and dropping them in the artifact is left for the artifact's next change.
+- **A CSV cannot archive a category**, and the import preview does not say that a category it creates from a
+  backup will be archived (the service returns `archived: true` on that entry; `import-preview.tsx` ignores it).
 - **A CSV cannot carry initial balances or archived state**; wallets it creates start at zero.
 - **Wallet groups have no archive state, no ordering and no colour**; they are listed by name.
 - **The context export (Statement Importer) and the transactions CSV carry no group.** The CSV can be narrowed by
@@ -421,7 +443,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   `docs/SPEC.md`, which is written as a build contract rather than a user guide.
 - "Manage categories" in the transaction form navigates away and loses what was typed.
 - Switching the form between Transfer and Expense/Income clears a typed amount.
-- If a category is the only one of its kind and has transactions, another must be created before it can be removed.
+- After a kind change the row moves to the other kind's card, but focus and the announcement stay with the card it
+  left (its heading).
 - Without JavaScript, an empty note search on /transactions leaves `q=` in the URL (harmless); with it the URL is
   clean. The filter chips themselves need JavaScript (popovers); without it only the search, the day-strip links,
   pagination and the per-row edit links work.
@@ -433,7 +456,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - The name-length message says "under 40 characters" although exactly 40 is allowed (wallet and category names;
   first name / surname now say "80 characters or fewer").
 - An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
-- A wallet restored as archived from a backup is marked archived as of the import, not its original date.
+- A wallet or category restored as archived from a backup is marked archived as of the import, not its original
+  date.
 - If the account changes between an import's preview and its confirmation, the confirmed numbers can differ from
   the preview (the confirmation re-validates and reports what it actually did).
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
@@ -479,6 +503,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   when it does).
 
 ### Not verified
+
+- **Category kind change, archive and removal into a new category (2026-11-18) are covered by service and render
+  tests only.** Not yet tried in a browser: the row leaving its list and focus landing on the heading after a kind
+  change or (un)archive, the controlled replacement select keeping "A new … category" (and its name field) after a
+  refused removal, the entry form and the inline row editors showing "Food (archived)" for an entry that has an
+  archived category, and the page at 375px with the extra controls. The `FOR UPDATE` / `FOR SHARE` pair was not
+  exercised with two real concurrent connections (PGlite runs one).
 
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking

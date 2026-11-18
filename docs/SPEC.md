@@ -71,16 +71,23 @@ this file in the same change and call the deviation out in your final report.
   history stays visible). A wallet with no transactions can be deleted.
 - **Category** ("transaction type"): per user, has a `kind` (`expense` | `income`). Seeded on registration:
   expense → Food, Groceries, Bills, Transport, Housing; income → Salary, Refund, Extra Income.
-  The defaults are only a starting point: users add, rename and remove categories freely at `/categories`,
+  The defaults are only a starting point: users add, rename, archive and remove categories freely at `/categories`,
   and a seeded category is no different from one the user created.
   - Name: trimmed, inner whitespace collapsed, 1–40 characters, unique per user and kind **ignoring case**
     (compare case-folded in the service; the DB index stays as it is — no migration).
-  - `kind` is fixed at creation (changing it would invalidate the category's transactions).
+  - `kind` can be switched (expense ↔ income) **only while no transaction uses the category**; with transactions
+    the change is refused with the reason (it would turn those expenses into income, or the other way round). The
+    name must be free in the new kind.
+  - A category can be **archived** (and unarchived): it is hidden from the entry form's pickers and takes no new
+    entries — except that an entry which already uses it keeps it (shown, selected, "(archived)") when edited, as
+    with archived wallets. Its entries stay everywhere else: reports, Overview, the Categories page (under
+    "Archived"), history filters, and both exports. An archived category can still be renamed and removed.
   - Removing an **unused** category deletes it. Removing a category **with transactions** requires a
-    replacement category of the same kind: its transactions are moved there and the category is deleted, in one
-    DB transaction. There is no archive / hidden state for categories. If no other category of that kind
-    exists, the user is told to create one first.
-  - A user may end up with no categories of a kind; the transaction form then shows an empty state linking to
+    replacement of the same kind: an existing **active** category, or a **new** one named in the removal form;
+    the new category (if any) is created, the transactions are moved there and the old category is deleted, in
+    one DB transaction. So the only category of its kind can always be removed (into a new one), or archived
+    instead.
+  - A user may end up with no (active) categories of a kind; the transaction form then shows an empty state linking to
     `/categories` instead of an empty picker.
 - **Transaction**: wallet, kind, category (kind must match), positive amount in the wallet's currency,
   calendar date (`YYYY-MM-DD` string, no time zone), optional note.
@@ -109,7 +116,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 | `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
 | `wallet_groups` | `id`, `userId` → users (cascade), `name`, `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
 | `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
-| `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `createdAt`; unique (`userId`, `kind`, `name`) |
+| `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `archivedAt` (nullable, added by `0001_categories_archive`), `createdAt`; unique (`userId`, `kind`, `name`) |
 | `transfers` | `id`, `userId` → users (cascade), `date`, `note` (nullable), `createdAt` |
 | `transactions` | `id`, `userId` → users (cascade), `walletId` → wallets (restrict), `kind` (`expense`\|`income`\|`transfer_out`\|`transfer_in`), `categoryId` → categories (restrict, null for transfer legs), `amountMinor` (int > 0), `date` (`YYYY-MM-DD`), `note` (nullable), `transferId` → transfers (cascade, null for non-transfers), `createdAt`; indexes on (`userId`, `date`), (`walletId`, `date`), (`transferId`) |
 
@@ -304,20 +311,30 @@ archiveWallet(userId, walletId): WalletView / unarchiveWallet(userId, walletId):
 deleteWallet(userId, walletId): void                                           // CONFLICT if it has transactions
 
 // categories.ts
-type CategoryView = { id; name; kind: 'expense' | 'income' }
-listCategories(userId, kind?): CategoryView[]                                  // kind asc (expense first), then name (case-insensitive)
-getCategory(userId, categoryId): CategoryView | null
+type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null }
+listCategories(userId, kind?, opts?: { includeArchived?: boolean }): CategoryView[]   // archived excluded by default; kind asc (expense first), active before archived, then name (case-insensitive)
+getCategory(userId, categoryId): CategoryView | null                           // archived included
 seedDefaultCategories(userId, tx?)                                             // called inside registration's DB transaction; idempotent
 DEFAULT_CATEGORIES: Record<'expense' | 'income', string[]>
 type CategoryWithUsage = CategoryView & { transactionCount: number }
-listCategoriesWithUsage(userId): CategoryWithUsage[]                           // same order as listCategories
+listCategoriesWithUsage(userId, opts?): CategoryWithMonthUsage[]               // archived included; same order as listCategories
 createCategory(userId, { name, kind }): CategoryView                           // VALIDATION (field name | kind), CONFLICT (field name) on duplicate
 renameCategory(userId, categoryId, { name }): CategoryView                     // NOT_FOUND; same rules; changing only the letter case of its own name is allowed
-deleteCategory(userId, categoryId, opts?: { moveToCategoryId?: number }): { movedTransactions: number }
-// deleteCategory: NOT_FOUND if not owned. Unused → deleted (moveToCategoryId ignored). In use and no
-// moveToCategoryId → CONFLICT (field moveToCategoryId) naming the transaction count. moveToCategoryId must be a
-// different category owned by the same user with the same kind, else VALIDATION (field moveToCategoryId).
-// The re-pointing of transactions and the delete happen in one DB transaction.
+changeCategoryKind(userId, categoryId, { kind }): CategoryView                 // NOT_FOUND; same kind → no-op; in use → CONFLICT (field kind);
+                                                                               // name taken in the new kind → CONFLICT (field kind); the category row is locked
+                                                                               // FOR UPDATE and createTransaction reads it FOR SHARE, so no entry slips in between
+archiveCategory(userId, categoryId): CategoryView / unarchiveCategory(userId, categoryId): CategoryView   // NOT_FOUND; idempotent (first archive date kept)
+deleteCategory(userId, categoryId, opts?: { moveToCategoryId?: number | null; moveToNewCategoryName?: string | null }):
+  { movedTransactions: number; movedTo: CategoryView | null }
+// deleteCategory: NOT_FOUND if not owned. Unused → deleted (both options ignored, nothing created). In use:
+// - moveToNewCategoryName (a string; wins over moveToCategoryId) → a new category of the same kind, same name rules
+//   as createCategory, errors on field moveToNewCategoryName (VALIDATION, or CONFLICT when the name is taken —
+//   including by the category being removed);
+// - else moveToCategoryId → a different, owned, active category of the same kind, else VALIDATION (field
+//   moveToCategoryId; an archived one: "… is archived. Choose an active category, or unarchive it first.");
+// - neither → CONFLICT naming the transaction count, field moveToCategoryId — or moveToNewCategoryName when no other
+//   active category of that kind exists (the message suggests a new category or archiving).
+// Creating the new category, re-pointing the transactions and the delete happen in one DB transaction.
 
 // transactions.ts
 type TransactionView = {
@@ -341,7 +358,8 @@ updateTransaction(userId, id, TransactionInput): TransactionView   // rejects tr
 deleteTransaction(userId, id): void                                // rejects transfer legs (VALIDATION)
 // Rules: wallet owned (NOT_FOUND) and not archived (VALIDATION) — except that an existing transaction may stay on the
 // archived wallet it already belongs to when edited; category owned (NOT_FOUND) with kind === transaction kind
-// (VALIDATION, field categoryId); amountMinor safe integer > 0; valid date; note trimmed, ≤ 500 chars, '' → null.
+// (VALIDATION, field categoryId) and not archived (VALIDATION, field categoryId) — except that an existing
+// transaction may keep the archived category it already has when edited; amountMinor safe integer > 0; valid date; note trimmed, ≤ 500 chars, '' → null.
 
 // transfers.ts
 type TransferView = { id; date; note; from: { walletId; walletName; currency; amountMinor }; to: { walletId; walletName; currency; amountMinor } }
@@ -388,8 +406,10 @@ getMonthTimeline(userId, { month; currency; walletId?; categoryId? }): {    // w
 }
 getMonthInsights(userId, { month; currency }): {
   incomeMinor; expenseMinor; netMinor;          // the whole month (future-dated entries included)
-  topCategory: { categoryId; categoryName; amountMinor; sharePercent } | null;   // largest expense category (then by
-                                                // name); sharePercent rounded to a whole percent; null without expenses
+  topCategory: { categoryId; categoryName; amountMinor; sharePercent } | null;   // largest expense category; ties by
+                                                // pickTopCategory (lower-cased name by code units, then id — one rule
+                                                // for both views, in JS); sharePercent rounded to a whole percent;
+                                                // null without expenses
   pace: { day: number; thisMonthMinor; previousMonthMinor };   // day = N; cumulative expenses through day N vs through
                                                               // min(N, previous month's length) of the previous month
   noSpendDays: { days; outOf; previousDays; previousOutOf };   // days 1..N with no expense in this currency (outOf = N);
@@ -965,7 +985,10 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
     `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then "Manage categories" as a dashed pill
     after the pills (so Tab reaches it after the group). Wallet: `PillPicker name="walletId"` of the active wallets
-    plus an archived one the entry already uses ("Old card (archived)"). Transfer: From → To selects (the arrow
+    plus an archived one the entry already uses ("Old card (archived)"); categories likewise — the active ones plus an
+    archived one the edited entry already has, named "Food (archived)" (`categoryOptions(userId, keepIds)` /
+    `toCategoryOptions` in `transactions/form-options.ts`; `CategoryOption.archived`; the inline row editors get
+    every category and `InlineEditPanel` keeps only its own entry's archived one). Transfer: From → To selects (the arrow
     from `sm` up), Sent and Received side by side from `sm`, stacked below it, the no-rate line under them. Date:
     "Today" and "Yesterday" are `aria-pressed` buttons in a `role="group"` labelled "Date", followed by the
     `DatePicker` (controlled, owns `<input type="hidden" name="date">`) drawn as a third pill: "Other date" with a
@@ -981,6 +1004,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   are removed after a confirmation; used ones need the "moving its N transactions to <select>" choice first, as now.
   Each list ends with a dashed "+ New expense/income category" input + Add. Errors and focus handling as before
   (inline next to the control; focus to the section heading after a removal; a `role="status"` announcement).
+  Since the category gap work (2026-11-18) the open row also changes the kind (unused categories only), archives /
+  unarchives, and removes a used category into a new one; archived categories are listed under "Archived" in their
+  kind's card (see "Open row" and "Archived" below).
   - As built (step 7; `categories/page.tsx`, `components/categories/{category-section,category-row,spending-split}.tsx`,
     `lib/category-split.ts`):
     - **Month and currency**: `?month=` as on the Overview (invalid → the current month, a future month → the current
@@ -999,21 +1025,38 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       gaps, one `rounded-[5px]` segment per category with `flex-grow` = its amount and a 4px minimum width,
       `aria-hidden`; the legend (`<ul>`, wrapping) carries the same data as text. Empty: "Nothing spent in August 2026
       in EUR."
-    - **Lists**: one `<section>` card per kind — `<h2 tabIndex=-1>` "Expense · 5 categories", a visible
-      `role="status"` line under it — each its own `ExpandableList` (one open row per list). Row summary: a 10px
+    - **Lists**: one `<section>` card per kind — `<h2 tabIndex=-1>` "Expense · 5 categories" (active ones), a visible
+      `role="status"` line under it — each its own `ExpandableList` (one open row per card, archived rows included).
+      With only archived categories the empty line reads "No active expense categories. Add one below …". Row summary: a 10px
       swatch (expense: its ramp colour from the split via `rowShare`, so the colour follows the amount rank, not the
       row order; an expense with nothing this month: a hollow `--border-strong` ring; income: `bg-income`), **name**
       and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
       only, `w-12` / `sm:w-20`, `h-1.5`, `aria-hidden`, with ", N% of the month's spending" as visually hidden text
       after the amount) and the amount (income in `text-income`, unsigned; "—" muted, read as "nothing in EUR").
-    - **Open row** (`CategoryPanel`, region "Rename or remove Food"): "New name for “Food”" + the input (focused and
-      selected on open, accent border) + Rename (primary) + Cancel; under a divider the remove flow: unused →
-      "Remove Food" (ghost button in `--danger`, `confirm()`); used → "Remove, moving its N transactions to" + the
-      select of the list's other categories + "Remove Food" (no confirm, as before); the only category of its kind
-      with transactions → the explanation instead. A rename closes the row (focus back to its button) and announces
-      in the section's status line; a removal closes it without restoring focus, focuses the section heading and
-      announces. If an "unused" category gained transactions meanwhile, the refusal shows above the replacement
-      select that now replaces the button (the action revalidates), and the select takes focus.
+    - **Open row** (`CategoryPanel`, region "Edit Food"): "New name for “Food”" + the input (focused and
+      selected on open, accent border) + Rename (primary) + Cancel. Under a divider:
+      - **Kind**: unused → "Make it an income category" (secondary pill; a hidden `kind` field with the other kind,
+        `changeCategoryKindAction`, no confirm); used → the muted line "Used by N transactions, so it stays an expense
+        category: changing it would turn those entries into income." A refusal (it gained entries meanwhile, or the
+        name is taken in the other kind) shows as an alert there.
+      - **Archive**: "Archive" (secondary pill, no confirm — one click undoes it) with "Hides it from the entry form;
+        its entries stay in reports and history."; archived → "Unarchive" with "Archived: hidden from the entry
+        form. …" (`setCategoryArchivedAction(id, archived)`).
+      Under another divider the remove flow: unused → "Remove Food" (ghost button in `--danger`, `confirm()`); used
+      → "Remove, moving its N transactions to" + a select of the card's other **active** categories plus "A new
+      expense category…" (`value="new"`), which shows "Name of the new expense category" (`moveToNewCategoryName`)
+      + "Remove Food" (no confirm, as before); no other active category of its kind → only the name field, labelled
+      "Remove, moving its N transactions to a new expense category named". For an active category a muted line adds
+      "(It is your only active expense category.) To keep its entries where they are, archive it instead." The
+      action reads `parseReplacement` (select "new" or no select → the name). A rename closes the row (focus back to
+      its button) and announces in the section's status line; a removal, a kind change and (un)archiving move the
+      row out of its list, so they close it without restoring focus, focus the section heading and announce
+      ("Archived “Food”.", "“Food” is now an income category.", "Removed “Food” and moved 3 transactions to the new
+      category “Meals”."). If an "unused" category gained transactions meanwhile, the refusal shows above the
+      replacement form that now replaces the button (the action revalidates), and its field takes focus.
+    - **Archived**: after the add row, when the kind has any, a muted `<h3>` "Archived · 2 categories" with "Hidden
+      from the entry form; their entries stay in reports and history." and the archived rows (same summary, month
+      figures and swatches as active ones; they still count in the split card).
     - **Add row**: a visually hidden label "New expense category", a dashed input with the placeholder "+ New expense
       category" and "Add" (secondary pill); errors and focus as before. The rows' old Rename / Remove buttons are
       gone; `category-row.tsx` holds the row summary and the open-row forms.
@@ -1041,7 +1084,8 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 - **Backup (JSON)** — the whole account, lossless: `{ app: "expenses-tracker", version: 1, exportedAt, wallets[],
   categories[], transactions[], transfers[] }`. Wallets carry name, currency, initial balance and archived flag;
   an optional `group` (the wallet group's name; absent in files written before wallet groups, and the version stays
-  1); categories name + kind; transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
+  1); categories name + kind and an optional `archived` flag (written since 2026-11-18, always as `true` / `false`;
+  absent in older files, which import as active; the version stays 1); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
@@ -1065,7 +1109,8 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   `/api/export/transactions` still exports everything.
 - `GET /api/export/context` → `expenses-tracker-context-YYYY-MM-DD.json`: the account's **wallets and
   categories only** — `{ app: "expenses-tracker", kind: "context", version: 1, exportedAt, wallets: [{ name,
-  currency, archived }], categories: [{ name, kind }] }` — small and free of transactions, so it can be handed
+  currency, archived }], categories: [{ name, kind }] }` (archived categories included, unflagged — see DECISIONS
+  "Known gaps") — small and free of transactions, so it can be handed
   to companion tools (the Statement Importer artifact) that need to know the user's wallets and categories
   without receiving their history. Same auth and headers as the other exports. The `/data` page offers it as a
   third download, "Wallets & categories (JSON)", with one sentence saying what it is for, next to a "Copy to clipboard"
@@ -1091,7 +1136,9 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
     state are left untouched. The same name with a different currency is a different wallet.
   - A wallet that an import creates goes into the target group (see "Wallet groups"); a backup's `group` names its
     group instead (created when missing).
-  - Categories are matched by kind + name (ignoring case); missing ones are created.
+  - Categories are matched by kind + name (ignoring case); missing ones are created (from a backup with its
+    archived flag; the preview's `categoriesToCreate` entry then carries `archived: true`). An existing category's
+    archived state is left untouched.
   - **Duplicates are skipped by default** (checkbox "Skip transactions that already exist", on): entries are
     compared on (wallet, kind, category, date, amount, note) — transfers on (from, to, date, both amounts, note) —
     as a multiset: if the file has 3 identical entries and the account already has 1, 2 are added. Importing the
@@ -1363,6 +1410,12 @@ type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; dat
     Entries on it that are duplicates are skipped silently, so re-importing an export of an account with archived
     wallets still works and adds nothing. A wallet the import *creates* from a backup with `archived: true` gets its
     history inserted and is then archived — a restore, not new activity.
+  - **Archived categories** follow the same rule: a new entry for a category that is archived in the account (backup,
+    CSV or Spendee) is a problem at its line / path ("Category “Bills” (expense) is archived in your account, so
+    nothing new can be added to it. Unarchive it first, or remove these rows."); duplicates are skipped silently;
+    a category the import creates from a backup with `archived: true` gets its history and is archived. When the
+    wallet is archived too, only the wallet problem is reported for that entry. Two backup categories merged by case
+    are archived only if both are.
   - **Same-named wallets**: in a backup, the k-th file wallet with a given name + currency matches the k-th such
     wallet in the account (by id), so two "Cash · EUR" wallets survive a round trip. In a CSV a wallet *is* its name
     + currency: rows go to the matching active wallet (else the oldest archived one), and duplicate detection treats
