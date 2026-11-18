@@ -12,6 +12,7 @@ import {
   type ImportPreview,
   type ImportResult,
 } from "@/server/import";
+import { expandUploads } from "@/server/import-upload";
 
 /**
  * What the /data import panel shows. `error` is a request-level failure (no file, too large, too many); problems
@@ -45,10 +46,15 @@ async function readUpload(
     };
   }
   if (uploads.length === 1 && uploads[0].size === 0) return { ok: false, error: "The file is empty." };
+  // Zips (Spendee's per-wallet CSVs packed together) are unpacked here; the unpacked size has the same limit.
+  const expanded = expandUploads(
+    await Promise.all(uploads.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))),
+  );
+  if (!expanded.ok) return { ok: false, error: expanded.error };
   const timeZone = formData.get("timeZone");
   return {
     ok: true,
-    files: await Promise.all(uploads.map(async (f) => ({ name: f.name, text: await f.text() }))),
+    files: expanded.files,
     opts: {
       // Checkbox semantics: on unless explicitly turned off.
       skipDuplicates: formData.get("skipDuplicates") !== "off",

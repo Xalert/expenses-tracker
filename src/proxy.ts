@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { IMPORT_MAX_REQUEST_BYTES, IMPORT_TOO_LARGE_MESSAGE } from "@/lib/constants";
 import { HOST_MISMATCH_MESSAGE, hostMismatch, hostMismatchLogLine } from "@/lib/origin-check";
 
 /**
@@ -9,6 +10,11 @@ import { HOST_MISMATCH_MESSAGE, hostMismatch, hostMismatchLogLine } from "@/lib/
  * - a fetch action from a hydrated page (`Next-Action` header): 403 `text/plain` with HOST_MISMATCH_MESSAGE, which
  *   the Next.js client throws as the error's message; `src/app/error.tsx` shows it;
  * - a plain form post (no JavaScript yet): 403 with a small HTML page saying the same.
+ *
+ * Second, an import upload (a Server Action POST to /data) larger than the Server Action body limit: Next.js would refuse
+ * it with an error the browser only sees as "An unexpected response was received from the server"; answering it
+ * here with a 413 and a `text/plain` body makes the client throw an Error carrying IMPORT_TOO_LARGE_MESSAGE, which
+ * the import panel shows. Requests without a Content-Length fall through to Next.js's own limit.
  *
  * Nothing else is touched: other methods and requests that pass the check go on unchanged (Next.js still runs its
  * own check). Not an auth layer — every action still calls requireUser().
@@ -21,13 +27,24 @@ export function proxy(request: NextRequest) {
   if (!isFetchAction && !isFormPost) return NextResponse.next();
 
   const mismatch = hostMismatch(request.headers);
-  if (!mismatch) return NextResponse.next();
+  if (!mismatch) return tooLargeImport(request) ?? NextResponse.next();
 
   console.error(hostMismatchLogLine(mismatch, request.nextUrl.pathname));
   if (isFetchAction) {
     return new NextResponse(HOST_MISMATCH_MESSAGE, { status: 403, headers: { "content-type": "text/plain" } });
   }
   return new NextResponse(errorPage(), { status: 403, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+/** The import upload's size answer (see above), or null. */
+function tooLargeImport(request: NextRequest): NextResponse | null {
+  if (request.nextUrl.pathname !== "/data" || !request.headers.has("next-action")) return null;
+  const length = Number(request.headers.get("content-length") ?? "");
+  if (!Number.isFinite(length) || length <= IMPORT_MAX_REQUEST_BYTES) return null;
+  return new NextResponse(IMPORT_TOO_LARGE_MESSAGE, {
+    status: 413,
+    headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" },
+  });
 }
 
 /** A self-contained page (no app CSS reaches a proxy response): the Sand / Graphite background and text colours. */

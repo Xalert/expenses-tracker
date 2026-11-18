@@ -1247,17 +1247,23 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 - **Backup (JSON)** — the whole account, lossless: `{ app: "expenses-tracker", version: 1, exportedAt, wallets[],
   categories[], transactions[], transfers[] }`. Wallets carry name, currency, initial balance and archived flag;
   an optional `group` (the wallet group's name; absent in files written before wallet groups, and the version stays
-  1); an optional top-level `groups[]` (name, colour, archived flag, in display order; absent in older files — see
+  1) and an optional `archivedAt` (ISO timestamp of when an archived wallet was archived; restored on import, absent
+  in older files, which then archive as of the import); an optional top-level `groups[]` (name, colour, archived flag, in display order; absent in older files — see
   "Wallet groups"); categories name + kind and an optional `archived` flag (written since 2026-11-18, always as `true` / `false`;
   absent in older files, which import as active; the version stays 1); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
-  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount`.
-  `type` is `expense` | `income` | `transfer`; `amount` is positive, plain decimal with a dot, no thousands
+  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived`.
+  `type` is `expense` | `income` | `transfer` | `wallet`; `amount` is positive, plain decimal with a dot, no thousands
   separator, in the wallet's currency; a transfer is **one** row (`wallet` → `to_wallet`, `to_amount` = amount
-  received). RFC 4180 quoting, UTF-8 with BOM (so Excel opens it correctly), CRLF line endings, ISO dates.
+  received). `group` (optional) names the group of the row's `wallet`.
+  **Wallet rows** (`type` = `wallet`, written first by the export) describe a wallet: `wallet`, `currency`, `amount` =
+  its initial balance (may be negative; empty = 0), `group`, `archived` = the date it was archived (`YYYY-MM-DD` or
+  `DD.MM.YYYY`, empty = active); `date` is ignored and `category`, `note`, `to_*` must be empty. `group` and
+  `archived` are optional columns, so files from before they existed import unchanged (an older app rejects a file
+  with wallet rows: "not a type"). RFC 4180 quoting, UTF-8 with BOM (so Excel opens it correctly), CRLF line endings, ISO dates.
   Text cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` on export (spreadsheet formula
   injection) and that prefix is removed again on import, so export → import round-trips exactly.
 
@@ -1267,13 +1273,19 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   Both require a session (401 otherwise — route handlers are not covered by the `(app)` layout), are scoped to
   the signed-in user, and answer with `Content-Disposition: attachment` and `Cache-Control: no-store`.
 - The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category, from, to,
-  q) and `group` (a wallet group id, ignored when `wallet` is given; the CSV itself has no group column) and exports **all** matching rows (no pagination). `/transactions` gets an "Export CSV" action that carries
+  q) and `group` (a wallet group id, ignored when `wallet` is given) and exports **all** matching rows (no pagination). It
+  starts with one wallet row per name + currency for every wallet the exported rows use and, when no filter other than
+  `wallet` / `group` is given, for every wallet in that scope (unused ones too). Same-named wallets of one currency
+  share one wallet row (a CSV merges them): initial balances summed, archived only when all are (latest date), the
+  group of the wallet an import would send rows to (oldest active, else oldest); every row's `group` cell uses that
+  group too. `/transactions` gets an "Export CSV" action that carries
   its current filters. Since step 4 it also takes `month=YYYY-MM`; unlike the list, a missing `month` (or
   `month=all`) means all time, so the list's link always writes out the month it shows (`exportCsvHref`) and a bare
   `/api/export/transactions` still exports everything.
 - `GET /api/export/context` → `expenses-tracker-context-YYYY-MM-DD.json`: the account's **wallets and
   categories only** — `{ app: "expenses-tracker", kind: "context", version: 1, exportedAt, wallets: [{ name,
-  currency, archived }], categories: [{ name, kind }] }` (archived categories included, unflagged — see DECISIONS
+  currency, archived, group }], categories: [{ name, kind }] }` (`group`, the wallet group's name, was added later and
+  is optional in the schema; the version stays 1; archived categories are included, unflagged — see DECISIONS
   "Known gaps") — small and free of transactions, so it can be handed
   to companion tools (the Statement Importer artifact) that need to know the user's wallets and categories
   without receiving their history. Same auth and headers as the other exports. The `/data` page offers it as a
@@ -1287,19 +1299,26 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 ### Import
 
 - Accepts a backup JSON or a transactions CSV (detected from content, not the file name), or several files at once
-  (see "Importing several files at once"). Limits: 5 MB and 50 000 rows (for the whole selection); raise the Server Action / request body limit accordingly and reject anything larger with a clear
-  message.
+  (see "Importing several files at once"), or a .zip of such files (see below). Limits: 5 MB and 50 000 rows (for the
+  whole selection, unpacked); raise the Server Action / request body limit accordingly and reject anything larger with
+  a clear message.
 - CSV reading is tolerant of what spreadsheets do to files: optional BOM, `,` / `;` / tab delimiter (auto-detected
   from the header line), CRLF or LF, quoted cells with embedded newlines, header names case-insensitive and in
-  any order, unknown columns ignored, blank lines skipped. Amounts go through `parseAmount` with the wallet's
+  any order, unknown columns ignored, blank lines skipped. Broken quoting (a quote never closed, text after a closing
+  quote) is a problem at that line; the reader then drops that record and resyncs on the next physical line, so the
+  rows after it are still checked and every problem shows in one preview (a broken header stops there). Amounts go through `parseAmount` with the wallet's
   currency (so `12,50` works and too many decimals is an error). Dates: `YYYY-MM-DD` or `DD.MM.YYYY`; anything
   else (e.g. slashes, which are ambiguous) is an error that says which formats are accepted.
 - **Import always adds to the current account; it never deletes or overwrites.**
-  - Wallets are matched by name + currency (ignoring case); a missing wallet is created (CSV: initial balance 0;
-    backup: the file's initial balance and archived flag). An existing wallet's name, initial balance and archived
-    state are left untouched. The same name with a different currency is a different wallet.
-  - A wallet that an import creates goes into the target group (see "Wallet groups"); a backup's `group` names its
-    group instead (created when missing).
+  - Wallets are matched by name + currency (ignoring case); a missing wallet is created (CSV: its wallet row's initial
+    balance and archived date, else 0 and active; backup: the file's initial balance, archived flag and `archivedAt`).
+    An existing wallet's name, initial balance, archived state and group are left untouched (its wallet row and
+    `group` cells are ignored). The same name with a different currency is a different wallet.
+  - A wallet that an import creates goes into the target group (see "Wallet groups"); a backup's `group`, or the CSV
+    `group` of its rows, names its group instead (matched ignoring case, created when missing). In a CSV a wallet has
+    one group: a second, different `group` for the same wallet is a problem at that line; so is a second wallet row
+    for it. Across the files of one selection, wallet rows / groups are merged; two files that disagree are a problem
+    at the later one.
   - Categories are matched by kind + name (ignoring case); missing ones are created (from a backup with its
     archived flag; the preview's `categoriesToCreate` entry then carries `archived: true`). An existing category's
     archived state is left untouched.
@@ -1312,7 +1331,10 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   and transfers to add, duplicates skipped, wallets and categories that will be created, and every problem with
   its line number (CSV) or path (JSON) — show the first 50 and the total. If there is any problem, nothing can be
   imported: the user fixes the file and tries again. Confirm re-runs the same validation server-side (the preview
-  result is never trusted) and writes everything in **one DB transaction** — all or nothing.
+  result is never trusted) and writes everything in **one DB transaction** — all or nothing. When the account
+  changed in between, the confirmation says so explicitly: the panel compares the confirmed counts with the preview
+  it showed (transactions, transfers, duplicates, new wallets / groups / categories) and lists each number that
+  differs ("11 transactions (preview: 12)"), or that problems appeared that the preview did not have.
 - The file is untrusted input: validate with zod, cap sizes and string lengths with the same rules as the
   services (names, notes, amounts > 0, safe integers, valid ISO currencies, kind/category match, from ≠ to,
   cross-currency transfers need a received amount), ignore unknown fields, reject unknown `version`s.
@@ -1382,7 +1404,9 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
   user's time zone and that local calendar date is used (an entry made at 00:30 local time must not land on the
   previous day, or the previous month). The browser sends its IANA time zone with the upload; if it is missing or
   invalid, UTC is used. A timestamp without an offset (the older dialect) is still taken as written. The preview
-  carries a notice naming the time zone used.
+  carries a notice naming the time zone used. *(2026-11-18: taking the date as written in the file — UTC — was tried
+  and reverted: it moved entries made just after local midnight to the previous day. Re-imports from a browser in
+  another zone are the remaining gap; a per-account time zone is the planned fix.)*
 - `Amount` has 8 decimals; trailing zeros are not "rounding". Genuinely over-precise amounts (currency
   conversions) are rounded as before, with the notice.
 - `Labels`: this app has no labels. They are kept by appending them to the note (`note · labels`, or just the
@@ -1411,6 +1435,16 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
 - A selection may mix native CSVs and provider CSVs. A **backup must be imported on its own** (its wallets are
   identified by position, which cannot be merged with other files); combining it with other files is a problem.
 - Limits apply to the selection as a whole: 5 MB in total, 50 000 rows in total, at most 50 files.
+- **Zip uploads** (added 2026-11-18): a selected file whose content starts with a zip header (`PK\x03\x04`, or
+  `PK\x05\x06` for an empty zip; recognised by content, not name) is unpacked in the action
+  (`expandUploads` in `src/server/import-upload.ts`, with `fflate`) into its `.csv` / `.tsv` / `.txt` / `.json`
+  files, named `archive.zip › path/in/zip.csv` and sorted by path; folders, `__MACOSX/`, dot files, other types and
+  nested zips are skipped. The zip itself counts towards the 5 MB upload limit, and its unpacked files count towards
+  the same 5 MB (checked against the sizes the zip declares before inflating, so a zip bomb is refused cheaply, then on
+  the inflated data, then by the service on the text) and towards the 50 files. Errors: "The files in “x.zip” are
+  larger than 5 MB in total once unpacked…", "“x.zip” could not be read as a zip file (…)", "“x.zip” contains no CSV
+  or JSON files to import.", "51 files were selected (counting the files inside zips)…". Zips and plain files can be
+  mixed; the unpacked files are one import like any selection.
 - Problems and notices name the file they came from (file name + line) whenever more than one file is selected.
 - The same file selected twice (identical content) is used once, with a notice — otherwise its entries would
   count double inside the multiset duplicate rule.
@@ -1420,10 +1454,11 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
   - Both Spendee dialects accept all four types; `Note` is used when present, else `Notes`; problem messages use the
     column name as written (`Note: …`). A note that exceeds 500 characters only once the labels are added is a
     problem ("… (with the labels added)"). Labels are trimmed with inner whitespace collapsed and kept as written.
-  - Timestamps: `YYYY-MM-DD`, then optionally `[ T]HH:MM[:SS[.fraction]]`, then optionally `Z` or `±HH[:]MM`. The
-    offset is applied and the date read in the zone with `Intl.DateTimeFormat` (`dateInTimeZone`). The zone is
-    validated with `Intl` (`resolveTimeZone`: canonical name, ≤ 100 chars; missing → UTC; invalid → UTC and the
-    notice says the browser's zone was not recognised). Offset-less values keep the written date.
+  - Timestamps: `YYYY-MM-DD`, then optionally `[ T]HH:MM[:SS[.fraction]]`, then optionally `Z` or `±HH[:]MM`. The date
+    is always the written one; with an offset, `shifted` = the instant's date in the browser's zone
+    (`dateInTimeZone`) differs from it (counted for the notice only). The zone is validated with `Intl`
+    (`resolveTimeZone`: canonical name, ≤ 100 chars; missing → UTC; invalid → UTC and the notice says the browser's
+    zone was not recognised).
   - Pairing: the "same note" is the `Note` cell (trimmed) **without labels**; the transfer's note is the outgoing
     row's note + its labels, or + the incoming row's labels when the outgoing row has none. Offset-less times are
     read as written for pairing; a bare date counts as 00:00. The window is inclusive (10 s pairs, 11 s does not).
@@ -1432,6 +1467,11 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
     are all identical (wallet, amount, instant, date, note) pairs them one-to-one in file order; any other group is
     **one** blocking problem listing every row (file, line, amount, wallet) and those rows are not reported again as
     unpaired (the unpaired option does not apply to them).
+  - A transfer row with its own problem (bad amount, sign, date, wallet, note…) is kept aside as a *broken* row
+    (`brokenTransferRows`: direction, wallet key, currency, amount, instant, note — whatever it got right). A row left
+    unpaired that could have paired with a broken row (opposite direction, another wallet, same note, within 10 s,
+    same amount when the currency is the same; unknown fields match anything) is **not** reported or counted as
+    unpaired: one mistake, one problem. Each broken row covers at most one leftover, the closest in time.
   - Unpaired rows (option off): one problem per row, at its file + line, e.g. "Outgoing transfer of 40.00 EUR from
     “Savings” on 2026-08-01 has no matching Incoming Transfer row in another wallet (same note, at most 10 seconds
     apart). Select the other wallet's Spendee export too … or … turn on “Import unpaired transfers as income /
@@ -1491,6 +1531,7 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
 ```ts
 // src/lib/csv.ts (pure)
 parseCsv(text, opts?: { delimiter?; maxRecords? }): { delimiter; records: { line; cells: string[] }[]; errors: { line; message }[] }
+//   (a broken record is left out of `records`; reading resumes on the next physical line)
 detectDelimiter(text) / stripBom(text) / toCsv(rows, opts?: { delimiter?; bom? = true; newline? = "\r\n" })
 escapeFormula(v) / unescapeFormula(v)
 // src/lib/backup-format.ts (pure): BACKUP_APP, BACKUP_VERSION = 1, BACKUP_LIMITS, backupSchema (zod), types Backup…,
@@ -1499,7 +1540,9 @@ escapeFormula(v) / unescapeFormula(v)
 //   fields), types ContextExport, ContextWallet, ContextCategory. Nothing in the app imports a context file yet; the
 //   schema is there so it can be validated the same way when something does.
 // src/lib/constants.ts: IMPORT_MAX_BYTES = 5 MiB, IMPORT_MAX_ROWS = 50 000, IMPORT_MAX_FILES = 50 — all for the whole
-//   selection (shared by the browser check and the server)
+//   selection (shared by the browser check and the server); IMPORT_MAX_REQUEST_BYTES = 6 MiB (= bodySizeLimit),
+//   IMPORT_TOO_LARGE_MESSAGE (src/proxy.ts → the panel)
+// src/server/import-upload.ts: isZip(bytes), expandUploads({ name, bytes }[]) → { ok: true; files: ImportFileInput[] } | { ok: false; error }
 // src/lib/dates.ts: resolveTimeZone(value) → { timeZone /* canonical IANA or "UTC" */; fallback }, dateInTimeZone(instantMs, zone)
 
 // src/server/export.ts
@@ -1518,7 +1561,8 @@ type ImportFileSummary = { name; format: ImportFormatId | null; formatLabel: str
 type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also when files differ */;
   formatLabel: string | null /* "Spendee export"; "Spendee export + Transactions (CSV)" */; files: ImportFileSummary[];
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
-  walletsToCreate: { name; currency; archived }[]; categoriesToCreate: { name; kind }[];
+  walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
+  groupsToCreate: string[]; categoriesToCreate: { name; kind }[];
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview
@@ -1537,7 +1581,9 @@ type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: Wa
   tallies: Map<string, number> /* per-format counters summed over the selection, e.g. "rounded:RON" */ }
 type Loc = { line?; path?; file?; fileIndex? /* internal ordering; stripped before reaching the UI */ }
 type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; date; instant /* ms */; matchKey; note; bareNote; labels; loc }
-// src/server/import-formats/spendee.ts: parseSpendeeTimestamp(value, zone) → { date; instant; converted; shifted } | null,
+type BrokenTransferRow = { direction; walletKey | null; currency | null; amountMinor | null; instant | null; matchKey | null; loc }
+//   ParsedFile.brokenTransferRows; WalletSpec gains archivedAt?, groupLoc?, detailsLoc? (where the file describes it)
+// src/server/import-formats/spendee.ts: parseSpendeeTimestamp(value, zone) → { date /* local date in zone */; instant; converted; shifted /* local date ≠ written date */ } | null,
 //   TRANSFER_PAIR_WINDOW_MS = 10 000, UNPAIRED_TRANSFER_CATEGORY = "Transfer"
 // helpers: readCsvTable (quoting errors, header → column map, missing columns, row limit), cellReader, specBuilder
 //   (walletFor / categoryFor by key), currencyCell, check, normalizeWalletName / normalizeCategoryName
@@ -1567,13 +1613,21 @@ type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; dat
   it is on; toggling it re-runs the preview, choosing other files turns it off.
   `experimental.serverActions.bodySizeLimit = "6mb"` (5 MB of files + multipart overhead; this limit applies to all
   actions). The 5 MB / 50-file caps are checked in the browser, again in the action (`file.size` sum, count) and
-  in the service (UTF-8 byte length), with the same messages.
+  in the service (UTF-8 byte length), with the same messages. A request over the body limit never reaches the action
+  (Next.js refuses it, and the browser only sees "An unexpected response…"), so `src/proxy.ts` (matcher: `/data` with a
+  `next-action` header) answers a POST whose `Content-Length` exceeds `IMPORT_MAX_REQUEST_BYTES` (= the body limit, 6 MiB)
+  with a 413 `text/plain` body `IMPORT_TOO_LARGE_MESSAGE` ("The upload is too large: the selected files can be at most
+  5 MB in total…"); the Next.js client turns exactly that content type into an Error carrying the body, and the panel
+  shows it. Anything else that makes the action call fail shows "The upload failed. Check your connection (and any
+  proxy upload limit)…". The panel's file input accepts `.zip` too, and the "What can be imported" disclosure links
+  to the user guide `docs/IMPORTING.md` (on GitHub: the app does not serve its docs).
 - Rules settled while building:
   - **Archived wallets**: an import never adds a *new* entry to a wallet that is archived in the account (backup or
     CSV, either side of a transfer) — that is a line-numbered problem ("unarchive it first"), mirroring the services.
     Entries on it that are duplicates are skipped silently, so re-importing an export of an account with archived
-    wallets still works and adds nothing. A wallet the import *creates* from a backup with `archived: true` gets its
-    history inserted and is then archived — a restore, not new activity.
+    wallets still works and adds nothing. A wallet the import *creates* from a backup with `archived: true` (or a CSV wallet row with an `archived` date) gets
+    its history inserted and is then archived — a restore, not new activity — on the file's date (`archivedAt` / the
+    CSV date at 00:00 UTC), or as of the import when the backup has no `archivedAt`.
   - **Archived categories** follow the same rule: a new entry for a category that is archived in the account (backup,
     CSV or Spendee) is a problem at its line / path ("Category “Bills” (expense) is archived in your account, so
     nothing new can be added to it. Unarchive it first, or remove these rows."); duplicates are skipped silently;
@@ -1585,13 +1639,14 @@ type TransferLeg = { direction: 'out' | 'in'; wallet; currency; amountMinor; dat
     + currency: rows go to the matching active wallet (else the oldest archived one), and duplicate detection treats
     all same-named wallets of that currency as one, so re-importing the CSV of such an account adds nothing.
   - Categories in a backup that differ only by case are merged into one. Unused categories travel in the backup
-    (they are created), never in the CSV.
+    (they are created), never in the CSV. Unused wallets travel in both (the CSV as wallet rows, in an unfiltered
+    export).
   - Decimal strings in a backup are optional; when present they must parse (`parseAmount`, wallet currency) to the
     minor units, otherwise the file is rejected at that path.
   - Transfers: same currency ⇒ the received amount may be omitted (backup `receivedAmountMinor`, CSV `to_amount`) and,
     if given, must equal the amount sent; different currencies ⇒ required. CSV `to_currency` defaults to `currency`.
     A category on a transfer row is a problem.
-  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount`
+  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount,group,archived`
     optional); `type` and header names are case-insensitive; rows whose cells are all blank are skipped; negative
     amounts are rejected with "amounts are positive; the type says which way the money goes".
   - Formula guard: export prefixes `'` to `wallet`, `category`, `note`, `to_wallet` cells starting with `=`, `+`, `-`,

@@ -3,7 +3,8 @@ import type { CategoryKind } from "@/db/schema";
 import { unescapeFormula } from "@/lib/csv";
 import { isValidDate } from "@/lib/dates";
 import { parseAmount } from "@/lib/money";
-import { normalizeNote } from "../_validate";
+import { normalizeName, normalizeNote } from "../_validate";
+import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
 import {
   amountHint,
   cellReader,
@@ -28,7 +29,9 @@ export const transactionsCsvFormat: ImportFormat = {
 };
 
 const REQUIRED_COLUMNS = ["date", "type", "wallet", "currency", "amount"] as const;
-const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount"] as const;
+const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount", "group", "archived"] as const;
+/** Cells a `wallet` row must leave empty (it describes a wallet, not money moving). */
+const NOT_ON_WALLET_ROWS = ["category", "note", "to_wallet", "to_currency", "to_amount"] as const;
 type Column = (typeof REQUIRED_COLUMNS)[number] | (typeof OPTIONAL_COLUMNS)[number];
 
 /** `YYYY-MM-DD` or `DD.MM.YYYY` (what European spreadsheets write back) → ISO, else null. */
@@ -52,12 +55,70 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
   });
   if (!table) return out;
   const { walletFor, categoryFor } = specBuilder(out);
+  const walletLabel = (i: number) => `“${out.wallets[i].name}” (${out.wallets[i].currency})`;
+
+  /** The `group` cell names the group of the row's wallet (used when the import creates it); one group per wallet. */
+  const setGroup = (wallet: number, group: string | undefined, line: number) => {
+    if (group === undefined) return;
+    const w = out.wallets[wallet];
+    if (w.group === undefined) {
+      w.group = group;
+      w.groupLoc = { line };
+    } else if (w.group.toLowerCase() !== group.toLowerCase()) {
+      out.problems.push({
+        line,
+        message:
+          `group: Wallet ${walletLabel(wallet)} is put in group “${w.group}” on line ${w.groupLoc?.line}; ` +
+          "a wallet can only be in one group.",
+      });
+    }
+  };
 
   for (const { line, cells } of table.rows) {
     const problemsBefore = out.problems.length;
     const problem = (column: string, message: string) => out.problems.push({ line, message: `${column}: ${message}` });
     const get = cellReader(table.col, cells);
     const textCell = (c: Column) => unescapeFormula(get(c));
+    const rawGroup = textCell("group").trim();
+    const group = rawGroup
+      ? check(() => normalizeName(rawGroup, "group", MAX_GROUP_NAME_LENGTH), (m) => problem("group", m))
+      : undefined;
+
+    if (get("type").trim().toLowerCase() === "wallet") {
+      // A wallet row: the wallet's initial balance (`amount`, may be negative or empty = 0), group and archived date.
+      // Only used when the import creates the wallet; the `date` cell is ignored.
+      const walletName = check(() => normalizeWalletName(textCell("wallet")), (m) => problem("wallet", m));
+      const currency = currencyCell(get("currency"), "currency", problem);
+      let initial: number | null = 0;
+      const rawAmount = get("amount").trim();
+      if (rawAmount && currency) {
+        initial = parseAmount(rawAmount, currency, { allowNegative: true });
+        if (initial === null) problem("amount", `“${rawAmount}” is not a valid ${currency} initial balance (${amountHint(currency)}).`);
+      }
+      const rawArchived = get("archived").trim();
+      const archivedOn = rawArchived ? parseImportDate(rawArchived) : null;
+      if (rawArchived && !archivedOn) {
+        problem("archived", `“${rawArchived}” is not a valid date. Use YYYY-MM-DD (2026-03-31) or DD.MM.YYYY, or leave it empty for an active wallet.`);
+      }
+      const filled = NOT_ON_WALLET_ROWS.filter((c) => get(c).trim() !== "");
+      if (filled.length) {
+        problem(filled[0], `A wallet row only describes a wallet; leave ${filled.join(", ")} empty.`);
+      }
+      if (out.problems.length > problemsBefore) continue;
+      const idx = walletFor(walletName!, currency!);
+      const w = out.wallets[idx];
+      if (w.detailsLoc) {
+        problem("wallet", `Wallet ${walletLabel(idx)} is already described on line ${w.detailsLoc.line}.`);
+        continue;
+      }
+      w.initialBalanceMinor = initial!;
+      w.archived = archivedOn !== null;
+      if (archivedOn) w.archivedAt = `${archivedOn}T00:00:00.000Z`;
+      w.detailsLoc = { line };
+      setGroup(idx, group, line);
+      continue;
+    }
+    if (get("archived").trim()) problem("archived", "Only wallet rows (type wallet) can carry an archived date.");
 
     const rawDate = get("date").trim();
     const date = parseImportDate(rawDate);
@@ -73,7 +134,12 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
     const rawType = get("type").trim().toLowerCase();
     const type = rawType === "expense" || rawType === "income" || rawType === "transfer" ? rawType : null;
     if (!type) {
-      problem("type", rawType ? `“${get("type").trim()}” is not a type. Use expense, income or transfer.` : "Required: expense, income or transfer.");
+      problem(
+        "type",
+        rawType
+          ? `“${get("type").trim()}” is not a type. Use expense, income, transfer or wallet.`
+          : "Required: expense, income, transfer or wallet.",
+      );
     }
 
     const walletName = check(() => normalizeWalletName(textCell("wallet")), (m) => problem("wallet", m));
@@ -113,8 +179,10 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
         problem("to_wallet", "A transfer needs two different wallets.");
       }
       if (out.problems.length > problemsBefore) continue;
+      const from = walletFor(walletName!, currency!);
+      setGroup(from, group, line);
       out.transfers.push({
-        from: walletFor(walletName!, currency!),
+        from,
         to: walletFor(toName!, toCurrency!),
         amountMinor: amount!,
         receivedAmountMinor: received!,
@@ -133,9 +201,11 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       );
     }
     if (out.problems.length > problemsBefore) continue;
+    const wallet = walletFor(walletName!, currency!);
+    setGroup(wallet, group, line);
     out.entries.push({
       kind: type as CategoryKind,
-      wallet: walletFor(walletName!, currency!),
+      wallet,
       category: categoryFor(type as CategoryKind, categoryName!),
       amountMinor: amount!,
       date: date!,

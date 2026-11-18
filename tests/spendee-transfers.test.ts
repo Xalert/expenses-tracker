@@ -400,6 +400,33 @@ describe("Spendee transfer pairing", () => {
     const r = await previewImport(alice.id, [f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000")), f("b.csv", joint("2026-08-01T08:00:10+00:00", IN, "5.00000000"))], BXL);
     expect(r).toMatchObject({ ok: true, transfersToAdd: 1 });
   });
+
+  it.each([
+    ["a bad amount", joint("2026-08-01T08:00:01+00:00", IN, "5,00"), /^Amount: /],
+    ["a wrong sign", joint("2026-08-01T08:00:01+00:00", IN, "-5.00000000"), /^Amount: .*is negative/],
+    ["a bad date", joint("2026-08-01 25:00", IN, "5.00000000"), /^Date: /],
+    ["a missing wallet", { ...joint("2026-08-01T08:00:01+00:00", IN, "5.00000000"), wallet: "" }, /^Wallet: Required/],
+    ["a note that is too long", joint("2026-08-01T08:00:01+00:00", IN, "5.00000000", { note: "n".repeat(501) }), /^Note: /],
+  ])("reports one problem when a transfer row's partner has %s, not a second one for the unpaired row", async (_, broken, message) => {
+    const p = await refused([f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000")), f("b.csv", broken)]);
+    expect(p).toMatchObject({ problemCount: 1, unpairedTransfers: 0 });
+    expectProblems(p, [{ file: "b.csv", line: 2, message }]);
+  });
+
+  it("still reports a row as unpaired when the broken row could not have been its partner", async () => {
+    // The broken incoming row is in the same wallet, so it never covers the outgoing one.
+    const p = await refused([
+      f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000"), sav("2026-08-01T08:00:01+00:00", IN, "5,00")),
+    ]);
+    expect(p).toMatchObject({ problemCount: 2, unpairedTransfers: 1 });
+    expectProblems(p, [{ line: 2, message: /has no matching Incoming Transfer/ }, { line: 3, message: /^Amount: / }]);
+    // One broken row covers one leftover only.
+    const q = await refused([
+      f("a.csv", sav("2026-08-01T08:00:00+00:00", OUT, "-5.00000000"), sav("2026-08-01T08:00:02+00:00", OUT, "-5.00000000")),
+      f("b.csv", joint("2026-08-01T08:00:01+00:00", IN, "5,00")),
+    ]);
+    expect(q).toMatchObject({ problemCount: 2, unpairedTransfers: 1 });
+  });
 });
 
 // A three-wallet selection used below: EUR savings, EUR joint, USD; a same-currency and a cross-currency transfer

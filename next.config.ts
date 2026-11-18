@@ -37,6 +37,8 @@ const nextConfig: NextConfig = {
     serverActions: {
       // Import uploads (/data) are capped at 5 MB by the app itself (src/server/import.ts); this leaves room for
       // the multipart overhead. Next's default is 1 MB. A reverse proxy in front needs a matching limit.
+      // Keep equal to IMPORT_MAX_REQUEST_BYTES (src/lib/constants.ts): src/proxy.ts refuses larger /data uploads
+      // with the app's own message first (Next's own refusal reaches the browser as a generic error).
       bodySizeLimit: "6mb",
     },
   },

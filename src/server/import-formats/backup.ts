@@ -101,7 +101,9 @@ function parseBackup(body: string): ParsedFile {
       currency,
       initialBalanceMinor: w.initialBalanceMinor,
       archived: w.archived,
+      ...(w.archived && w.archivedAt ? { archivedAt: new Date(w.archivedAt).toISOString() } : {}),
       ...(group === undefined ? {} : { group }),
+      detailsLoc: { path: p },
       key: walletKey(name, currency),
     });
   });

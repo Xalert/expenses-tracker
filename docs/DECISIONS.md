@@ -152,6 +152,22 @@ Added 2026-11-18 (closing the category gaps):
 | Spendee notices (time zone, labels, rounding, unpaired rows) are counted over the whole selection, not per file; the time-zone notice also says how many entries changed day | Eight near-identical per-file notices would bury the information | built |
 | A file selected twice is detected by identical text and listed as "same as …"; a backup in a selection with other files is refused before any file is parsed | Cheap and exact; parsing the rest would only add noise to a refusal | built |
 | Toggling the unpaired-transfers option re-runs the preview at once; choosing other files resets it to off | The option changes what is imported, so the preview must always match it | built |
+| (2026-11-18) Spendee dates stay in the browser's time zone; taking "the date as written in the file" was built and reverted | Investigated: Spendee writes every time as `+00:00`, so the file has no local zone and "as written" means the UTC date: an entry made just after local midnight east of UTC (the owner is in one) would land on the previous day. Determinism across browsers is not worth that; the real fix is a per-account time zone | planner (finding: built) |
+| The native CSV carries wallet details as **wallet rows** (`type` = `wallet`; `amount` = initial balance, `group`, `archived` date) plus two optional columns `group` and `archived`, rather than per-row initial-balance columns | A wallet's details are said once, not repeated on every entry; old files (no new columns, no wallet rows) import unchanged; the Statement Importer's CSV needs no change. An older app rejects a file with wallet rows ("not a type") — accepted | planner (design: built) |
+| A CSV `group` cell names the group of the row's `wallet` (not `to_wallet`); the receiving wallet's group comes from its own rows or wallet row | One group per wallet, one column; transfers into a new wallet usually also have a wallet row in an export | built |
+| Wallet rows and `group` cells only apply to wallets the import creates; an existing wallet is never changed (its wallet row is ignored, silently) | "Import adds, never changes" | built |
+| A second, different group for one wallet, or a second wallet row for it, is a problem; across the files of one selection the first file's details win and a disagreeing file is a problem | Never guess which one is meant | built |
+| The CSV export writes wallet rows for every wallet the rows use, and for every wallet in scope (unused ones too) when no filter other than wallet / group is set; same-named wallets of one currency share one row with their initial balances summed, archived only when all are | A filtered export should still restore its wallets correctly; the CSV merges same-named wallets, so the sum keeps the merged balance right | built |
+| The CSV `archived` cell is a date (`YYYY-MM-DD`, exported from the UTC date), imported as 00:00 UTC; the backup carries the full `archivedAt` timestamp (optional; older files archive as of the import) | A date survives a spreadsheet; the backup stays lossless | built |
+| The context export carries each wallet's `group` (optional in its schema, version stays 1) | Companion tools can group wallets; old readers ignore the field | planner |
+| A Spendee transfer row with its own problem suppresses the "unpaired" problem of a row that could have been its partner (opposite direction, other wallet, same note, ≤ 10 s, same amount in one currency; unknown fields match); one broken row covers at most one leftover | One mistake, one problem. Hiding a genuine "unpaired" behind a broken row is harmless: the import is blocked anyway and the next preview shows it | built |
+| After a quoting error the CSV reader drops that record and resyncs on the next physical line (after the broken quote's line); a broken header still stops the file | Shows every problem in one preview; a resync can misread a few lines after a quote that was meant to span lines, but those lines are reported too, never imported silently | built |
+| Zip uploads are unpacked in the Server Action with `fflate` (new dependency, MIT, pure JS); zips are recognised by content; unpacked size counts towards the 5 MB, checked on the declared sizes before inflating | Spendee users can upload one archive; the declared-size check refuses zip bombs without inflating them | planner (library: built) |
+| An oversized upload is answered by `src/proxy.ts` (only `/data` Server Action POSTs, by `Content-Length`) with a `text/plain` 413 carrying the app's message, which the Next.js client turns into an Error the panel shows | Next.js refuses an over-limit body before the action runs, and its refusal reaches the browser as a generic error; this is the one place the app can speak first. Requests without `Content-Length` still get Next's generic refusal | built |
+| The preview/confirmation mismatch is reported by the panel comparing the confirmed counts with the preview it showed, not by sending the preview to the server | Purely informational and the panel already has both; the server still never trusts the preview | built |
+| The importing guide is a user doc, `docs/IMPORTING.md`, linked from /data's "What can be imported" (to GitHub, since the app serves no docs) and from the README | The SPEC is a build contract, not something to send a user to | planner |
+| **Deliberate:** no in-app bank-statement / column-mapping importer | The Statement Importer artifact (`docs/STATEMENT-IMPORTER.md`) turns statements into the native CSV; an in-app mapper is a much larger feature | planner |
+| **Deliberate:** Spendee variants that have not been seen (other locales or date formats, transfers to a wallet outside Spendee, the older single-file export with transfers) are not supported specially | No sample files exist; guessing their shape would add rules nobody can test. Unknown shapes are reported as problems, never guessed | planner |
 
 ### Statement importer (claude.ai Artifact)
 
@@ -451,13 +467,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   the converted figures with a note. There is no second provider and no way to enter a rate by hand.
 - **The rate cache is per process and in memory.** After a restart the first Overview load fetches again; if the
   provider is down then, the total leaves the foreign wallets out until it is back.
-- **No bank-statement import or column-mapping screen in the app.** Only the app's own formats and Spendee are
-  recognised; bank statements go through the separate Statement Importer artifact (`docs/STATEMENT-IMPORTER.md`).
-- **Spendee variants beyond the two seen are untested** (other locales or date formats, transfers to a wallet
-  outside Spendee, the older single-file export containing transfers). There is no zip upload: Spendee's
-  per-wallet files have to be selected together.
-- **A transfer row whose partner row has its own problem** is also reported as unpaired, so the problem list can
-  show two entries for one mistake.
 - **Importing the same Spendee files from a browser in another time zone** can shift entries near midnight to a
   different date, so they would not be recognised as duplicates.
 - **The context export does not flag archived categories**, so the Statement Importer can still suggest one; the
@@ -465,19 +474,15 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   categories and dropping them in the artifact is left for the artifact's next change.
 - **A CSV cannot archive a category**, and the import preview does not say that a category it creates from a
   backup will be archived (the service returns `archived: true` on that entry; `import-preview.tsx` ignores it).
-- **A CSV cannot carry initial balances or archived state**; wallets it creates start at zero.
 - **An archived group cannot be renamed or recoloured without unarchiving it first**, and the services still accept new
   entries on a wallet of an archived group (only the pickers hide it).
-- **The context export (Statement Importer) and the transactions CSV carry no group.** The CSV can be narrowed by
-  `group=<id>` on the export URL but has no group column, so a CSV import always puts new wallets in the target
-  group; only the backup round-trips groups.
+- **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
+  refusal ("The upload failed…" in the panel); browsers always send the header for a `FormData` body.
 - *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
   real `data/app.db`.
 
 ### Rough edges
 
-- The import rules a user may want to read (Spendee transfers, time zones, labels, rounding) are documented only in
-  `docs/SPEC.md`, which is written as a build contract rather than a user guide.
 - Without JavaScript the /transactions Month chip's label still renders as a button that does nothing (its ‹ › links
   and the `<noscript>` filter form below do the work); the no-JS month select covers 24 months back and one ahead
   (plus the month in view), older months are reached with ‹.
@@ -485,13 +490,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   "Pick a day" calendar is the 44px path on phones.
 - After a kind change the row moves to the other kind's card, but focus and the announcement stay with the card it
   left (its heading).
-- An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
-- A wallet or category restored as archived from a backup is marked archived as of the import, not its original
-  date.
-- If the account changes between an import's preview and its confirmation, the confirmed numbers can differ from
-  the preview (the confirmation re-validates and reports what it actually did).
-- A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
-  message.
+- A category restored as archived from a backup is marked archived as of the import, not its original date
+  (wallets carry `archivedAt`; categories only a flag).
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
   it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
   Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
@@ -651,5 +651,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   (3,227 rows, balance matching an independent calculation) and the current per-wallet export (8 files, 382 rows,
   24 transfers paired, per-wallet net movement matching the planner's independent analysis, re-import adds
   nothing). Neither has been imported into a real instance through the UI.
+- **Import / export gap closing (2026-11-18) is covered by tests only**: the CSV wallet rows and `group` /
+  `archived` columns, the backup `archivedAt`, the context `group`, the broken-partner rule,
+  the CSV resync, zip uploads (`fflate`), the proxy's 413 (unit-tested by calling `proxy()` with a `NextRequest`, not
+  through a running server and a real browser — the claim that the Next.js client turns a `text/plain` 413 into an
+  Error with the body as message comes from reading `server-action-reducer.js` of Next 16.4.5), and the
+  preview-vs-confirmation sentence (render tests). Not checked: a real zip made by Spendee or macOS Finder, the
+  panel in a browser, `next build` with the new `src/proxy.ts`, and that the /data link to
+  `https://github.com/xalert/expenses-tracker/blob/main/docs/IMPORTING.md` resolves (it assumes that repository name).
 - **Multi-file selection was exercised with files injected by script** (`DataTransfer`), not picked in a real
   file dialog; the 6 MB request limit with many small files (multipart overhead per file) was not measured.

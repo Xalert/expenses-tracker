@@ -9,7 +9,10 @@ import { escapeFormula, toCsv } from "@/lib/csv";
 import { minorToInputValue } from "@/lib/money";
 import { filterConditions, type TransactionFilters } from "./transactions";
 
-/** Column order of the transactions CSV (export writes exactly these; import requires the first five). */
+/**
+ * Column order of the transactions CSV (export writes exactly these; import requires the first five). `group` and
+ * `archived` were added later and are optional on import, so older files still import unchanged.
+ */
 export const CSV_COLUMNS = [
   "date",
   "type",
@@ -21,6 +24,8 @@ export const CSV_COLUMNS = [
   "to_wallet",
   "to_currency",
   "to_amount",
+  "group",
+  "archived",
 ] as const;
 
 /** Read-only transactions of the exports see one consistent snapshot. */
@@ -99,6 +104,7 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         initialBalanceMinor: w.initialBalanceMinor,
         initialBalance: minorToInputValue(w.initialBalanceMinor, w.currency),
         archived: w.archivedAt !== null,
+        ...(w.archivedAt ? { archivedAt: w.archivedAt.toISOString() } : {}),
         group: groupName.get(w.groupId),
       })),
       // In display order: the array order is the position on import.
@@ -133,7 +139,7 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
 }
 
 /**
- * The "Wallets & categories" context file: every wallet (name, currency, archived) and category (name, kind) of the
+ * The "Wallets & categories" context file: every wallet (name, currency, archived, group) and category (name, kind) of the
  * account, in creation order, and nothing else (no ids, balances or transactions). Made for companion tools such as
  * the Statement Importer artifact.
  */
@@ -141,8 +147,9 @@ export async function buildContext(userId: number, now: Date = new Date()): Prom
   const db = await getDb();
   return await db.transaction(async (tx) => {
     const walletRows = await tx
-      .select({ name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt })
+      .select({ name: wallets.name, currency: wallets.currency, archivedAt: wallets.archivedAt, group: walletGroups.name })
       .from(wallets)
+      .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
       .where(eq(wallets.userId, userId))
       .orderBy(asc(wallets.id));
     const categoryRows = await tx
@@ -155,7 +162,7 @@ export async function buildContext(userId: number, now: Date = new Date()): Prom
       kind: CONTEXT_KIND,
       version: CONTEXT_VERSION,
       exportedAt: now.toISOString(),
-      wallets: walletRows.map((w) => ({ name: w.name, currency: w.currency, archived: w.archivedAt !== null })),
+      wallets: walletRows.map((w) => ({ name: w.name, currency: w.currency, archived: w.archivedAt !== null, group: w.group })),
       categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind })),
     };
   }, SNAPSHOT);
@@ -166,6 +173,7 @@ export type CsvExportFilters = Omit<TransactionFilters, "limit" | "offset">;
 /**
  * Transactions as CSV (UTF-8 with BOM, CRLF), oldest first. Same filters as `/transactions`, no pagination.
  * A transfer is one row (`wallet` → `to_wallet`) and is included when either of its legs matches the filters.
+ * Wallet rows (type `wallet`: initial balance, group, archived date) come first, before the entries.
  * Text cells are protected against spreadsheet formula injection (`escapeFormula`).
  */
 export async function buildTransactionsCsv(userId: number, filters: CsvExportFilters = {}): Promise<string> {
@@ -173,10 +181,27 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
   return await db.transaction(async (tx) => {
     const where = filterConditions(userId, filters);
     const walletRows = await tx
-      .select({ id: wallets.id, name: wallets.name, currency: wallets.currency })
+      .select({
+        id: wallets.id,
+        name: wallets.name,
+        currency: wallets.currency,
+        initialBalanceMinor: wallets.initialBalanceMinor,
+        archivedAt: wallets.archivedAt,
+        groupId: wallets.groupId,
+        group: walletGroups.name,
+      })
       .from(wallets)
-      .where(eq(wallets.userId, userId));
+      .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
+      .where(eq(wallets.userId, userId))
+      .orderBy(asc(wallets.id));
     const walletById = new Map(walletRows.map((w) => [w.id, w]));
+    const keyOf = (w: { name: string; currency: string }) => `${w.name.toLowerCase()}\u0000${w.currency}`;
+    // Same-named wallets of one currency are one wallet in a CSV; its group is that of the wallet an import would
+    // send the rows to (the oldest active one, else the oldest), on every row, so the file names one group per wallet.
+    const groupOfKey = new Map<string, string>();
+    for (const w of [...walletRows].sort((a, b) => Number(a.archivedAt !== null) - Number(b.archivedAt !== null) || a.id - b.id)) {
+      if (!groupOfKey.has(keyOf(w))) groupOfKey.set(keyOf(w), w.group);
+    }
     const categoryName = new Map(
       (
         await tx
@@ -203,14 +228,17 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
     const needTransfers = matching.some((r) => r.transferId !== null);
     const transferById = needTransfers ? new Map((await listTransferRows(userId, tx)).map((t) => [t.id, t])) : new Map();
 
-    const rows: string[][] = [[...CSV_COLUMNS]];
+    const entryRows: string[][] = [];
     const seenTransfers = new Set<number>();
     const text = (s: string | null | undefined) => escapeFormula(s ?? "");
+    /** Wallets the exported rows use, for the wallet rows written first. */
+    const usedWallets = new Set<number>();
 
     for (const r of matching) {
       if (r.transferId === null) {
         const w = walletById.get(r.walletId)!;
-        rows.push([
+        usedWallets.add(w.id);
+        entryRows.push([
           r.date,
           r.kind,
           text(w.name),
@@ -221,6 +249,8 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
           "",
           "",
           "",
+          text(groupOfKey.get(keyOf(w))),
+          "",
         ]);
         continue;
       }
@@ -230,7 +260,8 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
       if (!t) continue;
       const from = walletById.get(t.fromWalletId)!;
       const to = walletById.get(t.toWalletId)!;
-      rows.push([
+      usedWallets.add(from.id).add(to.id);
+      entryRows.push([
         t.date,
         "transfer",
         text(from.name),
@@ -241,8 +272,45 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
         text(to.name),
         to.currency,
         minorToInputValue(t.receivedAmountMinor, to.currency),
+        text(groupOfKey.get(keyOf(from))),
+        "",
       ]);
     }
-    return toCsv(rows);
+
+    // Wallet rows (type `wallet`) first: initial balance in `amount`, group, archived date. Every wallet the rows use;
+    // with no filter other than the wallet / group scope, every wallet in that scope too (unused ones included).
+    const scopeOnly = !filters.kind && !filters.categoryId && !filters.month && !filters.from && !filters.to && !filters.q;
+    const inScope = (w: (typeof walletRows)[number]) =>
+      filters.walletId !== undefined ? w.id === filters.walletId : filters.groupId === undefined || w.groupId === filters.groupId;
+    // In a CSV a wallet *is* its name + currency, so same-named wallets of one currency share one wallet row: the
+    // initial balances are summed (the merged wallet keeps the total) and it is archived only when all of them are (on
+    // the latest date).
+    const byKey = new Map<string, (typeof walletRows)[number][]>();
+    for (const w of walletRows) {
+      if (!usedWallets.has(w.id) && !(scopeOnly && inScope(w))) continue;
+      byKey.set(keyOf(w), [...(byKey.get(keyOf(w)) ?? []), w]);
+    }
+    const walletLines = [...byKey.values()].map((same) => {
+      const main = same[0];
+      const archived = same.every((w) => w.archivedAt !== null)
+        ? new Date(Math.max(...same.map((w) => w.archivedAt!.getTime())))
+        : null;
+      const initial = same.reduce((n, w) => n + w.initialBalanceMinor, 0);
+      return [
+        "",
+        "wallet",
+        text(main.name),
+        main.currency,
+        minorToInputValue(initial, main.currency),
+        "",
+        "",
+        "",
+        "",
+        "",
+        text(groupOfKey.get(keyOf(main))),
+        archived ? archived.toISOString().slice(0, 10) : "",
+      ];
+    });
+    return toCsv([[...CSV_COLUMNS], ...walletLines, ...entryRows]);
   }, SNAPSHOT);
 }

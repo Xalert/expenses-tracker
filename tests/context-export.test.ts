@@ -38,16 +38,16 @@ async function seed() {
 }
 
 describe("buildContext", () => {
-  it("returns exactly the spec's shape: wallets with archived flag, categories with kind, nothing else", async () => {
+  it("returns exactly the spec's shape: wallets with archived flag and group, categories with kind, nothing else", async () => {
     const alice = await seed();
     const ctx = await buildContext(alice.id, NOW);
 
     expect(Object.keys(ctx).sort()).toEqual(["app", "categories", "exportedAt", "kind", "version", "wallets"]);
     expect(ctx).toMatchObject({ app: "expenses-tracker", kind: "context", version: 1, exportedAt: "2026-11-08T09:30:00.000Z" });
     expect(ctx.wallets).toEqual([
-      { name: "Main", currency: "EUR", archived: false },
-      { name: "Tokyo", currency: "JPY", archived: false },
-      { name: "Old card", currency: "USD", archived: true },
+      { name: "Main", currency: "EUR", archived: false, group: "Personal" },
+      { name: "Tokyo", currency: "JPY", archived: false, group: "Personal" },
+      { name: "Old card", currency: "USD", archived: true, group: "Personal" },
     ]);
     for (const c of ctx.categories) expect(Object.keys(c).sort()).toEqual(["kind", "name"]);
     expect(ctx.categories).toContainEqual({ name: "Pets", kind: "expense" });
@@ -62,7 +62,7 @@ describe("buildContext", () => {
     const bob = await makeUser(db, "bob@example.com");
     await createWallet(bob.id, { name: "Bob's", currency: "GBP", initialBalanceMinor: 0 });
     const ctx = await buildContext(bob.id, NOW);
-    expect(ctx.wallets).toEqual([{ name: "Bob's", currency: "GBP", archived: false }]);
+    expect(ctx.wallets).toEqual([{ name: "Bob's", currency: "GBP", archived: false, group: "Personal" }]);
     expect(ctx.categories).not.toContainEqual({ name: "Pets", kind: "expense" });
   });
 
