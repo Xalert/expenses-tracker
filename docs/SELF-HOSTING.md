@@ -17,7 +17,7 @@ data lives, backup and restore, upgrading, and running without Docker.
 - [Accounts: forgotten passwords, sign-in limits](#accounts-forgotten-passwords-sign-in-limits)
 - [Where the data lives](#where-the-data-lives)
 - [Bind mount instead of a named volume](#bind-mount-instead-of-a-named-volume)
-- [Backup](#backup) · [Restore](#restore)
+- [Backup](#backup) ([scheduled](#scheduled-backups)) · [Restore](#restore)
 - [Upgrading](#upgrading) (rolling back, [PostgreSQL itself](#upgrading-postgresql-itself), [moving from SQLite](#moving-from-sqlite-older-versions))
 - [Verifying the image](#verifying-the-image) (signature, SBOM, provenance)
 - [Running without Docker (standalone build)](#running-without-docker-standalone-build)
@@ -33,6 +33,7 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 |---|---|---|---|
 | `DATABASE_URL` | — (required; the Compose files set it) | `postgres://expenses:expenses@localhost:5433/expenses` | PostgreSQL connection URL (`postgres://user:password@host:5432/dbname`); the app migrates it on first use. Unset in production: the app refuses to start using the database |
 | `COOKIE_SECURE` | `auto` | `auto` | session cookie `Secure` flag: `auto` = only when the request arrived as HTTPS (`X-Forwarded-Proto: https`); `true` = always; `false` = never |
+| `TRUST_PROXY` | `false` | `false` | which `X-Forwarded-For` hop is the client, for the per-address [sign-in limit](#accounts-forgotten-passwords-sign-in-limits): `false` = trust no proxy (that limit is off; the per-account one always applies); `1` = one reverse proxy in front (the usual case), `N` = N proxies (the Nth hop from the right); `true` = the first hop, only when your proxy overwrites the header |
 | `ALLOW_REGISTRATION` | `true` | `true` | `false` closes sign-ups (`/register` shows "Registration is disabled", the action refuses) |
 | `EXCHANGE_RATES` | `true` | `true` | `false` stops the requests to `api.frankfurter.dev` for the Overview's converted "All in" view |
 | `PORT` | `3000` | `3000` | listen port inside the container |
@@ -49,6 +50,7 @@ Both Compose files also read these (they configure Compose, not the app; the `EX
 | `EXPENSES_TRACKER_PORT` | `3000` | host port |
 | `EXPENSES_TRACKER_IMAGE` | `ghcr.io/xalert/expenses-tracker` | image repository, for a fork or a mirror |
 | `BACKUP_KEEP` | `10` | how many `backups/expenses-*.dump` files the [backup service](#backup) keeps (the newest); `0` keeps all |
+| `BACKUP_INTERVAL_HOURS` | — | set (1–999) to make the [backup service](#scheduled-backups) back up every that many hours when started with `up -d`; unset, it backs up once and exits |
 | `POSTGRES_PASSWORD` | `expenses` | password of the `db` service's `expenses` user, also put into `DATABASE_URL`; use URL-safe characters (or URL-encode). Set it in `.env` before the first start; the port is not published, which is why the default is tolerable |
 
 ## Prebuilt image
@@ -126,6 +128,9 @@ Put Caddy, Traefik, nginx or similar in front for HTTPS and point it at port 300
 - accept uploads of 6 MB. Imports on `/data` take up to 5 MB of files; nginx's `client_max_body_size` defaults to
   **1 MB**, and without raising it large imports fail with `413 Request Entity Too Large`.
 
+Then set `TRUST_PROXY=1` (one proxy in front; `2` for two, …) so the per-address sign-in limit can see client
+addresses; see [Sign-in limits](#accounts-forgotten-passwords-sign-in-limits).
+
 Caddy and Traefik do the first two by default (`reverse_proxy expenses-tracker:3000` is the whole Caddy config).
 For nginx:
 
@@ -184,10 +189,25 @@ The script is plain JavaScript inside the image (`/app/scripts/reset-password.mj
 address, further attempts for it are refused until the 15 minutes are up ("Too many sign-in attempts. Try again in
 N minutes."). The same per-account limit guards the current-password checks on `/account`. The counters live in
 the app's memory: a restart clears them (that is also how an administrator lifts a lockout), and if you run several
-app containers each keeps its own. The client address is the first `X-Forwarded-For` hop, which a client can set
-itself unless the proxy overwrites it, so the per-account limit is the one to rely on; nginx's
-`$proxy_add_x_forwarded_for` appends rather than overwrites (use `proxy_set_header X-Forwarded-For $remote_addr;` if
-the address limit matters to you).
+app containers each keeps its own (the Compose files run one).
+
+The client address comes from the `X-Forwarded-For` header, which a client can fill with anything, so the app reads
+it only as far as `TRUST_PROXY` says:
+
+- unset or `false` (default): the header is ignored and the per-address limit is off; the per-account limit still
+  applies. (The app cannot see the connection's own address, so without a trusted proxy it has nothing reliable.)
+- `1`: one reverse proxy in front that appends the address it saw (nginx's `$proxy_add_x_forwarded_for`, Caddy,
+  Traefik). The right-most hop is used, so a value the client wrote further left does not matter. `2`, `3`, …: that
+  many proxies in a chain; the Nth hop from the right. A request with fewer hops gets no address.
+- `true`: the first (left-most) hop; only right when your proxy **overwrites** the header
+  (`proxy_set_header X-Forwarded-For $remote_addr;`).
+
+With `TRUST_PROXY` set, publish the app only through the proxy (e.g. `ports: ["127.0.0.1:3000:3000"]`): a client
+that reaches port 3000 directly can write the header itself.
+
+**Signed-in devices.** `/account` lists each user's active sessions (browser and system from the user agent, when
+signed in, when last active — updated at most every 5 minutes) with a Sign out per device and "Sign out other
+devices". Sessions last 30 days.
 
 **Account deletion.** Every user can delete their own account and all its data on `/account` (current password
 plus their user ID typed out). It cannot be undone except from a database backup; the page suggests downloading
@@ -232,8 +252,24 @@ It writes `backups/expenses-<UTC date-time>.dump` next to the Compose file (`pg_
 file with the whole database, every account) and then deletes all but the newest `BACKUP_KEEP` (default 10) of
 those files; set `BACKUP_KEEP=0` in `.env` to keep every one. Copy them somewhere else as well: the folder is on
 the same disk as the database. On Linux the files belong to `root` (mode 600), because the container writes them
-as root; read them with `sudo`. For a schedule, put that line in cron (`cd /path/to/folder && docker compose run
---rm backup`).
+as root; read them with `sudo`.
+
+### Scheduled backups
+
+Either put the one-shot command in the host's cron (`cd /path/to/folder && docker compose run --rm backup`), or
+let the service loop: set `BACKUP_INTERVAL_HOURS` in `.env` (e.g. `BACKUP_INTERVAL_HOURS=24`) and start it in the
+background:
+
+```bash
+docker compose --profile backup up -d backup
+```
+
+It backs up right away, prunes to `BACKUP_KEEP`, then sleeps that many hours and repeats; `docker compose logs
+backup` shows each run, and a failed dump is logged and retried at the next interval. Stop it with
+`docker compose --profile backup stop backup`. It does not come back by itself after a reboot or a Docker restart
+(its restart policy is `no`, so that a one-shot run never repeats): run the command again, or use cron if that
+matters. Either way the dumps land on the **same disk** as the database; copy `backups/` to another machine or
+storage (rsync, a cloud sync folder, a USB disk) as well.
 
 Without the service (or for a one-off file elsewhere), the same dump straight from the `db` container:
 

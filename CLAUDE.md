@@ -56,8 +56,9 @@ demo database, `make reset-password ID=…` on the demo database). `make dev-rea
 the real data: never run them from an agent. `make release VERSION=x.y.z` (`scripts/release.mjs`) cuts a release —
 bump, CHANGELOG, commit, tag — and pushes only with `PUSH=1`; never run it without the owner asking.
 
-The database is migrated on first request. `dev:demo` and `demo:reset` put
-`DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` inside the npm script, so they never reach
+The database is migrated on first request. `dev:demo` and `demo:reset` run each step through
+`scripts/with-demo-db.mjs`, which sets `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` (an
+inherited `DATABASE_URL` is replaced; a `DEMO_DATABASE_URL` naming any other database is refused), so they never reach
 `expenses`.
 
 `build` and `start` go through `scripts/next-production.mjs`, which forces `NODE_ENV=production` (a globally exported

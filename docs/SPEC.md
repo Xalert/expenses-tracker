@@ -42,9 +42,11 @@ this file in the same change and call the deviation out in your final report.
   database (`DEFAULT_DEV_DATABASE_URL`, or an unset `DATABASE_URL`) always asks, and the answer must be the word
   `reset` — a stray `--yes` or `y` can never wipe it. Not a terminal and no usable `--yes` → refuse. They refuse
   outright when `NODE_ENV=production`. Without `--demo`/`--clean` they print usage and exit 1.
-- **Demo mode on its own database.** `npm run dev:demo` runs `db:seed` and then `next dev`, both with
-  `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` set inside the script; `npm run
-  demo:reset` runs the reset with `--demo --yes` on that database. Neither can reach `expenses`. `npm run dev` stays on
+- **Demo mode on its own database.** `npm run dev:demo` runs the seed and then `next dev`, `npm run demo:reset` the
+  reset with `--demo --yes`, each step through `node scripts/with-demo-db.mjs <command…>`, which sets
+  `DATABASE_URL=postgres://expenses:expenses@localhost:5433/expenses_demo` for the command (any shell, Windows `cmd`
+  included). An inherited `DATABASE_URL` is replaced; the only override, `DEMO_DATABASE_URL` (another host or
+  port), is refused unless its database is `expenses_demo`. Neither can reach `expenses`. `npm run dev` stays on
   the real database. Scratch databases: put `DATABASE_URL=postgres://…/<scratch>` inline on the same command.
 - **Password reset in development.** `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email>
   [--stdin]` or `make reset-password ID=<user>` (always `expenses_demo`) run `scripts/reset-password.mjs` (Auth →
@@ -118,7 +120,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 | table | columns |
 |---|---|
 | `users` | `id`, `username` (the "user ID": stored lowercased, required), `email` (nullable; stored lowercased), `firstName` (nullable), `lastName` (nullable), `passwordHash`, `timeZone` (`time_zone`, nullable: the account's IANA time zone, canonical spelling; migration `0004_account-time-zone`), `createdAt`; unique expression indexes `users_username_lower_uq` on `lower(username)` and `users_email_lower_uq` on `lower(email)` (migration `0002_lower-unique-users`; NULL emails never collide) |
-| `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt` |
+| `sessions` | `id`, `tokenHash` (unique, sha256 of the cookie token), `userId` → users (cascade), `expiresAt`, `createdAt`, `userAgent` (`user_agent`, nullable: the `User-Agent` at sign-in, trimmed, at most 256 characters), `lastUsedAt` (`last_used_at`, default now; migration `0005_sessions-devices`, which sets it to `created_at` for sessions that already existed) |
 | `wallet_groups` | `id`, `userId` → users (cascade), `name`, `position` (int, display order), `color` (nullable, a palette key), `archivedAt` (nullable), `createdAt`; index on `userId` (names are unique per user ignoring case, checked in the service) |
 | `wallets` | `id`, `userId` → users (cascade), `groupId` → wallet_groups (restrict), `name`, `currency` (3-letter code), `initialBalanceMinor` (int, may be negative), `archivedAt` (nullable), `createdAt`; indexes on `userId` and `groupId` |
 | `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `archivedAt` (nullable, added by `0003_categories-archive`), `createdAt`; unique (`userId`, `kind`, `name`) |
@@ -181,11 +183,24 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   - Action: `updateProfileAction` (`requireUser()`, zod shape, service, `serviceErrorState`); never echoes the
     password; success returns `{ ok: true, message: "Profile saved.", values: <saved values> }` and the form is keyed
     on the result.
-- **Devices (`/account`).** Shows how many *other* active (unexpired) sessions the user has and a "Sign out other
-  devices" button that deletes every session of the user except the current one ("Signed out N other
-  session(s)." / "No other devices were signed in."). Services: `countOtherSessions(userId, keepTokenHash)`,
-  `signOutOtherSessions(userId, keepTokenHash): Promise<number>` (`keepTokenHash: string | null`, null = all).
-  Action: `signOutOtherDevicesAction()`.
+- **Devices (`/account`).** Lists the user's active (unexpired) sessions, the current one first and marked "This
+  device", then the most recently used: a label from the user agent (`deviceLabel` in `src/lib/user-agent.ts`: a
+  few substring checks, no dependency — "Firefox on macOS", "Safari on iPhone", the browser alone when the system
+  is not recognised, "Unknown browser" when the browser is not), "Signed in <date, time>" and "Last active <date,
+  time>" (en-GB, 24-hour, in the account's time zone, UTC when it has none). Every other session has a ghost
+  "Sign out" (one form each, hidden `sessionId`; success "Signed out that device.", a session that is gone, the
+  current one or another user's: "That device is no longer signed in."). Below the list, how many others there are
+  and the "Sign out other devices" button that deletes every session of the user except the current one ("Signed
+  out N other session(s)." / "No other devices were signed in.").
+  - Services (`src/server/users.ts`): `listSessions(userId, currentTokenHash, now?): Promise<SessionView[]>`
+    (`SessionView = { id, userAgent, createdAt, lastUsedAt, current }`, never the token hash);
+    `signOutSession(userId, sessionId, keepTokenHash): Promise<void>` (deletes only a session of that user other
+    than `keepTokenHash`; NOT_FOUND otherwise); `signOutOtherSessions(userId, keepTokenHash): Promise<number>`
+    (`keepTokenHash: string | null`, null = all). Actions: `signOutSessionAction`, `signOutOtherDevicesAction()`.
+  - **Recording:** `createSession` stores the request's `User-Agent` (`storedUserAgent`). `getCurrentUser` marks
+    the session used when its `lastUsedAt` is at least `SESSION_TOUCH_INTERVAL_MS` (5 minutes) old
+    (`sessionTouchDue`, then `touchSession(sessionId, now?)`, whose UPDATE repeats the condition so concurrent
+    requests write once), so most requests write nothing.
   - **Expired sessions are cleaned up:** `createSession` deletes the user's expired sessions before adding the new
     one, and every successful sign-in also runs one global `delete from sessions where expires_at <= now()`
     (`deleteExpiredSessions(userId?)`). A session found expired when its cookie is presented is deleted as before.
@@ -199,12 +214,15 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
     `confirmUsername`, "Type your user ID, <id>, to confirm.").
   - Action: `deleteAccountAction` (zod: both required), `clearSessionCookie()` from `src/lib/auth.ts`, then
     `redirect("/login?deleted=1")` outside the `try`.
-- **Rate limiting (`src/lib/rate-limit.ts`).** In memory, **per process**: counts reset on restart and are not shared
-  between several app containers (the shipped deployment runs one). A key's 15-minute window starts at its first
+- **Rate limiting (`src/lib/rate-limit.ts`).** In memory, **per process** (deliberate: the shipped deployment runs
+  one app container): counts reset on restart and are not shared between several app containers. A key's 15-minute window starts at its first
   failure; once it holds the limit of failures the key is refused until the window ends.
   - Sign-in: 5 failures per identifier (trimmed, lowercased — so it applies equally to unknown identifiers) and 30
-    per client address (the first `X-Forwarded-For` hop; Next.js fills that header with the socket address when no
-    proxy sent one; no address → only the identifier limit). A refused attempt does not check the password and
+    per client address, taken from `X-Forwarded-For` as `TRUST_PROXY` says (`trustProxy()` in `src/lib/config.ts`,
+    `clientAddress(forwardedFor, trust)`): unset / `false` → the header is ignored and there is no address (Next.js
+    gives a Server Action no socket address, and only fills the header with it when a client sent none, so without
+    a trusted proxy a value cannot be told from a forged one); `true` → the first hop; `N` → the Nth hop from the
+    right, and no address when the header has fewer hops. No address → only the identifier limit. A refused attempt does not check the password and
     answers "Too many sign-in attempts. Try again in N minutes." (N rounded up), whether or not the account exists.
     A successful sign-in resets the identifier's counter (not the address's).
   - `/account`: the current-password checks of the password change, the profile change and the deletion share one
@@ -262,7 +280,8 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 - `ALLOW_REGISTRATION=false` (`isRegistrationAllowed()` in `src/lib/config.ts`): `/register` renders a "Registration
   is disabled" card, `registerAction` returns an error without creating anything, `/login` hides the sign-up link.
 - `src/lib/auth.ts` exposes `getCurrentUser(): Promise<CurrentUser | null>` (React `cache`, per request),
-  `requireUser(): Promise<CurrentUser>` (redirects to `/login`), `createSession(userId)`, `destroySession()`,
+  `requireUser(): Promise<CurrentUser>` (redirects to `/login`; both mark the session used, see "Devices"),
+  `createSession(userId)` (stores the user agent), `destroySession()`,
   `redirectIfSignedIn()`, `clearSessionCookie()` (after an account deletion); `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string }`. Cookie name `et_session`.
   The `(app)` layout calls `requireUser()`; every Server Action calls it too (layouts don't protect actions).
   Signed-in users visiting `/login` or `/register` are redirected to `/`.
@@ -1241,8 +1260,10 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      browser dates them alike."), current password (hint "Needed only when you change your user ID or
      email."), "Save profile". Prefilled from the account; after a result the inputs show the echoed / saved values.
   2. **Change password**: the form described in Auth → "Changing the password".
-  3. **Devices** ("Sessions last 30 days unless you sign out."): "You are signed in on this device only." or "You are
-     also signed in on N other device(s) or browser(s).", and a secondary "Sign out other devices" button.
+  3. **Devices** ("Sessions last 30 days unless you sign out."): the list of active sessions described in Auth →
+     "Devices" (label, "This device" pill, "Signed in … · Last active …", a ghost "Sign out" on the others), then
+     "You are signed in on this device only." or "You are also signed in on N other device(s) or browser(s).", and a
+     secondary "Sign out other devices" button.
   4. **Delete account**: what gets deleted, a "Download a backup" link (`/api/export/backup`), "Type your user ID,
      **<id>**, to confirm", current password, and a danger "Delete account" button.
   Each form shows its success as a polite, non-alert notice (`role="status"`) above it and errors as the usual field
@@ -1939,6 +1960,10 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   - `COOKIE_SECURE` — `auto` (default: mark the session cookie `secure` only when the request arrived over
     HTTPS, judged by `x-forwarded-proto`), `true`, or `false`. Many homelabs serve plain HTTP on the LAN; a
     hard-coded `secure` cookie would silently break sign-in there.
+  - `TRUST_PROXY` — unset / `false` (default; also `0`, `no`, `off`, and anything not recognised), `true`, or a whole
+    number N from 1 to 999: which `X-Forwarded-For` hop is the client for the per-address sign-in limit (Auth →
+    "Rate limiting"). The Compose files pass `${TRUST_PROXY:-false}` (`deploy/compose.yaml`) / `"false"`
+    (`docker-compose.yml`).
   - `ALLOW_REGISTRATION` — `true` (default) or `false`. When `false`, `/register` shows a "registration is
     disabled" message and the register action refuses, so an instance exposed to the internet can be closed
     after its accounts exist.
@@ -1985,7 +2010,12 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   `.partial` then renamed, mode 0600) and then deletes all but the newest `BACKUP_KEEP` (Compose variable, default
   10; `0` keeps all; anything not a whole number is refused before dumping) files matching `expenses-*.dump`. Other
   files in the folder (the upgrade script's `before-postgres-*.dump`) are never pruned. `backups/` is gitignored and
-  dockerignored.
+  dockerignored. **Optional schedule:** `BACKUP_INTERVAL_HOURS` (Compose variable, unset by default; a whole number
+  1–999, anything else refused before dumping). Unset → one backup and exit, as above. Set → the service loops:
+  dump, prune, sleep that many hours; a failed dump logs "Backup failed; trying again in N h." and the loop goes on;
+  SIGTERM ends it at once (`exit 0`). Run continuously with `docker compose --profile backup up -d backup`.
+  `restart: "no"` stays (so a one-shot `up` never repeats), which means a reboot or Docker restart ends the loop
+  until that command is run again.
 - **Postgres major upgrade** (`deploy/pg-major-upgrade.sh [-C dir] [--yes] <new-major>`, bash): run where the Compose
   file is (`compose.yaml` or `docker-compose.yml`; refuses with `COMPOSE_FILE` set). Refuses when `db` is not
   running, the target is not newer than the server's major, the data is not on a named volume, the target volume
