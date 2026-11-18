@@ -137,12 +137,18 @@ For nginx:
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:3000;
-    proxy_set_header Host              $host;
+    proxy_set_header Host              $http_host;   # not $host: it drops a non-default port (:8443)
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
     client_max_body_size 6m;          # imports on /data accept files up to 5 MB (nginx default: 1 MB)
 }
 ```
+
+`$http_host` is the `Host` exactly as the browser sent it, port included. `$host` works only when nginx listens
+on the default port (443 / 80): on any other port the browser's `Origin` carries the port, `$host` does not, and
+every form is refused with the "Request refused" 403 above. `X-Forwarded-For` with
+`$proxy_add_x_forwarded_for` appends nginx's view of the client to whatever the client sent, which is what
+`TRUST_PROXY=1` expects (it takes the right-most address, so a forged header does not get around the limit).
 
 How `COOKIE_SECURE` plays with this:
 
@@ -178,7 +184,7 @@ sessions are deleted). Give them the password; they can change it on **Account s
 the password yourself, pipe it in with `--stdin` (`-T` so Compose passes standard input through):
 
 ```bash
-printf '%s' 'the new password' | docker compose exec -T app node scripts/reset-password.mjs ana --stdin
+printf '%s' 'the new password' | docker compose exec -T expenses-tracker node scripts/reset-password.mjs ana --stdin
 ```
 
 The script is plain JavaScript inside the image (`/app/scripts/reset-password.mjs`) and uses the container's

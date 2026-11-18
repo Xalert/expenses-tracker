@@ -270,6 +270,7 @@ Decided 2026-11-09.
 | *(superseded 2026-11-09 by Postgres)* Image on `node:24-bookworm-slim`, three stages, runs as the non-root `node` user (uid 1000), data on a `/data` volume | glibc base so the native SQLite module's prebuilt binaries work on amd64 and arm64; least privilege | planner |
 | *(superseded 2026-11-09 by Postgres)* `npm ci --ignore-scripts` in the image | The slim image has no compiler toolchain, and the native module ships prebuilt Linux binaries | built |
 | Health check uses Node's `fetch` against `/api/health` | No curl or wget needed in the image | built |
+| The nginx example in `docs/SELF-HOSTING.md` passes `Host $http_host`, not `$host` (2026-11-18) | Checked behind a real nginx: `$host` drops the port, so on any port but 80 / 443 the browser's `Origin` (`host:port`) never matches and every form gets the "Request refused" 403. `$http_host` is what the browser sent, port included, and works on the default ports too | built (ops verification) |
 | All runtime configuration is environment variables | Standard for containers; nothing to bake into the image | planner |
 | A prebuilt multi-arch image on GitHub Container Registry, published by GitHub Actions, is the default way to deploy; building from source stays supported | "It should be easy to deploy with docker": downloading one Compose file beats cloning and a several-minute build, and arm64 users (Raspberry Pi) get an image without building on the device. GHCR needs no extra account or secret (`GITHUB_TOKEN`) | owner asked for an easier Docker deploy; registry chosen by planner |
 | `latest` follows `main`; releases come from `vX.Y.Z` tags | The owner deploys `main`; self-hosters who want control pin `EXPENSES_TRACKER_VERSION`. Tags are cut with `make release` (below) | planner |
@@ -551,7 +552,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   as the previous business day (both are accepted), and the size of a long range response. Not tried in a browser:
   `/rates` at 375px and in dark mode (three fields in one row from `sm`), the date picker inside several forms on
   one page, the "Rates" link next to the switch on phones, the notes under the day strip and above the split card,
-  and the Overview's past-month Wallets card. The `0005_exchange-rates` migration ran on PGlite only.
+  and the Overview's past-month Wallets card. The `0005_exchange-rates` migration also ran on a populated
+  Postgres 17 (see "Operations on real Postgres 17 and Docker" below).
 
 - **The /transactions and wallet-page fixes of 2026-11-18 are covered by render and service tests only**, not yet
   tried in a browser: focus moving into an opened row's form and, after a Delete or a Save that moves the entry
@@ -568,16 +570,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   through /categories in the dialog and on the full page, and the amount / note surviving a Transfer ↔ Expense
   switch.
 - **Accounts and security (2026-11-18): profile editing, devices, account deletion, rate limiting, the reset script
-  and the host check** are covered by service, action (mocked Next APIs), render and unit tests only. Not checked in
-  a browser or a container: the four `/account` cards at 375px and in dark mode; the account menu showing a changed
-  name after saving; the redirect to `/login?deleted=1` and its notice; `src/proxy.ts` running in `next dev` /
-  the standalone server (that a real Server Action POST reaches it with the `Origin`, `Host` and `Next-Action`
-  headers as tested, and that the Next.js client really shows the 403 text through `src/app/error.tsx`) behind an
-  actual proxy that rewrites `Host`; `x-forwarded-for` as seen by `headers()` in a Server Action with and without a
-  proxy; `docker compose exec expenses-tracker node scripts/reset-password.mjs` in a built image (`next build` could not run in
-  the agent worktree; `pg` was confirmed present in an existing `.next/standalone/node_modules`, and the Dockerfile
-  now fails the build if it is not); the `0002_lower-unique-users` migration on a populated Postgres 17 (run on
-  PGlite only).
+  and the host check** are covered by service, action (mocked Next APIs), render and unit tests. The standalone
+  server behind real proxies, the reset script in the built image and the `0002` migration on a populated Postgres 17
+  were checked on 2026-11-18 (see "Operations on real Postgres 17 and Docker" below). Still not checked in a
+  browser: the four `/account` cards at 375px and in dark mode; the account menu showing a changed name after
+  saving; the redirect to `/login?deleted=1` and its notice; that the hydrated Next.js client really shows the 403
+  text through `src/app/error.tsx` (the 403 `text/plain` answer to a `Next-Action` POST was seen with a script);
+  `src/proxy.ts` under `next dev` behind a proxy.
 - **Category kind change, archive and removal into a new category (2026-11-18) are covered by service and render
   tests only.** Not yet tried in a browser: the row leaving its list and focus landing on the heading after a kind
   change or (un)archive, the controlled replacement select keeping "A new … category" (and its name field) after a
@@ -587,12 +586,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - **Devices list, `TRUST_PROXY`, scheduled backups and the demo wrapper (2026-11-18) are covered by tests only**
   (services and actions on PGlite, render to static markup, the wrapper run as a child process, the backup script
-  run by hand under macOS `sh` with a fake `pg_dump`). Not checked: the Devices card in a browser (375px, dark mode,
-  the per-row Sign out and its pending state, real user agents), `last_used_at` advancing on a running server, the
-  `0006_sessions-devices` migration on a real Postgres with existing sessions (PGlite only), `TRUST_PROXY=1` behind
-  a real nginx / Caddy / Traefik, the backup loop in the `postgres:17-alpine` container (busybox `sh`: the trap,
-  `sleep & wait`, `docker compose --profile backup up -d backup` / `stop`), and `npm run dev:demo` /
-  `demo:reset` themselves (not run, to keep agents off the dev Postgres), on Windows `cmd` in particular.
+  run by hand under macOS `sh` with a fake `pg_dump`). Checked for real on 2026-11-18 (see "Operations on real
+  Postgres 17 and Docker" below): the `0006` migration with existing sessions, `last_used_at` advancing on a running
+  server, `TRUST_PROXY=1` behind Caddy and nginx, the backup loop in `postgres:17-alpine`, and `dev:demo` /
+  `demo:reset` on macOS. Not checked: the Devices card in a browser (375px, dark mode, the per-row Sign out and its
+  pending state, real user agents), Traefik, and the wrapper on Windows `cmd`.
 - **Leftover data and UI gaps (2026-11-18) are covered by service, import / export round-trip, render and pure-helper
   tests only.** Not tried in a browser: the kind change's focus landing on the moved row in the other card (the
   window event, then the refreshed list's effect; a slow refresh leaves focus on that card's heading meanwhile) and
@@ -604,7 +602,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   tried in a browser: the hidden field being filled after hydration on `/login` and `/register` (and surviving a
   failed submit), the ~420-option grouped select on `/account` at 375px, on iOS / Android pickers and in dark mode,
   type-to-search in it, and the import notice text in the panel. The `0004_account-time-zone` migration ran on
-  PGlite only. The zone list and canonical spellings come from Node 24's ICU; another Node / ICU version may spell
+  PGlite and, on 2026-11-18, on a populated Postgres 17. The zone list and canonical spellings come from Node 24's ICU; another Node / ICU version may spell
   a few zones differently (`Europe/Kiev` vs `Europe/Kyiv`): a stored zone the runtime does not know counts as not
   set, and the select shows a stored zone that is missing from its list as an extra option.
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
@@ -616,8 +614,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
   balance, find it with `q=CAFÉ`, download the backup, all as no-JS form posts; then the documented `pg_dump` and
   `pg_restore --clean --if-exists` round trip restored a deleted row with the app healthy afterwards. Not checked:
-  the amd64 image, the GitHub Actions run, `docker-compose.yml` (source build) end to end, `compose.dev.yaml` with
-  `npm run db:up` / `dev:demo` (not started, to keep agents off the dev volume), a JSON backup from an old SQLite
+  the amd64 image, the GitHub Actions run, `docker-compose.yml` (source build) end to end (both checked on
+  2026-11-18), `compose.dev.yaml` with `npm run db:up` (not started, to keep agents off the dev volume), a JSON backup from an old SQLite
   instance imported into the new version, and the app in a browser with JavaScript. (The GitHub Actions run and the
   Postgres major upgrade were checked later; see the entries below.)
 - **Month stepper on /transactions** (arrows joined to the Month chip, the end-of-list month row, "This month", `[` / `]` / `T`) was
@@ -635,17 +633,78 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   static markup, actions with mocked Next APIs) and typecheck / lint only; not checked in a browser: the colour dots
   in both themes, the Move up / down buttons beside an open row at 375px, the colour radios' focus ring
   (`has-focus-visible`), the no-JS Move submit (a bound Server Action in a client component) and the closed
-  "Archived groups" section. The migration has not been run on the real development database.
+  "Archived groups" section. The migration has not been run on the real development database; it ran on a
+  populated Postgres 17 on 2026-11-18 (positions came out by name ignoring case, then id).
 
 - **Bind mounts on a real Linux host.** The "folder must be owned by uid 1000" failure and its fixes were only
   simulated on Docker Desktop.
-- **`COOKIE_SECURE=true` over plain HTTP** was checked with curl, not a browser.
-- **The amd64 image** was built and run under emulation only.
+- **`COOKIE_SECURE=true` over plain HTTP** was checked with curl and scripts (the `Secure` flag per mode, behind
+  Caddy and nginx, 2026-11-18), not a browser: that the browser then drops the cookie is documented, not observed.
+- **The amd64 image** was built and run under emulation only (last on 2026-11-18: `docker build --platform
+  linux/amd64`, `process.arch` x64, health and the no-JS flow through `deploy/compose.yaml`); never on an amd64 host.
 - **The GitHub Actions workflow has run, but not its newest steps.** Runs on `main` (push, 2026-11-17) and on pull
   requests succeeded (`gh run list`), and the workflow passes actionlint (with shellcheck, 2026-11-18). The SBOM /
   provenance attestations and the cosign signing step added on 2026-11-18 have not run yet, so neither the
   `cosign verify` nor the `imagetools inspect` command in `docs/SELF-HOSTING.md` has been tried against a real
   image. Whether the GHCR package is public was not checked.
+- **Operations on real Postgres 17 and Docker (2026-11-18), Docker Desktop on macOS (arm64), throwaway Compose
+  projects, no-JS form posts by script (multipart, the browser's `Origin`, cookies kept).** Checked:
+  - *Migrations.* All of `drizzle/` on an empty `postgres:17-alpine` ("Empty database: applying 7 migration(s)",
+    10 tables). Upgrade: only `0000_init` applied through drizzle's migrator (the image with `MIGRATIONS_DIR`
+    pointing at a copy of the folder whose journal stops at 0000), then filled by SQL with 3 users (mixed-case
+    emails such as `Ana.Smith@Example.COM`), 4 sessions (one with a known token, one expired), 5 wallet groups,
+    5 wallets (EUR / KWD / JPY, one archived), 6 categories, 366 transactions, 2 transfers (one cross-currency);
+    then the current image started on it: the `[db] WARNING: applying 6 pending migration(s) …` line, 7 rows in
+    `drizzle.__drizzle_migrations`, every row count and the amount sum unchanged, group positions per user by
+    `lower(name)` then id (`archive` 1, `Business` 2, `personal` 3), every session's `last_used_at = created_at`,
+    the `lower()` unique indexes present. The old session cookie still signed in, and its `last_used_at` advanced
+    on that request; sign-in by lower-cased and upper-cased email and by user ID with the old passwords worked; the
+    KWD balance was right (8.308). A database with two emails differing only in case (only possible by editing rows
+    by hand: every version stored them lower-cased) makes `0002` fail: health answers 503, the log names
+    `users_email_lower_uq` and the duplicated key, and the whole upgrade is rolled back (still one migration
+    recorded, no new columns).
+  - *Compose files with an empty volume.* `deploy/compose.yaml` (the locally built image via
+    `EXPENSES_TRACKER_IMAGE` / `_VERSION`) and `docker-compose.yml` with `--build` (image tag and host port
+    changed in an override): health, register, sign-out, sign in, a KWD wallet, an expense, balance 9.250,
+    `q=CAFÉ`, the JSON backup download. The app runs as `node`.
+  - *Password reset in the image.* `docker compose exec expenses-tracker node scripts/reset-password.mjs <email>`
+    printed a password and deleted 2 sessions; `printf … | docker compose exec -T expenses-tracker … --stdin`
+    (trailing newline dropped) likewise; a short password and an unknown user exit 1; sign-in with the new password
+    worked, with the old one refused. The `--stdin` line in `docs/SELF-HOSTING.md` and the script's header named a
+    service `app` that does not exist ("service "app" is not running"); fixed to `expenses-tracker`.
+  - *Backup service.* `docker compose run --rm backup` (dumps mode 600, `BACKUP_KEEP=2` pruning); the loop with
+    `BACKUP_INTERVAL_HOURS=1` through `--profile backup up -d backup` in the real busybox `sh`: one backup and
+    prune, then `stop` took 0.13 s with exit code 0 (the trap works; `sleep` is a separate process). Several
+    iterations were run with a `sleep` shim on `PATH` (one hour = 3 s): backups and pruning each round, the
+    database stopped for two rounds ("Backup failed; trying again in 1 h.", no `.partial` left behind), then
+    successful again. One dump restored with `pg_restore` into a scratch database: same row counts.
+  - *Reverse proxies* (`TRUST_PROXY=1`): Caddy (`reverse_proxy app:3000`, HTTP and `tls internal` HTTPS) and nginx
+    (the documented snippet). Sign-in and the whole flow work through both. Per-address limit: 30 failed sign-ins
+    with distinct identifiers and a random forged `X-Forwarded-For` each, then the right password for another
+    account is refused ("Too many sign-in attempts…"), while the same sign-in from another container (another
+    address) succeeds; Caddy replaces the forged header, nginx appends to it (its log shows the forged value) and
+    the app takes the right-most hop. Misconfigured nginx (no `proxy_set_header`, so `Host: app:3000`): the no-JS
+    post gets the 403 HTML page, a `Next-Action` post the 403 `text/plain` message, and the log the
+    `[origin-check] Refused a form post to /login …` line. The documented nginx line `proxy_set_header Host $host`
+    does the same on a non-default port (Origin `localhost:3108`, host `localhost`); the snippet now uses
+    `$http_host`. Uploads: a 7 MB `previewImportAction` POST through Caddy gets the app's 413 with
+    `IMPORT_TOO_LARGE_MESSAGE`; through nginx with `client_max_body_size 6m` it gets nginx's own 413 HTML page
+    (the panel refuses more than 5 MB before uploading, so a browser does not send one); 5.5 MB reaches the action.
+  - *`COOKIE_SECURE`*: `auto` marks the cookie `Secure` only through Caddy's HTTPS (and directly at the app with a
+    client-sent `X-Forwarded-Proto: https`); a client's forged `X-Forwarded-Proto: https` through Caddy or nginx
+    over HTTP is overwritten by the proxy, so no `Secure`. `true`: always `Secure`; `false`: never.
+  - *`npm run demo:reset` / `dev:demo`* with `DEMO_DATABASE_URL` pointing at a throwaway Postgres's
+    `expenses_demo` (and a decoy `DATABASE_URL` that was ignored): reset migrated and seeded an empty database,
+    then put a modified one back to the demo state (42 transactions, 1 user); `dev:demo` skipped the seed ("Demo
+    user already exists") and the dev server signed `demo` in (its session row landed in `expenses_demo`).
+    `DEMO_DATABASE_URL` naming `expenses`, `other` or a `mysql://` URL is refused with exit code 1 before
+    anything runs. In an agent worktree whose `node_modules` is a symlink, Turbopack cannot find `next`
+    ("Could not find the Next.js package"), so the dev server was checked with `--webpack`; a normal clone is
+    not affected.
+  - *amd64*: `docker build --platform linux/amd64` built; under emulation `process.arch` is `x64`, health and the
+    no-JS flow pass.
+  Not checked: a Linux host (bind-mount ownership, root-owned backup files), Traefik, the hydrated client in a
+  browser behind the proxies, Windows `cmd`, and a real GitHub release.
 - **Operations tooling (2026-11-18) was verified on Docker Desktop (arm64) with throwaway Compose projects only.**
   Checked: the image without `sharp` built with `docker build .`, came up healthy through `deploy/compose.yaml` and
   migrated an empty database (the "Empty database" line logged); `docker compose run --rm backup` three times with
@@ -655,8 +714,7 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   with a local bare `origin`: the refusals (not main, ahead of origin, dirty tree, version not newer, existing tag,
   `--push` with `--dry-run`), a dry run, and a real release pushed to that bare repository. Not checked: the
   scripts on a Linux host (root-owned backup files), the upgrade script with the source `docker-compose.yml` or
-  with an existing override file, the WARNING line on a real upgrade with a pending migration (unit-tested only),
-  `npm run build` in Windows `cmd`, and a release against the real GitHub repository. In one release test run two
+  with an existing override file, `npm run build` in Windows `cmd`, and a release against the real GitHub repository. In one release test run two
   tests failed once and passed on the rerun; which ones was not captured.
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
