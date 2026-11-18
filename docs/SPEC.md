@@ -579,7 +579,8 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     `RunningLine` gains `min?` (the value at the bottom of the box, default 0) and a series' `start?` (the value on
     the left edge, default 0); `linePoints(values, max, days, min = 0, start = 0)` clamps values to the box. The
     Overview's calls are unchanged. `BigAmount` (`components/ui/big-amount.tsx`, from `entry-form.tsx`) `{ id; name;
-    label; currency; currencyText; defaultValue?; error?; hint?; autoFocus?; compact?; required? = true }` and
+    label; currency; currencyText; defaultValue?; error?; hint?; autoFocus?; compact?; required? = true;
+    signToggle? = false }` and
     `amountPlaceholder(currency)` ("0.00" / "0"; safe for a half-typed code). `Popover` accepts `role="menu"`.
     `ActionButton` (`components/wallets/action-button.tsx`) gains `size`, `buttonClassName`, `role="menuitem"` and
     `onDone()` (called once per `ok` result). `DayList` gains `aside?(date)` (replaces the day's net on the right of
@@ -932,7 +933,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     echoed currency re-checks its pill when it is pinned, else refills the code; an invalid typed code carries the
     error on the input (else on the pill group). Validation stays server-side (`isValidCurrency`). Starting
     balance: `BigAmount name="initialBalance"` (not required; empty = 0) with the chosen code beside it ("—" until
-    there is one) and the hint "In CHF, up to 2 decimals. May be negative (e.g. a credit card). Leave empty for 0."
+    there is one) and the hint "In CHF, up to 2 decimals. May be negative (e.g. a credit card; use ±). Leave empty
+    for 0." The box starts with a "±" toggle (`BigAmount signToggle` → `SignToggle`, `components/ui/sign-toggle.tsx`;
+    on create and edit): a 44px `aria-pressed` button named "Minus sign" (`aria-controls` the input) that adds or
+    removes the input's leading "-" (`toggleSign` in `lib/amount-sign.ts`; ASCII or U+2212 counts as a minus) and
+    follows what is typed. Its `pointerdown` is prevented so a tap leaves focus, and the phone keyboard, in the
+    amount. The input keeps `inputMode="decimal"`.
     **Edit**: the currency as fixed text in a muted box ("EUR · Euro", "A wallet's currency can't be changed."), the
     starting balance, then a muted section "Archive" with the explanation ("An archived wallet is hidden from the
     Overview and the pickers; its entries stay, and you can unarchive it at any time.") and Archive (confirm) — or

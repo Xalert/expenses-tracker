@@ -228,6 +228,7 @@ Added 2026-11-08.
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
 | A popover opens above its anchor only when it does not fit below **and** there is more room above; the room is measured inside every clipping ancestor (the dialog body), not just the viewport; no portal still | Below stays the default so menus do not jump around; inside the Add sheet the calendar was clipped by the scrolling body, which the viewport alone does not see. A portal would have needed its own focus and outside-click handling | planner (flip), built (clipping ancestors) |
 | The date picker's way back from the month view is a "‹ Back to days" button in the footer, in the date picker only (not in the shared `MonthGrid`) | The footer is where the picker's other actions are, and it comes after the grid in Tab order; the dashboard's month switcher has no day view to return to | planner (button), built (placement) |
+| A negative starting balance is entered with a "±" toggle button inside the amount box; the input keeps `inputMode="decimal"` | iOS Safari's decimal pad has no minus key and no `inputmode` value gives a numeric pad with one: `numeric` has none either, `text` brings the full keyboard for an amount that is nearly always positive, and `type="number"` rejects "1.234,56" and comma decimals and changes the value on scroll. A toggle works the same on every platform; a tap does not take focus, so the keyboard stays up | planner (toggle), built (why not an input mode) |
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -441,8 +442,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   message.
 - On the wallet chart a capped day's label pill is in the accent colour even when it is money in (the bar itself is
   green); the label says "In" or "Out".
-- A wallet's starting balance uses the decimal keyboard on phones (as before step 5), which on iOS has no minus key;
-  a negative starting balance has to be pasted or entered on another keyboard.
 - Future-dated entries on a wallet page show no "Balance after" in their day header (`getWalletMonth.days` stops at
   today).
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
