@@ -134,6 +134,7 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
               variant="ghost"
               className="-ml-3 text-danger! hover:bg-danger-soft!"
               pendingLabel="Deleting…"
+              onConfirmed={() => row.removing(isTransfer ? "Transfer deleted." : `${noun === "income" ? "Income" : "Expense"} deleted.`)}
             >
               Delete
             </ConfirmDeleteForm>
