@@ -101,10 +101,12 @@ this file in the same change and call the deviation out in your final report.
   DB transaction. Same currency → both legs carry the same amount. Different currencies → the user enters both
   the amount sent and the amount received (no exchange-rate service). Legs are only ever edited/deleted through
   the transfer, never individually.
-- **No currency conversion, with one exception: Overview.** Totals are grouped per currency everywhere except the
-  Overview in its default "All in <currency>" view, which converts every wallet into the selected currency (the
-  month figures at each day's rate, the Wallets total at today's; see Overview → "Converted view"). Nothing
-  converted is ever stored.
+- **No currency conversion, except the "All in <currency>" views.** Totals are grouped per currency everywhere
+  except, in their default "All in <currency>" view, the Overview, the /transactions day strip and /categories,
+  which convert every wallet into the selected currency (amounts at each day's rate; the Overview's Wallets total
+  at the rate of the day its balances are for: today, or a past month's last day; see Overview → "Converted
+  view"). Wallet pages never convert (one wallet is one currency). Nothing converted is ever stored; only the
+  rates are (`exchange_rates`, and the user's own rates in `manual_exchange_rates`, see "Exchange rates").
 - Every query and mutation is scoped by `userId`; a user can never read or touch another user's rows.
 
 ## Data model (Drizzle, `src/db/schema.ts`)
@@ -124,6 +126,9 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 | `categories` | `id`, `userId` → users (cascade), `name`, `kind` (`expense`\|`income`), `archivedAt` (nullable, added by `0003_categories-archive`), `createdAt`; unique (`userId`, `kind`, `name`) |
 | `transfers` | `id`, `userId` → users (cascade), `date`, `note` (nullable), `createdAt` |
 | `transactions` | `id`, `userId` → users (cascade), `walletId` → wallets (restrict), `kind` (`expense`\|`income`\|`transfer_out`\|`transfer_in`), `categoryId` → categories (restrict, null for transfer legs), `amountMinor` (int > 0), `date` (`YYYY-MM-DD`), `note` (nullable), `transferId` → transfers (cascade, null for non-transfers), `createdAt`; indexes on (`userId`, `date`), (`walletId`, `date`), (`transferId`) |
+| `exchange_rates` | the provider's rates, shared by every user (no `userId`): `base` (`EUR`), `quote`, `rateDate` (`YYYY-MM-DD`, the publication day), `rate` (`numeric`, units of `quote` per 1 `base`, > 0), `fetchedAt`; primary key (`base`, `quote`, `rateDate`). Migration `0004_exchange-rates` |
+| `exchange_rate_days` | every calendar day the provider has been asked about: `base`, `date`, `fetchedAt`; primary key (`base`, `date`). Tells a weekend or holiday (no rows in `exchange_rates`) from a day not fetched yet |
+| `manual_exchange_rates` | the user's own rates: `id`, `userId` → users (cascade), `currency`, `base`, `effectiveDate`, `rate` (`numeric` > 0: 1 `currency` = `rate` `base`), `createdAt`; unique (`userId`, `currency`, `effectiveDate`); CHECK `currency` ≠ `base`, both 3 letters |
 
 ## Auth
 
@@ -284,6 +289,9 @@ src/
   lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
   app/(app)/@modal/                                 # intercepted dialog routes: (.)transactions/new, (.)wallets/new, (.)wallets/[id]/edit
   server/insights.ts                                # per-currency timelines and insight figures (redesign)
+  server/exchange-rates.ts  server/manual-rates.ts  lib/fx.ts   # provider rates (DB cache), own rates, conversion maths
+  (app)/rates/                                    # /rates: the user's own exchange rates (page, actions, forms)
+  components/dashboard/conversion.tsx             # ConvertSwitch + ConversionNotes ("All in <currency>" controls)
   db/schema.ts  db/index.ts                         # schema, connection, auto-migrate
   lib/auth.ts  lib/money.ts  lib/currencies.ts  lib/dates.ts  lib/errors.ts
   lib/form.ts  lib/password.ts  lib/constants.ts  lib/cn.ts  lib/config.ts (env: ALLOW_REGISTRATION, COOKIE_SECURE)
@@ -452,7 +460,8 @@ getDashboard(userId, opts?: { month?: string /* YYYY-MM, default current; invali
 }
 
 // insights.ts (redesign) — every figure is for ONE currency; nothing is converted, except with the optional
-// `convert: { rates: DailyRates | null }` of getMonthTimeline / getMonthInsights (Overview "All in"; see Overview).
+// `convert: Conversion` (`{ rates: DailyRates | null; manual?: ManualRate[] }`, from `getConversion`) of
+// getMonthTimeline / getMonthInsights / getCategoryMonthAmounts ("All in <currency>"; see Overview → Converted view).
 // "Expense" / "income" mean
 // transactions of those kinds (transfers excluded) on all wallets of that currency, archived included, unless a
 // walletId narrows it. Day N = today's day for the current month (server local time), the month's last day for a
@@ -492,6 +501,25 @@ getWalletMonth(userId, walletId, month, { today? }): {         // null when the 
   projectedDays: { date; inMinor; outMinor; closingMinor }[]   // days N+1..month end (empty for a past month), the
                                     // balance carried on through future-dated entries; not drawn by the charts
 } | null
+getCategoryMonthAmounts(userId, { month; currency; groupId?; convert? }): { amounts: Map<categoryId, number>; missingCurrencies: string[] }
+//   expense + income per category in the month (archived wallets included); with convert every currency converted
+//   per category, date and currency at that date's rate, without it only wallets in `currency` (/categories)
+getWalletBalancesOn(userId, date, { groupId? }): Map<walletId, number>
+//   each wallet's balance at the end of `date`: initial + every entry dated on or before it, transfers included
+//   (archived wallets too); invalid date → VALIDATION. The Overview's Wallets card for a past month
+// exchange-rates.ts (provider rates, in the database; see "Exchange rates")
+getDailyRates(from, to, now?): DailyRates | null      // + `incomplete` when part could not be fetched now
+getConversion(userId, from, to, now?): Conversion     // getDailyRates + the user's manual rates
+getProviderCurrencies(now?): { date; currencies: Set<string> } | null   // the latest stored day's quotes + EUR
+// manual-rates.ts
+type ManualRateView = { id; currency; base; effectiveDate; rate: string /* exact decimal */ }
+listManualRates(userId): ManualRateView[]             // by currency, newest effective date first
+manualRatesFor(userId): ManualRate[]                  // the same as numbers, for Conversion.manual
+setManualRate(userId, { currency, base, effectiveDate, rate }): ManualRateView
+//   currency: a held currency (archived wallets included), not EUR (field currency); base: EUR or another held
+//   currency, ≠ currency (field base); effectiveDate valid (field effectiveDate); rate a positive decimal, up to 12
+//   digits each side, decimal comma allowed (`parseRateInput`, field rate). Upsert on (user, currency, date)
+deleteManualRate(userId, id): void                    // NOT_FOUND for a missing or another user's rate
 // transactions.ts additions
 listDayTotals(userId, filters: TransactionFilters, dates: string[]): { date; currency; netMinor }[]
 //   net per (date, currency) over ALL matches of the filters on those dates (limit/offset ignored); transfer legs count
@@ -718,8 +746,8 @@ values (Sand light, Graphite dark) are in "UI direction".
 ## Screens
 
 The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
-listed there. Every amount is shown in its own currency; nothing is converted (the one exception is the Overview's
-"All in <currency>" view, below). Where a screen shows one currency
+listed there. Every amount is shown in its own currency; nothing is converted (the exception is the
+"All in <currency>" view of the Overview, the /transactions day strip and /categories, below). Where a screen shows one currency
 at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 
 - **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
@@ -752,7 +780,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - As built (step 1): `src/app/(app)/@modal/` has `default.tsx` (null), the intercepted `(.)transactions/new`,
     `(.)wallets/new`, `(.)wallets/[id]/edit`, and **a `page.tsx` returning null at every other `(app)` route**
     (`page.tsx` for `/`, `transactions/`, `transactions/[id]/edit/`, `transactions/transfers/[id]/edit/`,
-    `wallets/`, `wallets/[id]/`, `categories/`, `data/`). Without them a soft navigation out of a dialog leaves
+    `wallets/`, `wallets/[id]/`, `categories/`, `data/`, `account/`, `rates/`). Without them a soft navigation out of a dialog leaves
     the slot on the dialog's segment, and in `next dev` opening the same dialog again was then ignored. The docs'
     catch-all `@modal/[...catchAll]` is not usable: Next 16's strict route matching then rejects the `(auth)`
     pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
@@ -799,25 +827,72 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
         or before it, so a Saturday uses Friday's), then added. The largest day's label and the top category
         compare converted amounts. A line under the heading: "All wallets, converted at each day's rate · European
         Central Bank, via Frankfurter".
-      - **Wallets card**: starts with "Total in <currency>": every active wallet, converted at the **latest** rate
+      - **Wallets card**: starts with "Total in <currency>": every active wallet, converted at the **latest** rate (a past month: the rate of its last day, see below)
         (`convertedTotal`: each wallet converted once, rounded half away from zero to the target's decimals, then
         added), shown with "≈"; a wallet in another currency shows "≈ <converted balance>" under its own balance.
         Under the total: "Rates of 6 Nov 2026 · European Central Bank, via Frankfurter".
     - `only`: the page as before the converted view — the month figures for the selected currency only, and the
       Wallets card limited to the wallets in that currency with their plain sum.
-    The switch ("All in EUR · EUR only", links, `WalletsViewSwitch`) sits next to the currency switch and is shown
-    when the user holds a wallet (archived included) in another currency; otherwise the view is `all` and nothing
-    is converted. The month switcher and the currency switch keep `view=only`. A currency with no rate (not quoted
-    by the provider, rates switched off, or the provider unreachable with nothing cached) is left out, with a note
-    naming it (`walletsTotalNotes`; `missingCurrencies` from the month services). The Wallets balances are today's,
-    also for a past month. Other pages (Transactions strip, Categories, wallet pages) never convert.
-    - Rates: `getExchangeRates()` fetches `https://api.frankfurter.dev/v1/latest?base=EUR`; `getDailyRates(from,
-      to)` fetches the time series `https://api.frankfurter.dev/v1/<from − 7 days>..<min(to, today)>?base=EUR`
-      (the previous and the shown month). ECB reference rates, no API key, cross rates through EUR. Requests are
-      made only when something needs converting. Tables are kept in memory for every user: the latest one and a
-      range reaching today are refreshed after 6 h, a range that ended before today is kept (at most 24 ranges); a
-      failed fetch keeps the last table and waits 10 min before trying again; 4 s timeout; never throws. Nothing
-      goes in the database. `EXCHANGE_RATES=false` turns it off (no request is made).
+    The switch ("All in EUR · EUR only", links, `ConvertSwitch` = `WalletsViewSwitch` labelled "Currencies counted"
+    plus a "Rates" link to `/rates?returnTo=<this page>`) sits next to the currency switch and is shown when the
+    user holds a wallet (archived included) in another currency; otherwise the view is `all` and nothing is
+    converted. The month switcher and the currency switch keep `view=only`. A currency with no rate (not quoted by
+    the provider and no own rate, rates switched off, or the provider unreachable with nothing stored) is left out,
+    with a note naming it (`walletsTotalNotes` / `monthConversionNotes`; `missingCurrencies` from the month
+    services) and an "Enter a rate for KWD" link to `/rates` (`ConversionNotes`, `ratesNeeded`: the target currency
+    itself when it is the one without a rate).
+    - **Wallets card for a past month**: the balances at the end of that month's last day (`getWalletBalancesOn`;
+      "Balances at the end of 31 Oct 2026" under the heading) converted at that day's rates (`tableFor(conv,
+      lastDay)`, the latest business day on or before it). The current month keeps today's balances and today's
+      (latest) rates. The month change column is the month's in − out either way.
+    - **Notes**: "Rates of 6 Nov 2026 · <source>"; during an outage "Exchange rates could not be updated: rates
+      from 6 Nov 2026 · <source>" (and for the month figures "…: rates from 6 Nov 2026 stand in for later days.");
+      "KWD: your own rate." when a wallet was converted with the user's own rate; with no provider table at all but
+      own rates, the month line reads "All wallets, converted at your own rates".
+    - The same view and controls are on the **/transactions day strip** and **/categories** (below).
+
+### Exchange rates (`src/server/exchange-rates.ts`, `src/server/manual-rates.ts`, `src/lib/fx.ts`)
+
+- **Provider**: Frankfurter (`https://api.frankfurter.dev/v1/<from>..<to>?base=EUR`), ECB reference rates, no API
+  key, cross rates through EUR. A converted view asks `getDailyRates(from, to)` for the days from a week before
+  `from` to `min(to, today)` (the Overview and the strip: the previous and the shown month; /categories: the shown
+  month). Requests are made only when something needs converting; 4 s timeout; never throws.
+- **Stored in the database, shared by every user and process**: each published day's rates in `exchange_rates`,
+  each calendar day asked about in `exchange_rate_days`. The database is looked up first and only the days it has
+  no current answer for are fetched (one request for the span from the first to the last such day). A day's answer
+  is final once it was fetched after that day ended (UTC); a day fetched on or before itself (today) is fetched
+  again after 6 h. A response with no days is accepted for a weekend-only range, else it is a failure.
+- **Outage**: the request fails → the most recent stored day on or before each date is used (the stored days of
+  the range plus the latest stored day before it), the result carries `incomplete: true`, the notes say "rates
+  from <date>", and the next try waits 10 min (in memory, per process). Nothing stored and the provider down →
+  null (the currencies are left out with "Exchange rates are not available now").
+- **Rates are exact decimals**: `numeric` columns, read back as strings; a provider rate is stored as JavaScript's
+  shortest round-trip decimal of the JSON number (what the provider wrote), a manual one as typed (normalised by
+  `parseRateInput`). They become a JS number only for the conversion maths, whose result is rounded to the
+  target's minor units.
+- **The user's own rates** (`manual_exchange_rates`): "1 KWD = 3.25 EUR from 1 Nov 2026". `tableFor(conv, date)`
+  starts from the provider's table for the date (`tableOn`) and adds, for each currency the provider has **no**
+  rate for that day, the latest own rate with `effectiveDate` ≤ date (none before the first one). A manual rate is
+  never used where the provider has one. Its base must have a rate itself that day: EUR, a provider currency, or
+  another manual currency (resolved in passes). Without any provider table (switched off, or nothing stored) the
+  table's base is EUR and holds only the own rates that resolve against EUR. Own rates apply also with
+  `EXCHANGE_RATES=false`.
+- `EXCHANGE_RATES=false` turns the provider off (no request; stored provider rates are not used either).
+
+- **/rates** — "Exchange rates": not in the main menu; linked from `ConvertSwitch` ("Rates") and from a conversion
+  note's "Enter a rate for …" (`?returnTo=` through `safeReturnTo`; a "← Back" link then). A status line (provider
+  switched off / "The provider (…) quotes N currencies; its latest rates are of <date>" / not loaded yet). One card
+  per currency from `currenciesNeedingRates(held, quoted, withManual)`: the currencies the user holds (archived
+  wallets included) that the provider's latest stored day does not quote, plus any with own rates, never EUR (with
+  nothing quoted — off or never loaded — every held currency but EUR). Each card: "KWD · Kuwaiti Dinar", the
+  existing rates ("From 1 Nov 2026: 1 KWD = 3.25 EUR", each with Remove), and the form "1 KWD = [rate] [currency ▾]
+  From [date]" + "Save rate" (`RateForm`: fields `currency` (hidden), `rate`, `base` (EUR, then the other held
+  currencies), `effectiveDate` (today by default); keyed on the action result). A currency the provider now quotes
+  says its own rates are only used on days the provider has none. No currency needing a rate → "The provider
+  quotes every currency you hold". Actions `setManualRateAction` / `deleteManualRateAction` (`requireUser`, zod
+  shape, service, `serviceErrorState`, `revalidatePath("/", "layout")`; success messages "Saved: from 1 Nov 2026,
+  1 KWD = 3.25 EUR." / "Rate removed."). `@modal/rates/page.tsx` returns null. Manual rates are not in the JSON
+  backup (see DECISIONS → Known gaps).
   - As built (step 3; `page.tsx`, `components/dashboard/month-chart.tsx`, `overview-lists.tsx`):
     - **Currency**: `?currency=` is used when it is a valid code (`isValidCurrency`, uppercase only) of a wallet the
       user holds, archived included; anything else falls back to `pickDefaultCurrency(userId, month)`
@@ -925,7 +1000,13 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       of a single selected day (`from = to`) — and the list is not empty or a day is selected (no strip for all
       time, other ranges or a month with no entries). Currency: the filtered wallet's (no switch then), else
       `?currency=` / `pickDefaultCurrency` through `resolveOverviewCurrency` with a `CurrencySwitch` under the same
-      rule as the Overview. `getMonthTimeline(userId, { month, currency, walletId, categoryId })`; the type and
+      rule as the Overview. **Converted view**: without a wallet filter and with a wallet (archived included) in
+      another currency, `ConvertSwitch` ("All in EUR · EUR only" + "Rates") sits next to the currency switch;
+      "All in" (default) passes `convert` = `getConversion(userId, previous month's first day, month end)` and the
+      `ConversionNotes` line sits under the heading; `?view=only` (in `ListParams.view`, kept by `listHref`, the
+      no-JS form and the search form, dropped from the CSV export link) counts only that currency. With a wallet
+      filter there is no conversion (one wallet, one currency).
+      `getMonthTimeline(userId, { month, currency, walletId, categoryId, convert? })`; the type and
       search filters do not apply (it always shows expenses). `DayBars` 48px tall (72 with a cap), scaled with
       `pickScale` (one huge day capped, labelled with its amount), days after today `future`, inside a
       `role="group"` labelled "Each day of November 2026: select a day to list only that day"; each bar links to
@@ -1169,6 +1250,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       `currency` only when it came from the URL; the `CurrencySwitch` links keep the month (`overviewHref(…,
       "/categories")`) and the switch is left out under the Overview's rule. Both sit in `PageHeader`'s actions and
       wrap under the title on phones.
+    - **Converted view** (same rule and controls as the Overview: `?view=only`, `ConvertSwitch` in the header
+      actions, `ConversionNotes` above the split card): in "All in <currency>" (default when a wallet in another
+      currency exists) every row's `monthAmountMinor` is `getCategoryMonthAmounts(…, { convert })` — every
+      currency converted at each day's rate — so the split card and the share bars cover all spending; currencies
+      without a rate are left out with the note. The counts are never affected. The month switcher and the currency
+      switch keep `view=only`.
     - **Spending split card** (`SpendingSplitCard`, server): the total is the sum of the expense categories'
       `monthAmountMinor` (every expense in that currency that month, archived wallets included — the same figure as
       `getMonthInsights().expenseMinor`), then "spent in <Month>". `spendingSplit(categories)` keeps the expense
@@ -1914,8 +2001,9 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   - `ALLOW_REGISTRATION` — `true` (default) or `false`. When `false`, `/register` shows a "registration is
     disabled" message and the register action refuses, so an instance exposed to the internet can be closed
     after its accounts exist.
-  - `EXCHANGE_RATES` — `true` (default) or `false`. When `true`, the server requests the day's reference rates
-    from `api.frankfurter.dev` for the Overview's converted total; `false` makes no outbound request.
+  - `EXCHANGE_RATES` — `true` (default) or `false`. When `true`, the server requests reference rates from
+    `api.frankfurter.dev` for the "All in <currency>" views and keeps them in the database; `false` makes no
+    outbound request (the user's own rates on `/rates` still apply).
   - `PORT` (default 3000), `HOSTNAME` (`0.0.0.0` in the image).
 - Migrations are applied automatically at startup, so the migrations folder must be resolvable in the
   standalone build (resolve from `process.cwd()`, overridable with `MIGRATIONS_DIR`) and copied into the image.
