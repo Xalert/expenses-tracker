@@ -1,24 +1,30 @@
 import type { Metadata } from "next";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui";
-import { requireUser } from "@/lib/auth";
+import { currentSessionTokenHash, requireUser } from "@/lib/auth";
+import { countOtherSessions } from "@/server/users";
 import { ChangePasswordForm } from "./change-password-form";
+import { DeleteAccountForm } from "./delete-account-form";
+import { ProfileForm } from "./profile-form";
+import { SessionsForm } from "./sessions-form";
 
 export const metadata: Metadata = { title: "Account settings" };
 
 export default async function AccountPage() {
   const user = await requireUser();
+  const otherSessions = await countOtherSessions(user.id, await currentSessionTokenHash());
   return (
     <>
       <PageHeader title="Account settings" />
       <div className="max-w-xl space-y-6">
         <Card>
-          <CardHeader title="Signed in as" />
+          <CardHeader title="Profile" description={`Signed in as ${user.displayName}.`} />
           <CardBody>
-            <dl className="space-y-3 text-sm">
-              <Row label="Name" value={user.displayName} />
-              <Row label="User ID" value={user.username} />
-              {user.email && <Row label="Email" value={user.email} />}
-            </dl>
+            <ProfileForm
+              username={user.username}
+              email={user.email}
+              firstName={user.firstName}
+              lastName={user.lastName}
+            />
           </CardBody>
         </Card>
         <Card>
@@ -30,18 +36,19 @@ export default async function AccountPage() {
             <ChangePasswordForm username={user.username} />
           </CardBody>
         </Card>
+        <Card>
+          <CardHeader title="Devices" description="Sessions last 30 days unless you sign out." />
+          <CardBody>
+            <SessionsForm otherSessions={otherSessions} />
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader title="Delete account" />
+          <CardBody>
+            <DeleteAccountForm username={user.username} />
+          </CardBody>
+        </Card>
       </div>
     </>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-3">
-      <dt className="w-20 shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1 truncate font-medium text-foreground" title={value}>
-        {value}
-      </dd>
-    </div>
   );
 }

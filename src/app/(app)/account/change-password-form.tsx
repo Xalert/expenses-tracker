@@ -1,10 +1,11 @@
 "use client";
 
 import { useActionState } from "react";
-import { Field, FormError, Input, SubmitButton } from "@/components/ui";
+import { Field, Input, SubmitButton } from "@/components/ui";
 import { MIN_PASSWORD_LENGTH } from "@/lib/constants";
 import { initialFormState } from "@/lib/form";
 import { changePasswordAction } from "./actions";
+import { FormStatus, resultKey } from "./form-status";
 
 /** The change-password form. `username` only feeds a hidden input so password managers pick the right account. */
 export function ChangePasswordForm({ username }: { username: string }) {
@@ -14,18 +15,12 @@ export function ChangePasswordForm({ username }: { username: string }) {
   return (
     // Keyed on the action result: a new result remounts the form, so every field clears (after success, and
     // after an error too, since passwords are never echoed back).
-    <form key={String(state.ok ?? "") + (state.message ?? "") + JSON.stringify(err)} action={formAction} className="space-y-5" noValidate>
-      {state.ok ? (
-        <p role="status" className="rounded-xl border border-income/30 bg-income-soft px-3 py-2 text-sm text-income">
-          {state.message}
-        </p>
-      ) : (
-        <FormError message={state.message} />
-      )}
+    <form key={resultKey(state)} action={formAction} className="space-y-5" noValidate>
+      <FormStatus state={state} />
       <input type="hidden" name="username" value={username} autoComplete="username" readOnly />
-      <Field id="currentPassword" label="Current password" error={err.currentPassword}>
+      <Field id="pw-currentPassword" label="Current password" error={err.currentPassword}>
         <Input
-          id="currentPassword"
+          id="pw-currentPassword"
           name="currentPassword"
           type="password"
           autoComplete="current-password"

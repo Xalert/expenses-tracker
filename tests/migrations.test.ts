@@ -142,6 +142,9 @@ describe("constraints", () => {
     expect(await sqlState(() => db.insert(users).values({ username: "u", passwordHash: "x" }))).toBe("23505");
     await db.insert(users).values({ username: "v", email: "v@x.test", passwordHash: "x" });
     expect(await sqlState(() => db.insert(users).values({ username: "w", email: "v@x.test", passwordHash: "x" }))).toBe("23505");
+    // the indexes are on lower(...): a value that differs only in case collides too
+    expect(await sqlState(() => db.insert(users).values({ username: "U", passwordHash: "x" }))).toBe("23505");
+    expect(await sqlState(() => db.insert(users).values({ username: "w", email: "V@X.test", passwordHash: "x" }))).toBe("23505");
     // several accounts without an email do not collide
     expect(await sqlState(() => db.insert(users).values({ username: "z", passwordHash: "x" }))).toBeNull();
     expect(await sqlState(() => db.insert(categories).values({ userId, name: "Food", kind: "expense" }))).toBe("23505");
@@ -151,7 +154,19 @@ describe("constraints", () => {
       await db.insert(users).values({ username: "u", passwordHash: "x" });
       expect.unreachable();
     } catch (err) {
-      expect(pgError(err, "23505")?.constraint).toBe("users_username_unique");
+      expect(pgError(err, "23505")?.constraint).toBe("users_username_lower_uq");
+    }
+  });
+
+  it("sign-in lookups on lower(username) / lower(email) can use the unique indexes", async () => {
+    await db.execute(sql`set enable_seqscan = off`);
+    try {
+      for (const where of [sql`lower(username) = 'u'`, sql`lower(email) = 'v@x.test'`]) {
+        const plan = await rows<{ "QUERY PLAN": string }>(db, sql`explain select id from users where ${where}`);
+        expect(plan.map((r) => r["QUERY PLAN"]).join("\n")).toMatch(/users_(username|email)_lower_uq/);
+      }
+    } finally {
+      await db.execute(sql`reset enable_seqscan`);
     }
   });
 
