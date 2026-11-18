@@ -226,6 +226,7 @@ Added 2026-11-08.
 | An empty optional `DatePicker` (`allowEmpty`, the transaction filters — that form was replaced by the chip row in redesign step 4; `allowEmpty` is kept) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
+| A popover opens above its anchor only when it does not fit below **and** there is more room above; the room is measured inside every clipping ancestor (the dialog body), not just the viewport; no portal still | Below stays the default so menus do not jump around; inside the Add sheet the calendar was clipped by the scrolling body, which the viewport alone does not see. A portal would have needed its own focus and outside-click handling | planner (flip), built (clipping ancestors) |
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -437,7 +438,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   the preview (the confirmation re-validates and reports what it actually did).
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
-- Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
 - On the wallet chart a capped day's label pill is in the accent colour even when it is money in (the bar itself is
   green); the label says "In" or "Out".
 - A wallet's starting balance uses the decimal keyboard on phones (as before step 5), which on iOS has no minus key;

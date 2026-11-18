@@ -478,7 +478,12 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   no portal: an absolutely positioned panel under `anchor` (the trigger's `relative` wrapper). Renders nothing when
   closed; closes on Escape (unless the panel already handled it with `preventDefault`), on pointer-down outside
   `anchor` and when focus moves outside it; returns focus to `trigger` unless the user clicked or tabbed elsewhere.
-  It shifts itself sideways to stay 8px inside the viewport, so it never causes horizontal scroll at 375px.
+  It shifts itself sideways to stay 8px inside the viewport, so it never causes horizontal scroll at 375px. It
+  opens **above** the anchor instead (`bottom-full mb-2`, `data-placement="above"`) when the panel does not fit
+  below and there is more room above (`choosePlacement`, a pure function exported from `popover.tsx`; room is
+  measured against the viewport narrowed by every ancestor that clips overflow, e.g. the dialog's scrolling body,
+  with the 8px gap and 8px gutter). Measured before paint on open and again on window resize, on any scroll
+  (capture) and when the panel's own size changes (`ResizeObserver`; the date picker's month view is shorter).
 - `FormError` `{ message? }` — form-level `role="alert"` banner. `Card`, `CardHeader { title; description?; actions? }`,
   `CardBody`. `Badge` `{ tone?: 'neutral'|'accent'|'income'|'expense'|'transfer'|'danger' }`.
   `EmptyState` `{ title; description?; action?; icon? }`. `PageHeader` `{ title; description?; actions? }` (page `<h1>`).
