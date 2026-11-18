@@ -58,11 +58,11 @@ their titles once statements are added, and each says "done" when it is.
 
 **1. Wallets & categories panel.** The tracker exports a small **context file** made for this page: `/data` →
 "Wallets & categories (JSON)" (`GET /api/export/context`: `{ app: "expenses-tracker", kind: "context", version: 1,
-exportedAt, wallets: [{ name, currency, archived, group }], categories: [{ name, kind }] }`). The panel takes it three
+exportedAt, wallets: [{ name, currency, archived, group }], categories: [{ name, kind, archived }] }`). The panel takes it three
 ways: a file picker, drag-and-drop anywhere on the panel, or a paste box ("Copy to clipboard" on the tracker's /data page puts
 the same JSON on the clipboard, for phones and for when downloads are awkward). A full backup JSON
 (`/api/export/backup`) is still accepted — only `wallets[]` and `categories[]` are read from it — but the page
-steers to the context file, which carries no history. Archived wallets are left out. A preview says how many
+steers to the context file, which carries no history. Archived wallets and categories (`archived: true`) are left out. A preview says how many
 wallets and categories were found, which are new and which are already known, and "Use these" replaces the lists;
 the panel then shows when the context was last loaded and from which kind of file. The file is never stored. Wallets (name +
 currency) and categories (name + kind) can also be typed or removed. Stored in `data/users/<id>/config`. Without a
@@ -75,7 +75,7 @@ file (a paste that isn't JSON also says to copy again). Entries go through the s
 needs a string name of 1–60 characters and a known 3-letter currency, a category a string name of 1–40 characters
 and kind `expense`/`income`; duplicates (name ignoring case + currency, kind + name ignoring case) and invalid
 entries are left out and counted in the preview; unknown fields are ignored; files over 20 MB are refused. The
-preview lists the counts, the new names (first eight, then "and N more"), archived wallets left out, entries left
+preview lists the counts, the new names (first eight, then "and N more"), archived wallets and categories left out, entries left
 out, and the current wallets and categories the file lacks ("removed from the lists here"). The file picker, a
 drop anywhere on the panel (a dropped text selection is read like a paste) and the paste box (cleared after a
 successful load) all lead to the same preview. After "Use these" the panel shows "Loaded N wallets and M categories
@@ -290,7 +290,7 @@ the merchant keys, that its CSV writer matches `src/lib/csv.ts` byte for byte, t
 fixture answers, and that both the CSV the core builds and `harness-export.csv` pass the app's `previewImport` with
 no problems (36 transactions, 1 transfer, the expected wallets and categories to create), are identical, and are
 fully skipped as duplicates on a second import. It also reads `tracker-context.json`, `tracker-backup.json`, the
-output of the app's own `buildContext` and junk through `readTrackerExport` (archived wallets left out, invalid and
+output of the app's own `buildContext` and junk through `readTrackerExport` (archived wallets and categories left out, invalid and
 repeated entries counted, clear errors), checks the context fixture against the app's `contextSchema`, and covers
 `compareConfig` and `readLoaded`.
 

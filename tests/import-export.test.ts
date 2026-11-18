@@ -1139,5 +1139,6 @@ describe("docs/IMPORTING.md", () => {
       ["Old card", true, true],
       ["Cash", false, false],
     ]);
+    expect(p.categoriesToCreate).toEqual([{ name: "Old rent", kind: "expense", archived: true }]);
   });
 });

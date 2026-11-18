@@ -55,6 +55,8 @@ section holds what replaced it.
 | `/rates` is not in the main menu; it is linked from the "All in" switch ("Rates") and from a note that leaves a currency out ("Enter a rate for KWD", with `returnTo`) | It is needed rarely and only in the context of a converted view | planner (2026-11-18) |
 | The rates page lists the held currencies (archived wallets included) the provider's latest stored day does not quote, plus any with own rates; with nothing quoted (off or never loaded) every held currency but EUR | What needs a rate is exactly what the provider leaves out; listing everything when nothing is known lets an offline instance convert at all | planner (2026-11-18) |
 | **Deliberate: no second rate provider** | The manual rates cover the currencies Frankfurter does not quote; a second provider would need an API key or an account for most currencies and a rule for when the two disagree | planner (2026-11-18) |
+| *(2026-11-18)* **Deliberate:** the provider's stored rates (`exchange_rates`, `exchange_rate_days`) are never pruned | About 30 rows per business day (some 8,000 a year), shared by every account, and needed again whenever anyone looks at a past month in a converted view; pruning would only mean fetching them again | planner |
+| *(2026-11-18)* **Deliberate:** a manual rate whose base is not EUR does not resolve when there are no provider rates (switched off, or none stored), unless that base has a manual rate against EUR itself | Without the base's own rate there is nothing to convert through; inventing one is worse than leaving the currency out (the conversion note already says which currency has no rate) | planner |
 | "All in EUR" (converted, default) and "EUR only" are a `?view=` link switch | The owner asked for both; links keep it working without JavaScript and in the URL like `?currency=` | planner |
 | A transfer is one `transfers` row plus two transaction legs, written atomically | Each wallet's history shows its own side; legs can never drift apart | planner |
 | Cross-currency transfers ask for both the amount sent and the amount received | Records what actually happened without needing a rate | planner |
@@ -137,6 +139,8 @@ Added 2026-11-18 (closing the category gaps):
 | The new replacement may not reuse the removed category's own name (ignoring case) | It is created before the old one is deleted; renaming is the way to keep the name | built |
 | The backup carries `archived` per category (always written, optional on read, version stays 1); an import restores it on categories it creates and treats existing archived categories like archived wallets (new entries are a problem, duplicates skip) | Same contract as archived wallets; old backups keep importing (as active) | planner |
 | The "Top category" (Overview insight card) is ranked in JS by one function, `pickTopCategory` (amount, then the lower-cased name by UTF-16 code units, then id), in both the per-currency and the converted view | The SQL `lower()` order depends on the database collation and `localeCompare` on the locale, so the two views could name different categories on a tie | planner |
+| *(2026-11-18)* Every category list is ordered in one place, in JS: `sortCategories` / `compareCategoryNames` (`src/lib/category-order.ts`: expense first, active before archived, then the name lower-cased compared by code point, then id); the services sort after the query, and `pickTopCategory`, the spending split and the dashboard's per-category list break ties with the same name rule | Chosen over `COLLATE "C"` on `lower(name)`: Postgres' `lower()` itself depends on the database's ctype for non-ASCII letters, so only JS gives the same order on every instance (and PGlite); category lists are small. Not `localeCompare` either (runtime- and locale-dependent) | planner |
+| *(2026-11-18)* After a kind change the row's new card announces it and takes the focus (its heading at once, then the row's button once the refreshed list has it), told by the old card through a window event | The two cards are separate components; focus left on the old card's heading pointed at a list the row was no longer in | planner |
 
 ### Import and export
 
@@ -187,6 +191,11 @@ Added 2026-11-18 (closing the category gaps):
 | The importing guide is a user doc, `docs/IMPORTING.md`, linked from /data's "What can be imported" (to GitHub, since the app serves no docs) and from the README | The SPEC is a build contract, not something to send a user to | planner |
 | **Deliberate:** no in-app bank-statement / column-mapping importer | The Statement Importer artifact (`docs/STATEMENT-IMPORTER.md`) turns statements into the native CSV; an in-app mapper is a much larger feature | planner |
 | **Deliberate:** Spendee variants that have not been seen (other locales or date formats, transfers to a wallet outside Spendee, the older single-file export with transfers) are not supported specially | No sample files exist; guessing their shape would add rules nobody can test. Unknown shapes are reported as problems, never guessed | planner |
+| *(2026-11-18)* The CSV gets a `category` row type (name in `category`, a new optional `kind` column, `archived` = date); the export writes one per archived category its rows use; an import applies it only to categories it creates (an unused described category is created too) | Mirrors the wallet rows: a CSV round trip keeps a category archived (and when), old files import unchanged, "import adds, never changes". A `kind` column was preferred to overloading `type` (`expense-category`) or another cell; active categories need no row, so ordinary exports barely change | planner |
+| *(2026-11-18)* The backup carries `archivedAt` per archived category (optional, version stays 1) and restores it, as for wallets; two categories merged by case keep the later date | The import used to archive restored categories as of the import | planner |
+| *(2026-11-18)* The backup carries the user's manual exchange rates (`manualRates: [{ currency, base, effectiveDate, rate }]`, rate as the stored decimal string; optional, version stays 1); an import adds those the account lacks by currency + date and keeps an existing one (a notice when it differs); the currencies need not be held | Restoring onto another instance no longer loses them; additive like everything else; a rate for a since-deleted wallet's currency is harmless and must not make the account's own backup unimportable | planner |
+| *(2026-11-18)* The context export flags archived categories (`archived`, optional in its schema, version stays 1), and the Statement Importer leaves them out (counted in its preview, like archived wallets) | The importer could suggest an archived category, which the CSV import then refuses | planner |
+| *(2026-11-18)* An import treats an existing wallet of an archived group as archived (new rows are a problem naming the group; duplicates skip); a wallet the import creates is never so treated, even in an existing archived group | Same rule as the entry services; a created wallet's rows are a restore, as for wallets created archived | planner |
 
 ### Statement importer (claude.ai Artifact)
 
@@ -222,6 +231,7 @@ Added 2026-11-18 (closing the category gaps):
 | The artifact's preview also names the current wallets and categories the file lacks, which "Use these" removes | "Replaces the lists" is otherwise a silent deletion of entries typed by hand | built |
 | Wallet and category names read from files or memory must be strings (a number is no longer turned into a name) | Defensive shape checks asked for by the plan; nothing the tracker or the page writes uses numbers there | built |
 | `tools/**` is excluded from eslint | The artifact is plain browser JS outside the Next.js app; its contract is checked by the harness and by `tests/statement-importer-csv.test.ts` | built |
+| *(2026-11-18)* The artifact skips a category with `archived: true` in the tracker file (context or backup) and counts it in the preview ("N archived categories left out.") | The smallest change: the same rule it already had for archived wallets; older files without the flag read as before | planner |
 
 ### Database: SQLite to PostgreSQL
 
@@ -315,6 +325,7 @@ Added 2026-11-08.
 | A negative starting balance is entered with a "±" toggle button inside the amount box; the input keeps `inputMode="decimal"` | iOS Safari's decimal pad has no minus key and no `inputmode` value gives a numeric pad with one: `numeric` has none either, `text` brings the full keyboard for an amount that is nearly always positive, and `type="number"` rejects "1.234,56" and comma decimals and changes the value on scroll. A toggle works the same on every platform; a tap does not take focus, so the keyboard stays up | planner (toggle), built (why not an input mode) |
 | The bottom sheet closes on a drag down from its handle or header (more than a third of its height, or a fast flick of at least 24px); the body is not a drag area | Dragging from the scrolling body would fight its scroll (and pull-to-refresh); handle + header is what sheet UIs use. The drag is a pointer-only shortcut, so the handle stays `aria-hidden`; ✕ and Escape remain the accessible ways to close | planner (gesture), built (thresholds) |
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
+| *(2026-11-18)* Without JavaScript the /transactions Month chip's popover button is hidden like the other popover chips and a `<noscript>` link with the same label jumps to the no-JS filter form's Month select (`#no-script-month`) | The label looked like a button that did nothing; the ‹ › links keep working, and the form below is where a month is chosen without scripts. With scripts nothing changes | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
 
@@ -437,8 +448,10 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 | *(2026-11-18)* An archived group leaves the switcher and the group pickers; a selected scope or `selectGroupAction` naming one means All; a wallet cannot be created in or moved into one (the edit form still offers the wallet's own archived group); an import cannot target one | The planner's proposal; mirrors "archived wallets are hidden from pickers" and keeps a stale cookie harmless | built |
 | *(2026-11-18)* The last unarchived group can be neither archived nor deleted; an empty archived group can always be deleted; the default group is the oldest unarchived one | There is always somewhere for a new wallet to go and something for the switcher-less interface to show | built |
 | *(2026-11-18)* The services do not refuse new entries on a wallet whose group is archived (only the pickers stop offering it) | SPEC: "nothing else about a transaction depends on the group"; changing the transaction / transfer rules is outside the groups area and the UI already prevents it | built |
-| *(2026-11-18)* Archived groups are shown (with All) in a closed "Archived groups" `<details>` on the Wallets page with their wallets, Unarchive and Delete when empty; the Groups card lists only unarchived groups | Same pattern as the "Archived" wallets list; renaming an archived group means unarchiving it first, which keeps the card simple | built |
+| *(2026-11-18)* Archived groups are shown (with All) in a closed "Archived groups" `<details>` on the Wallets page with their wallets, Unarchive and Delete when empty; the Groups card lists only unarchived groups | Same pattern as the "Archived" wallets list (renaming one in place was added later the same day, see below) | built |
 | *(2026-11-18)* The backup gains an optional top-level `groups: [{ name, color, archived }]` in display order; an import creates every listed group the account lacks (empty ones too), after the account's own groups, and never changes an existing group | Round-trips order, colour and archived state without a version bump; old files still import; "import adds, never changes" | built |
+| *(2026-11-18)* An archived group can be renamed and recoloured without unarchiving it: an Edit toggle in its row of the "Archived groups" section opens the Groups card's form (the service always allowed it) | Unarchiving just to rename showed it in the switcher meanwhile; one form for both lists | planner |
+| *(2026-11-18)* The entry services refuse new entries (and moving an entry) onto a wallet whose group is archived, exactly as onto an archived wallet; an entry already on it keeps it when edited | Before, only the pickers hid such wallets; the rule now holds for every caller | planner |
 
 ### Process
 
@@ -477,28 +490,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Features not built
 
-- **Category lists are ordered by SQL `lower(name)`**, whose order for non-ASCII names depends on the database's
-  collation. (The Overview's "Top category" tie-break no longer does: since 2026-11-18 both its views use
-  `pickTopCategory` in JS.)
 - **An account without a time zone still dates Spendee imports in the browser's zone**, so re-importing from a
   browser in another zone can shift entries near midnight and miss them as duplicates. Accounts get a zone at
   registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
-- **Manual exchange rates are not in the JSON backup** (nor the CSV): restoring an account onto another instance
-  loses them, they have to be entered again on `/rates`. The backup format is versioned and strict; adding them is
-  a format change for its own step.
-- **A manual rate with a base other than EUR does not resolve without provider rates** (switched off, or nothing
-  ever stored), unless that base itself has a manual rate against EUR.
-- **The provider's rates are never pruned** (about 30 rows per business day, some 8,000 a year): small, but they
-  grow with every month anyone looks at.
-- **The context export does not flag archived categories**, so the Statement Importer can still suggest one; the
-  CSV import then reports those rows as a problem ("archived in your account"). Adding `archived` to the context's
-  categories and dropping them in the artifact is left for the artifact's next change.
-- **A CSV cannot archive a category**, and the import preview does not say that a category it creates from a
-  backup will be archived (the service returns `archived: true` on that entry; `import-preview.tsx` ignores it).
-- **An archived group cannot be renamed or recoloured without unarchiving it first**, and the services still accept new
-  entries on a wallet of an archived group (only the pickers hide it).
+- **Manual exchange rates are not in the CSV** (only in the JSON backup since 2026-11-18): a CSV moves entries, not
+  rates.
 - **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
   refusal ("The upload failed…" in the panel); browsers always send the header for a `FormData` body.
 - *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
@@ -506,15 +504,10 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ### Rough edges
 
-- Without JavaScript the /transactions Month chip's label still renders as a button that does nothing (its ‹ › links
-  and the `<noscript>` filter form below do the work); the no-JS month select covers 24 months back and one ahead
-  (plus the month in view), older months are reached with ‹.
+- Without JavaScript the no-JS month select covers 24 months back and one ahead (plus the month in view); older
+  months are reached with ‹.
 - The day-strip bars themselves stay about 10px wide at 375px (the hit areas now touch and are 48px tall); the
   "Pick a day" calendar is the 44px path on phones.
-- After a kind change the row moves to the other kind's card, but focus and the announcement stay with the card it
-  left (its heading).
-- A category restored as archived from a backup is marked archived as of the import, not its original date
-  (wallets carry `archivedAt`; categories only a flag).
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
   it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
   Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
@@ -587,6 +580,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   archived category, and the page at 375px with the extra controls. The `FOR UPDATE` / `FOR SHARE` pair was not
   exercised with two real concurrent connections (PGlite runs one).
 
+- **Leftover data and UI gaps (2026-11-18) are covered by service, import / export round-trip, render and pure-helper
+  tests only.** Not tried in a browser: the kind change's focus landing on the moved row in the other card (the
+  window event, then the refreshed list's effect; a slow refresh leaves focus on that card's heading meanwhile) and
+  its announcement being read; the archived group's Edit toggle and form inside the closed `<details>` at 375px and
+  in dark mode (focus into the name, back to the toggle); the no-JS Month link jumping to the select (fragment
+  navigation scrolls to it but does not focus it in every browser) with scripts off. The Statement Importer change
+  was checked through `tests/statement-importer-csv.test.ts` only, not in the published artifact.
 - **Account time zone (2026-11-18) is covered by service, action (mocked Next APIs) and render tests only.** Not
   tried in a browser: the hidden field being filled after hydration on `/login` and `/register` (and surviving a
   failed submit), the ~420-option grouped select on `/account` at 375px, on iOS / Android pickers and in dark mode,

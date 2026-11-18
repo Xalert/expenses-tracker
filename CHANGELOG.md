@@ -24,3 +24,7 @@ The first tagged release: everything built since 2026-11-05, in short.
   SBOM and provenance.
 - Each account has a time zone (taken from the browser at registration or sign-in, changeable under Account
   settings); Spendee imports are dated in it, so re-importing from another time zone finds the same duplicates.
+- Archived categories and your own exchange rates survive an export: the backup carries when a category was
+  archived and the rates from the Rates page, the CSV gets a `category` row for each archived category it uses, and
+  the Wallets & categories file flags archived categories (the Statement Importer leaves them out). Archived wallet
+  groups can be renamed and recoloured, and take no new entries, like archived wallets.
