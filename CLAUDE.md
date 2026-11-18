@@ -11,8 +11,9 @@ shipped as a Docker image (run with a Postgres container by the Compose files).
 - `docs/SPEC.md` — the build contract: domain rules, data model, every service signature, the Server Action
   pattern, screens, import/export formats, deployment. **When you change a rule, signature, route or format,
   update the spec in the same change.**
-- `docs/DECISIONS.md` — why things are the way they are, and the known gaps. **When you make a product or
-  design decision, or leave something unfinished or unverified, add it there.**
+- `docs/DECISIONS.md` — why things are the way they are, the known gaps, and the "Next steps" to-do list. **When
+  you make a product or design decision, or leave something unfinished or unverified, add it there**; tick or
+  remove a next step when it is done.
 - `AGENTS.md` — written by `next dev`. This is Next.js 16: APIs differ from older versions (`params` and
   `searchParams` are Promises, etc.). Check `node_modules/next/dist/docs/` before relying on memory.
 - `README.md` — a landing page, kept short: what the app is, the Compose quick start, a pointer to

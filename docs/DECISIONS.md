@@ -4,7 +4,8 @@ A running log of the choices made while building this app, why they were made, a
 unverified. `docs/SPEC.md` says *what* the app does; this file says *why*, and what it does not do.
 
 Keep it current: when a product or design decision is made, or something is left unfinished or unchecked, add it
-here in the same change. Remove a gap when it is closed (and say so in the commit).
+here in the same change. Remove a gap when it is closed (and say so in the commit). ["Next steps"](#next-steps) is
+the ordered to-do list drawn from the gaps.
 
 "Decided by" is **owner** (the project owner chose it), **planner** (chosen while planning, not explicitly
 confirmed by the owner — the ones most worth a second look), or **built** (settled by the implementation where the
@@ -482,6 +483,47 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ---
 
+## Next steps
+
+The to-do list, in the order worth doing (written 2026-11-18, after v0.1.0 was tagged). Tick or remove an item when
+it is done; the details of each gap are under "Known gaps" below.
+
+**Finishing the v0.1.0 release**
+
+- [x] The `v0.1.0` workflow run is green and `ghcr.io/xalert/expenses-tracker` carries `0.1.0`, `0.1` and `0`
+  (one digest, amd64 and arm64), with an SBOM, provenance and a cosign signature object in the registry (checked
+  2026-11-18).
+- [ ] Run `cosign verify` on the `0.1.0` image once (`docs/SELF-HOSTING.md`, "Verifying the image"): the signing
+  step passed in CI and the signature is in the registry, but it has not been verified from a machine with cosign.
+- [ ] Upgrade the owner's own instance: `pg_dump` of `expenses` first, then the new image, then check that the six
+  migrations (`0001` to `0006`) applied.
+
+**Before the instance is reachable from the internet**
+
+- [ ] HTTPS behind a reverse proxy, with `COOKIE_SECURE` and `TRUST_PROXY=1`.
+- [ ] `ALLOW_REGISTRATION=false` once the accounts exist.
+- [ ] Backups from host cron (the `BACKUP_INTERVAL_HOURS` loop does not survive a reboot), and `backups/` copied
+  off the machine.
+
+**Checks that need a person or a real device** (see "Not verified")
+
+- [ ] On a real iPhone: the Add sheet's drag-to-close, and the "±" toggle keeping the keyboard open.
+- [ ] Safari and Firefox; the browser suite runs in headless Chromium only.
+- [ ] Dark mode and the 375px layouts by eye; a screen-reader pass.
+- [ ] Weekend-only and holiday-only date ranges against the live Frankfurter API.
+
+**Optional work** (gaps left on purpose; none is queued)
+
+- [ ] Statement Importer: pair cross-currency transfers between two statements.
+- [ ] Statement Importer: virtualise the review table (slow with a few thousand rows).
+- [ ] Statement Importer: a merge option when loading a context file (it replaces the lists today).
+- [ ] Statement Importer: account signatures that collide on a card's last four digits.
+- [ ] Manual exchange rates in the CSV export (today only in the JSON backup).
+- [ ] Typing a date into the date picker.
+- [ ] Importing a context file into the app itself.
+
+New features beyond these have not been chosen yet.
+
 ## Known gaps
 
 ### Security and operations
@@ -496,8 +538,6 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   `backups/` off the machine is up to the administrator, and the app only warns, it does not wait, before migrating
   an existing database. A failing migration rolls back, but the app does not start until it is fixed or the previous
   image is run.
-- **No release has been cut yet.** `make release` exists; until the first `vX.Y.Z` tag there are only
-  `latest`/`main` and `sha-<commit>` to pin.
 
 ### Features not built
 
