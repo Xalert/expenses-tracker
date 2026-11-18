@@ -47,6 +47,12 @@ One test file, optionally only the tests whose name matches:
 make test FILE=tests/users.test.ts NAME=changePassword
 ```
 
+Run the browser tests (Playwright, against a production build and a throwaway database):
+
+```bash
+make test-e2e
+```
+
 Re-run the tests on every save:
 
 ```bash
