@@ -33,3 +33,7 @@ The first tagged release: everything built since 2026-11-05, in short.
   archived and the rates from the Rates page, the CSV gets a `category` row for each archived category it uses, and
   the Wallets & categories file flags archived categories (the Statement Importer leaves them out). Archived wallet
   groups can be renamed and recoloured, and take no new entries, like archived wallets.
+- Fixes found by the new browser tests: the time zone was lost when the first registration or sign-in attempt was
+  refused; removing a used category "into a new category" after a refused first try moved its entries into another
+  existing category instead; the date picker near the bottom of the screen scrolled the page instead of opening
+  upwards; the wallet page scrolled sideways on phones with a long wallet name.
