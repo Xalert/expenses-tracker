@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createCategoryFromEntryAction, type NewCategoryState } from "@/app/(app)/transactions/actions";
 import {
   Button,
   Card,
@@ -23,6 +24,8 @@ import { CalendarIcon } from "@/components/ui/picker-icons";
 import { cn } from "@/lib/cn";
 import { addDays, formatDate } from "@/lib/dates";
 import { initialFormState, type FormState } from "@/lib/form";
+import { sanitizeDraft, saveEntryDraft, takeEntryDraft, type DraftField } from "./entry-draft";
+import { NewCategoryInline } from "./new-category-inline";
 
 export type EntryKind = "expense" | "income" | "transfer";
 
@@ -49,6 +52,12 @@ export type EntryInitialValues = {
 };
 
 type Action = (prev: FormState, formData: FormData) => Promise<FormState>;
+type CategoryAction = (prev: NewCategoryState, formData: FormData) => Promise<NewCategoryState>;
+
+/** The dashed pill after the category pills ("+ New category", "Manage categories"). */
+const dashedPill =
+  "inline-flex min-h-11 items-center rounded-full border border-dashed border-border-strong px-4 text-sm font-semibold " +
+  "text-muted-foreground transition-colors hover:text-foreground sm:min-h-10";
 
 const KIND_LABEL: Record<EntryKind, string> = { expense: "Expense", income: "Income", transfer: "Transfer" };
 
@@ -111,6 +120,11 @@ function WalletSelectOptions({ wallets, disabledId }: { wallets: WalletOption[];
  * the form (`footerStart` holds the Delete form and the "Open as page" link), Cancel calls `onCancel`, and a result
  * with `ok` calls `onSaved(message)` (the inline update actions return form state instead of redirecting). Its ids
  * carry `idPrefix` so they cannot clash with the Add dialog opened over the list; the posted names are unchanged.
+ *
+ * The category picker ends with "+ New category" (creates one of the current kind through `categoryAction` and
+ * selects it, without leaving the form) and "Manage categories" (a link to /categories that first saves what was
+ * typed as a draft under `draftKey` in sessionStorage; the next form opened with the same key in this tab restores
+ * it once). Switching between Transfer and Expense / Income keeps the typed amount.
  */
 export function EntryForm({
   wallets,
@@ -127,6 +141,8 @@ export function EntryForm({
   onCancel,
   onSaved,
   footerStart,
+  categoryAction = createCategoryFromEntryAction,
+  draftKey,
 }: {
   wallets: WalletOption[];
   categories: CategoryOption[];
@@ -149,6 +165,14 @@ export function EntryForm({
   onSaved?: (message?: string) => void;
   /** Inline: shown at the start of the footer (outside the form, so it may hold its own <form>). */
   footerStart?: ReactNode;
+  /** "+ New category": creates a category (`kind`, `name`). Defaults to `createCategoryFromEntryAction`. */
+  categoryAction?: CategoryAction;
+  /**
+   * The sessionStorage key of this form's draft ("Manage categories" saves it, the next mount with the same key
+   * restores it). The Add form (dialog and page) shares "new"; the edit pages use their entry. Defaults to `idPrefix`
+   * for the inline editor and to no draft otherwise.
+   */
+  draftKey?: string;
 }) {
   const router = useRouter();
   const formId = useId();
@@ -178,12 +202,55 @@ export function EntryForm({
   );
   const [date, setDate] = useState(initial.date);
   const [keepOpen, setKeepOpen] = useState(false);
+  const draft = draftKey ?? (isInline ? idPrefix : undefined);
+  // Categories made with "+ New category" since the page was rendered; the refreshed props bring them too (deduped).
+  const [created, setCreated] = useState<CategoryOption[]>([]);
+  const allCategories = [...categories, ...created.filter((c) => !categories.some((p) => p.id === c.id))];
+  // Bumped to remount the form with a restored draft.
+  const [remount, setRemount] = useState(0);
+  // Defaults for the uncontrolled fields (amount, note…) that win over the echoed / initial values, for one form
+  // instance only (`key`): the amount carried across a kind switch, or a restored draft. The next action result
+  // remounts the form under another key, and its own values apply again.
+  const [carried, setCarried] = useState<{ key: string; values: Partial<Record<DraftField, string>> } | null>(null);
+  const formKey = `${stateId(txState)}-${stateId(trState)}-${remount}`;
+  const carry = carried?.key === formKey ? carried.values : {};
 
   const isTransfer = kind === "transfer";
   const state = isTransfer ? trState : txState;
   const pending = isTransfer ? trPending : txPending;
   const err = state.fieldErrors ?? {};
   const v = state.values ?? {};
+  const fieldDefault = (field: "amount" | "receivedAmount" | "note") => carry[field] ?? v[field] ?? initial[field];
+
+  // A draft saved by "Manage categories" comes back once, on the next mount with the same key (then it is gone).
+  // Read after mount: sessionStorage does not exist on the server.
+  useEffect(() => {
+    if (!draft) return;
+    const restored = sanitizeDraft(takeEntryDraft(draft), {
+      kinds,
+      walletIds: wallets.map((w) => w.id),
+      categories,
+      now: Date.now(),
+    });
+    if (!restored) return;
+    const d = restored.values;
+    /* eslint-disable react-hooks/set-state-in-effect -- applied once, from storage that only exists in the browser */
+    setKind(restored.kind);
+    if (d.walletId) setWalletId(d.walletId);
+    setCategoryId(d.categoryId ?? "");
+    if (d.fromWalletId) setFromWalletId(d.fromWalletId);
+    if (d.toWalletId) setToWalletId(d.toWalletId);
+    if (d.date) setDate(d.date);
+    setCarried({ key: `${stateId(txState)}-${stateId(trState)}-1`, values: d });
+    setRemount(1);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // Once, on mount: later prop changes must not re-read storage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function saveDraft() {
+    if (draft) saveEntryDraft(draft, kind, formRef.current);
+  }
 
   // After each action result: close / clear on success, else move focus to the first invalid control (the form
   // remounted, so focus would otherwise be lost to <body>, outside the dialog).
@@ -218,7 +285,7 @@ export function EntryForm({
   const from = byId(fromWalletId);
   const to = byId(toWalletId);
   const crossCurrency = Boolean(from && to && from.currency !== to.currency);
-  const kindCategories = categories.filter((c) => c.kind === kind);
+  const kindCategories = allCategories.filter((c) => c.kind === kind);
 
   const transferBlocked = isTransfer && !canTransfer;
   // Expense / income needs a category of that kind; without one the picker becomes an empty state.
@@ -232,8 +299,23 @@ export function EntryForm({
   function changeKind(next: EntryKind) {
     if (next === kind) return;
     setKind(next);
+    // The amount (and note) input belongs to the kind's branch of the form, so switching between Transfer and
+    // Expense / Income mounts a new one: carry what is typed over as its default.
+    const field = (name: string) => {
+      const el = formRef.current?.elements.namedItem(name);
+      return el instanceof HTMLInputElement ? el.value : undefined;
+    };
+    const typed = { amount: field("amount"), note: field("note") };
+    setCarried({
+      key: formKey,
+      values: {
+        ...carry,
+        ...(typed.amount !== undefined && { amount: typed.amount }),
+        ...(typed.note !== undefined && { note: typed.note }),
+      },
+    });
     // Categories belong to one kind; keep the choice only if it still fits.
-    if (!categories.some((c) => String(c.id) === categoryId && c.kind === next)) setCategoryId("");
+    if (!allCategories.some((c) => String(c.id) === categoryId && c.kind === next)) setCategoryId("");
     // Carry the chosen wallet over as the transfer source and back.
     if (next === "transfer" && walletId) {
       setFromWalletId(walletId);
@@ -247,7 +329,7 @@ export function EntryForm({
     <form
       id={formId}
       ref={formRef}
-      key={`${stateId(txState)}-${stateId(trState)}`}
+      key={formKey}
       action={isTransfer ? trFormAction : txFormAction}
       className={isInline ? "space-y-4" : "space-y-6"}
       noValidate
@@ -323,7 +405,7 @@ export function EntryForm({
                 label="Sent"
                 currency={from?.currency}
                 currencyText={from?.currency ?? ""}
-                defaultValue={v.amount ?? initial.amount}
+                defaultValue={fieldDefault("amount")}
                 error={err.amount}
                 autoFocus={isDialog}
               />
@@ -335,7 +417,7 @@ export function EntryForm({
                   label="Received"
                   currency={to?.currency}
                   currencyText={to?.currency ?? ""}
-                  defaultValue={v.receivedAmount ?? initial.receivedAmount}
+                  defaultValue={fieldDefault("receivedAmount")}
                   error={err.receivedAmount}
                 />
               )}
@@ -356,7 +438,7 @@ export function EntryForm({
             label="Amount"
             currency={wallet?.currency}
             currencyText={wallet ? `${wallet.currency} · from ${wallet.name}` : ""}
-            defaultValue={v.amount ?? initial.amount}
+            defaultValue={fieldDefault("amount")}
             error={err.amount}
             autoFocus={isDialog}
           />
@@ -365,19 +447,16 @@ export function EntryForm({
             <p id={pid("categoryId-label")} className={sectionLabel}>
               Category
             </p>
-            {noCategories ? (
-              <div className="rounded-2xl border border-dashed border-border-strong px-4 py-3 text-sm text-muted-foreground">
-                You have no {kind} categories.{" "}
-                <Link href="/categories" className="font-medium text-accent hover:underline">
-                  Create one
-                </Link>{" "}
-                to record {kind === "expense" ? "an expense" : "income"}.
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-start gap-2">
+            {noCategories && (
+              <p className="text-sm text-muted-foreground">
+                You have no {kind} categories yet. Add one to record {kind === "expense" ? "an expense" : "income"}.
+              </p>
+            )}
+            <div className="flex flex-wrap items-start gap-2">
+              {!noCategories && (
                 <PillPicker
-                  // A new kind has other categories: remount so nothing stays checked.
-                  key={kind}
+                  // A new kind has other categories, and a created one must show checked: remount.
+                  key={`${kind}-${created.length}`}
                   id={pid("categoryId")}
                   name="categoryId"
                   aria-labelledby={pid("categoryId-label")}
@@ -387,18 +466,29 @@ export function EntryForm({
                   onChange={setCategoryId}
                   error={err.categoryId}
                 />
-                {/* Plain navigation: whatever was typed in this form is not kept. */}
-                <Link
-                  href="/categories"
-                  className={cn(
-                    "inline-flex min-h-11 items-center rounded-full border border-dashed border-border-strong px-4 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground sm:min-h-10",
-                    focusRing,
-                  )}
-                >
-                  Manage categories
-                </Link>
-              </div>
-            )}
+              )}
+              <NewCategoryInline
+                key={kind}
+                kind={kind === "income" ? "income" : "expense"}
+                action={categoryAction}
+                idPrefix={idPrefix}
+                pillClassName={cn(dashedPill, focusRing)}
+                onCreated={(c) => {
+                  setCreated((list) => [...list, c]);
+                  setCategoryId(String(c.id));
+                  // After the picker has remounted with the new pill checked.
+                  requestAnimationFrame(() =>
+                    formRef.current
+                      ?.querySelector<HTMLInputElement>(`input[name="categoryId"][value="${c.id}"]`)
+                      ?.focus(),
+                  );
+                }}
+              />
+              {/* Leaves the form: what was typed is kept as a draft and comes back when this form opens again. */}
+              <Link href="/categories" onClick={saveDraft} className={cn(dashedPill, focusRing)}>
+                Manage categories
+              </Link>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -479,7 +569,7 @@ export function EntryForm({
               maxLength={500}
               placeholder="Note (optional)"
               autoComplete="off"
-              defaultValue={v.note ?? initial.note}
+              defaultValue={fieldDefault("note")}
               error={err.note}
             />
             <FieldError id={pid("note")}>{err.note}</FieldError>

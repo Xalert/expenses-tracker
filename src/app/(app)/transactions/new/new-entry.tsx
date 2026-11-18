@@ -60,6 +60,8 @@ export async function NewEntry({
       transferAction={createTransferAction}
       returnTo={returnTo}
       canTransfer={wallets.length >= 2}
+      // Dialog and full page share the draft "Manage categories" keeps.
+      draftKey="new"
     />
   );
 }

@@ -232,6 +232,11 @@ Added 2026-11-08.
 | Opening a list row moves focus to the first control of its form (the Expense / Income switch's checked option; for a transfer, From). When the row holding the focus leaves the list (Delete, or a Save that moves it off the page or month) focus goes to the same row if it reappeared (moved to another day), else the next row, else the previous, else the list heading (`[data-list-heading]`, else the page's `<h1>`), with a polite announcement ("Expense deleted. Focus is on the next entry.") | The first control rather than the amount: Tab order then matches the form, and a phone does not open its keyboard on every row tap. The announcement uses a live region outside React so it survives the list unmounting when the page empties | planner (2026-11-18) |
 | A capped day's label pill follows its bar: muted (`bg-border-strong`) while another day is selected; on the wallet chart coloured by direction, In `bg-income` / Out `bg-expense` with `text-surface` | One colour story per day; `text-surface` gives the right polarity in both themes (light text on the light theme's dark tokens, dark text on the dark theme's light ones) without new tokens | planner (2026-11-18) |
 | `getWalletMonth` returns `projectedDays` (day N+1 to the month's end, the balance carried through the future-dated entries) next to `days`; the wallet page labels such a day "Balance after €… · projected". The charts still stop at today | The day header then always has its balance; a separate field keeps every chart, card and summary that reads `days` unchanged | planner (2026-11-18) |
+| A popover opens above its anchor only when it does not fit below **and** there is more room above; the room is measured inside every clipping ancestor (the dialog body), not just the viewport; no portal still | Below stays the default so menus do not jump around; inside the Add sheet the calendar was clipped by the scrolling body, which the viewport alone does not see. A portal would have needed its own focus and outside-click handling | planner (flip), built (clipping ancestors) |
+| The date picker's way back from the month view is a "‹ Back to days" button in the footer, in the date picker only (not in the shared `MonthGrid`) | The footer is where the picker's other actions are, and it comes after the grid in Tab order; the dashboard's month switcher has no day view to return to | planner (button), built (placement) |
+| A negative starting balance is entered with a "±" toggle button inside the amount box; the input keeps `inputMode="decimal"` | iOS Safari's decimal pad has no minus key and no `inputmode` value gives a numeric pad with one: `numeric` has none either, `text` brings the full keyboard for an amount that is nearly always positive, and `type="number"` rejects "1.234,56" and comma decimals and changes the value on scroll. A toggle works the same on every platform; a tap does not take focus, so the keyboard stays up | planner (toggle), built (why not an input mode) |
+| The bottom sheet closes on a drag down from its handle or header (more than a third of its height, or a fast flick of at least 24px); the body is not a drag area | Dragging from the scrolling body would fight its scroll (and pull-to-refresh); handle + header is what sheet UIs use. The drag is a pointer-only shortcut, so the handle stays `aria-hidden`; ✕ and Escape remain the accessible ways to close | planner (gesture), built (thresholds) |
+| Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
 
@@ -287,6 +292,10 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | "Today" is the server's date, passed to the form | The form renders on the server first; a browser in another time zone would otherwise disagree with the server's default date and cause a hydration mismatch | built (step 6) |
 | Sent and Received sit side by side from `sm` up and stack below it | Two 44px inputs with their currency codes do not fit side by side in a 375px sheet | built (step 6) |
 | "Manage categories" is a dashed pill after the category pills, not a link in the heading row | Keeps the Tab order amount → categories → wallet that the spec asks for | built (step 6) |
+| The entry form creates a category in place ("+ New category", a Server Action called from a transition, not a nested form) and "Manage categories" saves a sessionStorage draft that the next form with the same key restores once | Leaving the form to add a category lost what was typed. Forms cannot nest, so the creator's field has no `name` and posts nothing with the entry. The draft covers the remaining trip to /categories (rename, remove) | planner |
+| `createCategoryFromEntryAction` lives in `transactions/actions.ts`, not `categories/actions.ts`; it revalidates the whole layout like the other category actions | It is the entry form's action (its own result shape with the new category); category names show on every page | built |
+| The draft key is shared by the Add dialog and the Add page (`new`); edit pages use `edit-<id>`, the inline editor its id prefix; a draft older than an hour, or with a wallet or category that is gone, is dropped (whole or per field) | "The same form" for a person is "Add", wherever it opens; an edit draft must not land in another entry. sessionStorage is per tab, so another tab never picks it up | built |
+| Switching between Transfer and Expense / Income carries the typed amount and note into the new inputs; Received is not carried | The amount input is a different element per kind; the date was already state. Received has no counterpart on the other side | planner (amount), built (note) |
 | The type switch uses the neutral `Segmented` look (no expense/income/transfer colours) | The shared control; the submit label and the fields already say which kind is chosen | built (step 6) |
 | After a failed save, focus moves to the first invalid control | The form remounts, so focus would fall to `<body>`, outside the dialog's focus trap | built (step 6) |
 | `Popover` clears its own `translateX` before measuring | React StrictMode runs the layout effect twice in development; the second run measured the shifted panel, found a sub-pixel overflow and reset the shift to 0, so the calendar opened from the date pill stuck out of the 375px sheet | built (step 6) |
@@ -425,38 +434,29 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 - The import rules a user may want to read (Spendee transfers, time zones, labels, rounding) are documented only in
   `docs/SPEC.md`, which is written as a build contract rather than a user guide.
-- "Manage categories" in the transaction form navigates away and loses what was typed.
-- Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
 - Without JavaScript the /transactions Month chip's label still renders as a button that does nothing (its ‹ › links
   and the `<noscript>` filter form below do the work); the no-JS month select covers 24 months back and one ahead
   (plus the month in view), older months are reached with ‹.
 - The day-strip bars themselves stay about 10px wide at 375px (the hit areas now touch and are 48px tall); the
   "Pick a day" calendar is the 44px path on phones.
-- The name-length message says "under 40 characters" although exactly 40 is allowed (wallet and category names;
-  first name / surname now say "80 characters or fewer").
 - An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
 - A wallet restored as archived from a backup is marked archived as of the import, not its original date.
 - If the account changes between an import's preview and its confirmation, the confirmed numbers can differ from
   the preview (the confirmation re-validates and reports what it actually did).
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
-- Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
-- A wallet's starting balance uses the decimal keyboard on phones (as before step 5), which on iOS has no minus key;
-  a negative starting balance has to be pasted or entered on another keyboard.
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
   it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
   Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
 - **A save from the Add dialog revalidates every page** (`revalidatePath("/", "layout")`) rather than the few the
   full-page form revalidates: the dialog can sit over any page.
-- The bottom sheet's drag handle is decorative: there is no swipe-to-close (✕, Escape or the scrim close it).
 - **Unexplained `next dev` reload loop seen while verifying step 1:** in the real checkout the dev server several
   times got into a state where every load of some page logged "Compiled in 1ms" and the browser reloaded endlessly
   (Fast Refresh). Restarting it cleared it for a while. The same tree copied to another folder, and `HEAD` copied
   the same way, never did it over the same page sequence, and `next start` never did. Suspected: other processes
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
-- The date picker's month view has no button back to the day view; picking a month or pressing Escape returns.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
 - `sharp` is still present in the Docker image although the image optimiser is off.
 
@@ -485,6 +485,14 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   cleanup running before React detaches the row, and on `setTimeout(0)` landing after the refreshed list commits);
   the `<noscript>` filter form and the `<style>` hiding the popover chips with scripts off; the "Pick a day"
   calendar at 360–375px; the cap pill colours in both themes.
+- **Entry form, dialogs and pickers gap fixes (2026-11-18) are covered by tests only** (pure functions, static
+  render, the new action against PGlite). Not tried in a browser: the popover flipping above near the bottom of the
+  viewport and of the Add sheet's scrolling body (and re-placing on scroll / resize / month view), the date
+  picker's "Back to days" focus, the sheet's drag-to-close on a real touch screen (iOS Safari's own gestures, the
+  slide-out timing, reduced motion), the "±" toggle keeping the iOS keyboard open, "+ New category" end to end
+  (the layout refresh while the dialog is open keeping typed values), the "Manage categories" draft round trip
+  through /categories in the dialog and on the full page, and the amount / note surviving a Transfer ↔ Expense
+  switch.
 
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking

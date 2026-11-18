@@ -40,7 +40,7 @@ type WalletFormProps = {
 const sectionLabel = "text-[13px] font-semibold text-muted-foreground";
 
 function balanceHint(currency: string) {
-  if (!/^[A-Z]{3}$/.test(currency)) return "Choose a currency first. May be negative (e.g. a credit card).";
+  if (!/^[A-Z]{3}$/.test(currency)) return "Choose a currency first. May be negative (e.g. a credit card; use ±).";
   let d = 2;
   try {
     d = currencyDecimals(currency);
@@ -48,7 +48,7 @@ function balanceHint(currency: string) {
     // unknown code: keep the default
   }
   const decimals = d === 0 ? "whole amounts only" : `up to ${d} decimal${d === 1 ? "" : "s"}`;
-  return `In ${currency}, ${decimals}. May be negative (e.g. a credit card). Leave empty for 0.`;
+  return `In ${currency}, ${decimals}. May be negative (e.g. a credit card; use ±). Leave empty for 0.`;
 }
 
 // Stable small ids for action-state objects: the fields remount after every result (React resets a form after its
@@ -189,6 +189,7 @@ function WalletFields(props: WalletFormProps & { state: FormState }) {
             name="initialBalance"
             label="Starting balance"
             required={false}
+            signToggle
             currency={props.currency}
             currencyText={props.currency}
             defaultValue={v.initialBalance ?? props.defaults?.initialBalance}
@@ -295,6 +296,7 @@ function CurrencyAndBalance({
         name="initialBalance"
         label="Starting balance"
         required={false}
+        signToggle
         currency={currency || undefined}
         currencyText={currency || "—"}
         defaultValue={initialBalance}

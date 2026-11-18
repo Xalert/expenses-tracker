@@ -39,7 +39,7 @@ export function normalizeNote(value: unknown): string | null {
   if (typeof value !== "string") throw new ServiceError("VALIDATION", "Invalid note.", "note");
   const note = value.trim();
   if (note.length > MAX_NOTE_LENGTH) {
-    throw new ServiceError("VALIDATION", `Keep the note under ${MAX_NOTE_LENGTH} characters.`, "note");
+    throw new ServiceError("VALIDATION", `Keep the note to ${MAX_NOTE_LENGTH} characters or fewer.`, "note");
   }
   return note || null;
 }
@@ -48,7 +48,7 @@ export function normalizeName(value: unknown, field = "name", maxLength = MAX_NA
   const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
   if (!name) throw new ServiceError("VALIDATION", "Enter a name.", field);
   if (name.length > maxLength) {
-    throw new ServiceError("VALIDATION", `Keep the name under ${maxLength} characters.`, field);
+    throw new ServiceError("VALIDATION", `Keep the name to ${maxLength} characters or fewer.`, field);
   }
   return name;
 }

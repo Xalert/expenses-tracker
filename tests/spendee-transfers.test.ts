@@ -205,7 +205,7 @@ describe("Spendee per-wallet dialect: detection and rows", () => {
     expect(r.notices).toContainEqual(expect.objectContaining({ code: "labels", count: 2 }));
     // The note limit still applies once the labels are added.
     const p = await refused(wallet(joint("2026-08-01T10:00:00+00:00", "Expense", "-1.00000000", { category: "Food", note: "n".repeat(495), labels: "abcdef" })));
-    expectProblems(p, [{ line: 2, message: /^Note: Keep the note under 500 characters \(with the labels added\)\.$/ }]);
+    expectProblems(p, [{ line: 2, message: /^Note: Keep the note to 500 characters or fewer \(with the labels added\)\.$/ }]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
-import { DatePicker } from "@/components/ui/date-picker";
+import { CalendarPanel, DatePicker } from "@/components/ui/date-picker";
 import { MonthGrid } from "@/components/ui/month-grid";
 
 describe("DatePicker (closed)", () => {
@@ -70,6 +70,23 @@ describe("MonthGrid", () => {
     expect(html).toMatch(/aria-pressed="true" aria-label="March 2026"/);
     expect(html).toMatch(/disabled="" aria-pressed="false" aria-label="December 2026"/);
     expect(html.match(/tabindex="0"/g)).toHaveLength(1);
+  });
+});
+
+describe("CalendarPanel", () => {
+  it("the day view has no way back (it is the start) and offers the month view from the label", () => {
+    const html = renderToStaticMarkup(<CalendarPanel value="2026-03-05" allowEmpty={false} onPick={() => {}} />);
+    expect(html).toContain('role="grid"');
+    expect(html).toContain("choose a month");
+    expect(html).not.toContain("Back to days");
+  });
+
+  it("the month view has a labelled button back to the days of the month it came from", () => {
+    const html = renderToStaticMarkup(
+      <CalendarPanel value="2026-03-05" allowEmpty={false} onPick={() => {}} initialView="months" />,
+    );
+    expect(html).not.toContain('role="grid"');
+    expect(html).toMatch(/<button type="button"[^>]*>(?:(?!<\/button>).)*Back to days<span class="sr-only">, March 2026<\/span><\/button>/);
   });
 });
 

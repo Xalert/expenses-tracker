@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/cn";
 import { XIcon } from "./picker-icons";
 
@@ -15,6 +15,23 @@ export type DialogProps = {
   className?: string;
   children: ReactNode;
 };
+
+/** A release faster than this (px per ms, downwards) closes the sheet even when it moved less than a third. */
+const FLICK_VELOCITY = 0.5;
+/** …provided it moved at least this far, so a tap with a twitch does not close it. */
+const FLICK_MIN_DISTANCE = 24;
+const SHEET_TRANSITION_MS = 200;
+
+/**
+ * What a released drag of the bottom sheet does: close when it was pulled down more than a third of the sheet's
+ * height, or flicked down fast; otherwise snap back. `dy` is the downward distance (px), `velocity` the downward
+ * speed at release (px/ms).
+ */
+export function sheetDragOutcome({ dy, height, velocity }: { dy: number; height: number; velocity: number }): "close" | "stay" {
+  if (dy <= 0) return "stay";
+  if (dy > height / 3) return "close";
+  return velocity > FLICK_VELOCITY && dy >= FLICK_MIN_DISTANCE ? "close" : "stay";
+}
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), ' +
@@ -83,6 +100,8 @@ function DialogPanel({ title, description, onClose, className, children }: Dialo
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const drag = useSheetDrag(panelRef, () => onCloseRef.current());
+
   // Keep Tab inside the panel.
   function onPanelKeyDown(e: React.KeyboardEvent) {
     if (e.key !== "Tab" || !panelRef.current) return;
@@ -124,27 +143,30 @@ function DialogPanel({ title, description, onClose, className, children }: Dialo
           className ?? "sm:max-w-xl",
         )}
       >
-        {/* Drag handle: decorative, the sheet is closed with ✕, Escape or the scrim. */}
-        <div aria-hidden="true" className="mx-auto mt-2.5 h-1.5 w-10 shrink-0 rounded-full bg-border-strong sm:hidden" />
-        <div className="flex shrink-0 items-start justify-between gap-3 px-5 pt-3 pb-2 sm:px-7 sm:pt-6">
-          <div className="min-w-0">
-            <h2 id={titleId} className="text-xl font-extrabold tracking-tight text-foreground">
-              {title}
-            </h2>
-            {description && (
-              <p id={descriptionId} className="mt-0.5 truncate text-sm text-muted-foreground">
-                {description}
-              </p>
-            )}
+        {/* The drag area: handle and header. On a phone, pulling it down closes the sheet (a pointer-only shortcut
+            for ✕, Escape and the scrim). `touch-none` there only: the body below keeps its own scrolling. */}
+        <div {...drag} data-sheet-drag="" className="shrink-0 touch-none sm:touch-auto">
+          <div aria-hidden="true" className="mx-auto mt-2.5 h-1.5 w-10 shrink-0 rounded-full bg-border-strong sm:hidden" />
+          <div className="flex shrink-0 items-start justify-between gap-3 px-5 pt-3 pb-2 sm:px-7 sm:pt-6">
+            <div className="min-w-0">
+              <h2 id={titleId} className="text-xl font-extrabold tracking-tight text-foreground">
+                {title}
+              </h2>
+              {description && (
+                <p id={descriptionId} className="mt-0.5 truncate text-sm text-muted-foreground">
+                  {description}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => onCloseRef.current()}
+              className="-mr-1.5 inline-flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <XIcon className="size-5" />
+            </button>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={() => onCloseRef.current()}
-            className="-mr-1.5 inline-flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            <XIcon className="size-5" />
-          </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-7 sm:pb-7">
           {children}
@@ -152,4 +174,68 @@ function DialogPanel({ title, description, onClose, className, children }: Dialo
       </div>
     </div>
   );
+}
+
+/**
+ * Drag-down-to-close for the bottom sheet (below `sm` only): pointer handlers for the handle + header area. The
+ * panel follows the pointer downwards (never up), and on release either slides out and closes or springs back
+ * (`sheetDragOutcome`). With `prefers-reduced-motion` it closes or snaps back without animating. A press on a
+ * button or link in the header (the ✕) is left alone.
+ */
+function useSheetDrag(panelRef: RefObject<HTMLDivElement | null>, close: () => void) {
+  const drag = useRef<{ id: number; startY: number; lastY: number; lastT: number; velocity: number } | null>(null);
+
+  const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const setTransform = (value: string, animate: boolean) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    panel.style.transition = animate ? `transform ${SHEET_TRANSITION_MS}ms ease-out` : "";
+    panel.style.transform = value;
+  };
+
+  function end(e: PointerEvent<HTMLElement>, cancelled: boolean) {
+    const state = drag.current;
+    const panel = panelRef.current;
+    if (!state || state.id !== e.pointerId || !panel) return;
+    drag.current = null;
+    const dy = Math.max(0, e.clientY - state.startY);
+    const outcome = cancelled
+      ? "stay"
+      : sheetDragOutcome({ dy, height: panel.getBoundingClientRect().height, velocity: state.velocity });
+    const animate = !reducedMotion();
+    if (outcome === "stay") {
+      setTransform("", animate && dy > 0);
+      return;
+    }
+    if (!animate) {
+      close();
+      return;
+    }
+    setTransform("translateY(100%)", true);
+    window.setTimeout(close, SHEET_TRANSITION_MS);
+  }
+
+  return {
+    onPointerDown(e: PointerEvent<HTMLElement>) {
+      if (e.button !== 0 || !window.matchMedia("(max-width: 639px)").matches) return;
+      if (e.target instanceof Element && e.target.closest("button, a, input, select, textarea")) return;
+      drag.current = { id: e.pointerId, startY: e.clientY, lastY: e.clientY, lastT: e.timeStamp, velocity: 0 };
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    },
+    onPointerMove(e: PointerEvent<HTMLElement>) {
+      const state = drag.current;
+      if (!state || state.id !== e.pointerId) return;
+      const dt = e.timeStamp - state.lastT;
+      if (dt > 0) state.velocity = (e.clientY - state.lastY) / dt;
+      state.lastY = e.clientY;
+      state.lastT = e.timeStamp;
+      setTransform(`translateY(${Math.max(0, e.clientY - state.startY)}px)`, false);
+    },
+    onPointerUp(e: PointerEvent<HTMLElement>) {
+      end(e, false);
+    },
+    onPointerCancel(e: PointerEvent<HTMLElement>) {
+      end(e, true);
+    },
+  };
 }

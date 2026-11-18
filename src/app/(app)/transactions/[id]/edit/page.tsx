@@ -65,6 +65,7 @@ export default async function EditTransactionPage({
         returnTo={returnTo}
         submitLabel="Save changes"
         canTransfer={false}
+        draftKey={`edit-${t.id}`}
       />
     </div>
   );

@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
+import { isNegativeText } from "@/lib/amount-sign";
 import { cn } from "@/lib/cn";
 import { currencyDecimals } from "@/lib/money";
 import { FieldError } from "./field";
+import { SignToggle } from "./sign-toggle";
 
 /** "0.00" for EUR, "0" for JPY; "0.00" while the currency is unknown or not a real code yet (typed half-way). */
 export function amountPlaceholder(currency: string | undefined): string {
@@ -34,6 +36,11 @@ export type BigAmountProps = {
   compact?: boolean;
   /** Default true (an entry's amount); a wallet's starting balance may be left empty. */
   required?: boolean;
+  /**
+   * A "±" button before the number that adds or removes a leading minus (`SignToggle`): the decimal keyboard on iOS
+   * has no minus key. For amounts that may be negative (a wallet's starting balance).
+   */
+  signToggle?: boolean;
 };
 
 /**
@@ -52,6 +59,7 @@ export function BigAmount({
   autoFocus,
   compact,
   required = true,
+  signToggle = false,
 }: BigAmountProps) {
   return (
     <div className="min-w-0 space-y-1.5">
@@ -65,6 +73,7 @@ export function BigAmount({
           error ? "border-danger focus-within:outline-danger/30" : "border-border",
         )}
       >
+        {signToggle && <SignToggle inputId={id} defaultNegative={isNegativeText(defaultValue ?? "")} />}
         <input
           id={id}
           name={name}

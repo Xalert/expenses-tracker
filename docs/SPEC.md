@@ -423,6 +423,10 @@ Add dialog's create actions gain a `mode: "dialog"` hidden field that makes them
 redirecting. As built (step 4): the inline actions return `{ ok: true, message }` — "Saved €4.80 · Food" / "Saved
 €60.00 from Cash to Bank" — which the list announces in a visually hidden status line when the row closes; errors come
 back as `{ fieldErrors, message?, values }` exactly like the edit pages' actions.
+`createCategoryFromEntryAction(prev, formData)` (fields `kind`, `name`) backs the entry form's "+ New category": it
+returns `NewCategoryState` = `FormState & { category?: { id; name; kind } }` — `{ ok: true, message: "Added “X”.",
+category }` after `revalidatePath("/", "layout")`, else the service error on `name` (or "Choose expense or income."
+as the message for another kind). See "/transactions/new".
 
 `src/lib/money.ts`: `currencyDecimals(code)`, `parseAmount(input: string, currency, opts?: { allowNegative?: boolean }): number | null`
 (accepts `12`, `12.5`, `12,50`, `1 234.56`, `1,234.56`, `1.234,56`; a lone `,` is always the decimal separator; rejects
@@ -471,7 +475,9 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   (picking a month returns to the days; Escape there steps back instead of closing), a Monday-first 6-week grid
   (`role="grid"`, day buttons `role="gridcell"` with `aria-selected`, `aria-current="date"` for today and the full
   date as `aria-label`; neighbouring months dimmed, today ringed, the selection filled with the accent), and a footer
-  with "Today" and, with `allowEmpty`, "Clear". Picking closes it and returns focus to the trigger. Keyboard in the
+  with "Today" and, with `allowEmpty`, "Clear". In the month view the footer starts with a "‹ Back to days" button
+  (accessible name "Back to days, <Month YYYY>", the month shown before) that returns to the day view with focus on
+  the focusable day, as Escape does. Picking closes it and returns focus to the trigger. Keyboard in the
   grid: see `moveDate`; one day is in the Tab order (roving tabindex); moving past the shown month changes month.
 - `MonthGrid` (client) `{ value: 'YYYY-MM' | null; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
   year stepper (‹ 2026 ›) over a 3 × 4 grid of `aria-pressed` month buttons; months outside the bounds are
@@ -480,7 +486,12 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   no portal: an absolutely positioned panel under `anchor` (the trigger's `relative` wrapper). Renders nothing when
   closed; closes on Escape (unless the panel already handled it with `preventDefault`), on pointer-down outside
   `anchor` and when focus moves outside it; returns focus to `trigger` unless the user clicked or tabbed elsewhere.
-  It shifts itself sideways to stay 8px inside the viewport, so it never causes horizontal scroll at 375px.
+  It shifts itself sideways to stay 8px inside the viewport, so it never causes horizontal scroll at 375px. It
+  opens **above** the anchor instead (`bottom-full mb-2`, `data-placement="above"`) when the panel does not fit
+  below and there is more room above (`choosePlacement`, a pure function exported from `popover.tsx`; room is
+  measured against the viewport narrowed by every ancestor that clips overflow, e.g. the dialog's scrolling body,
+  with the 8px gap and 8px gutter). Measured before paint on open and again on window resize, on any scroll
+  (capture) and when the panel's own size changes (`ResizeObserver`; the date picker's month view is shorter).
 - `FormError` `{ message? }` — form-level `role="alert"` banner. `Card`, `CardHeader { title; description?; actions? }`,
   `CardBody`. `Badge` `{ tone?: 'neutral'|'accent'|'income'|'expense'|'transfer'|'danger' }`.
   `EmptyState` `{ title; description?; action?; icon? }`. `PageHeader` `{ title; description?; actions? }` (page `<h1>`).
@@ -501,6 +512,14 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     `z-50`). **It renders nothing once `usePathname()` differs from the path it opened at**: a parallel slot keeps
     its last content on a soft navigation to a URL it does not match, so a form that redirects on success, or a
     link inside the dialog, would otherwise leave it open over the next page.
+    **Drag to close (bottom sheet, below `sm`):** the handle and the header row are one drag area (`touch-action:
+    none` there only, so the body keeps scrolling and the gesture never fights it). A primary-button pointer-down
+    there that is not on a button / link / field captures the pointer; the panel follows it downwards
+    (`translateY`, never upwards). On release `sheetDragOutcome({ dy, height, velocity })` (exported, pure)
+    decides: close when pulled more than a third of the panel's height, or on a flick faster than 0.5 px/ms that
+    moved at least 24px; otherwise it springs back. Closing slides the panel out (200ms) and then calls the same
+    close as ✕; with `prefers-reduced-motion: reduce` neither the slide-out nor the spring-back animates. A
+    `pointercancel` springs back. From `sm` up the area does nothing.
   - `Segmented` (client) `{ name; options: { value; label }[]; value?; defaultValue?; onChange?(value);
     'aria-label'?; 'aria-labelledby'?; fullWidth?; className? }` — radio group drawn as a pill track (type
     switches, currency switch). Controlled with `value` + `onChange`, else uncontrolled with `defaultValue`;
@@ -574,7 +593,8 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
     `RunningLine` gains `min?` (the value at the bottom of the box, default 0) and a series' `start?` (the value on
     the left edge, default 0); `linePoints(values, max, days, min = 0, start = 0)` clamps values to the box. The
     Overview's calls are unchanged. `BigAmount` (`components/ui/big-amount.tsx`, from `entry-form.tsx`) `{ id; name;
-    label; currency; currencyText; defaultValue?; error?; hint?; autoFocus?; compact?; required? = true }` and
+    label; currency; currencyText; defaultValue?; error?; hint?; autoFocus?; compact?; required? = true;
+    signToggle? = false }` and
     `amountPlaceholder(currency)` ("0.00" / "0"; safe for a half-typed code). `Popover` accepts `role="menu"`.
     `ActionButton` (`components/wallets/action-button.tsx`) gains `size`, `buttonClassName`, `role="menuitem"` and
     `onDone()` (called once per `ok` result). `DayList` gains `aside?(date)` (replaces the day's net on the right of
@@ -955,7 +975,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     echoed currency re-checks its pill when it is pinned, else refills the code; an invalid typed code carries the
     error on the input (else on the pill group). Validation stays server-side (`isValidCurrency`). Starting
     balance: `BigAmount name="initialBalance"` (not required; empty = 0) with the chosen code beside it ("—" until
-    there is one) and the hint "In CHF, up to 2 decimals. May be negative (e.g. a credit card). Leave empty for 0."
+    there is one) and the hint "In CHF, up to 2 decimals. May be negative (e.g. a credit card; use ±). Leave empty
+    for 0." The box starts with a "±" toggle (`BigAmount signToggle` → `SignToggle`, `components/ui/sign-toggle.tsx`;
+    on create and edit): a 44px `aria-pressed` button named "Minus sign" (`aria-controls` the input) that adds or
+    removes the input's leading "-" (`toggleSign` in `lib/amount-sign.ts`; ASCII or U+2212 counts as a minus) and
+    follows what is typed. Its `pointerdown` is prevented so a tap leaves focus, and the phone keyboard, in the
+    amount. The input keeps `inputMode="decimal"`.
     **Edit**: the currency as fixed text in a muted box ("EUR · Euro", "A wallet's currency can't be changed."), the
     starting balance, then a muted section "Archive" with the explanation ("An archived wallet is hidden from the
     Overview and the pickers; its entries stay, and you can unarchive it at any time.") and Archive (confirm) — or
@@ -993,16 +1018,44 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     transfer edit page no switch). The amount is a 72px-tall box with a 44px (48px from `sm`) extrabold
     `tabular-nums` input and the currency text beside it (`<id>-currency`, in the input's `aria-describedby`):
     "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
-    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then "Manage categories" as a dashed pill
-    after the pills (so Tab reaches it after the group). Wallet: `PillPicker name="walletId"` of the active wallets
+    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then two dashed pills after the pills (so
+    Tab reaches them after the group): "+ New category" and the "Manage categories" link. With no category of the
+    kind the pills are replaced by "You have no expense categories yet. Add one to record an expense." (the two
+    dashed pills stay; there is no submit). Wallet: `PillPicker name="walletId"` of the active wallets
     plus an archived one the entry already uses ("Old card (archived)"). Transfer: From → To selects (the arrow
     from `sm` up), Sent and Received side by side from `sm`, stacked below it, the no-rate line under them. Date:
     "Today" and "Yesterday" are `aria-pressed` buttons in a `role="group"` labelled "Date", followed by the
     `DatePicker` (controlled, owns `<input type="hidden" name="date">`) drawn as a third pill: "Other date" with a
     calendar icon, or the date itself (selected style, neither pill pressed) when it is neither today nor
     yesterday. Note: one `Input` (`name="note"`, placeholder "Note (optional)", `maxLength` 500, `sr-only`
-    label). Tab order: type → amount → category → Manage categories → wallet → Today → Yesterday → calendar → note
-    → footer.
+    label). Tab order: type → amount → category → + New category → Manage categories → wallet → Today → Yesterday
+    → calendar → note → footer.
+    **+ New category** (`NewCategoryInline`, `components/transactions/new-category-inline.tsx`; every variant): the
+    pill opens a name field (`<idPrefix>newCategoryName`, `sr-only` label "New expense category name", `maxLength`
+    40, no `name`, so the entry form never posts it) with Add and Cancel; it lives inside the entry `<form>` and has
+    no form of its own. Enter adds (and does not submit the entry), Escape cancels (marked handled, so the dialog
+    stays open) and focus goes back to the pill. Add calls `createCategoryFromEntryAction` (in
+    `transactions/actions.ts`; fields `kind`, `name`; `requireUser`, `createCategory`, errors through
+    `serviceErrorState` so they land on `name`; on success `revalidatePath("/", "layout")` and `{ ok, message,
+    category: { id, name, kind } }`) inside a transition (Add shows "Adding…"). An error shows under the field
+    (`FieldError`, `aria-invalid`) and focus returns to it. On success the field closes, the new category is added
+    to the form's list (kept in state, deduped by id against the refreshed props), selected (the picker remounts
+    with it checked) and focused. The action is an `EntryForm` prop (`categoryAction`, default the real action).
+    **Manage categories keeps a draft:** before the link navigates, `saveEntryDraft(draftKey, kind, form)`
+    (`components/transactions/entry-draft.ts`) writes `{ kind, values, savedAt }` to sessionStorage under
+    `entry-draft:<draftKey>` — `values` are the non-empty posted `amount`, `receivedAmount`, `walletId`,
+    `categoryId`, `fromWalletId`, `toWalletId`, `date`, `note`. On mount, a form with a `draftKey` takes (reads and
+    removes) that entry and applies it through `sanitizeDraft` — a kind the form offers, wallets that are in its
+    list, a category of the draft's kind that still exists, a `YYYY-MM-DD` date, strings of at most 500 characters,
+    at most an hour old; anything else is dropped (field by field, or the whole draft) — then remounts with those
+    values. Keys: the Add form, dialog and full page alike, `new`; the expense / income edit page `edit-<id>`; the
+    inline editor its `idPrefix`; no key, no draft. Every storage access is in `try/catch`: without storage the
+    link simply navigates. The "Create one" link of the old empty state is gone (the inline creator replaces it).
+    **Switching the kind keeps what was typed:** Transfer and Expense / Income render different amount inputs, so
+    `changeKind` reads the current `amount` and `note` from the form and uses them as the defaults of the newly
+    mounted inputs (for that form instance only; the next action result remounts the form with its own echoed
+    values). The date is React state and already stayed; the wallet carries over as the transfer's From and back,
+    the category only when it fits the new kind; Received is not carried.
 - **/categories** — month + currency switch at the top (default current month, `pickDefaultCurrency`). A "Spending
   split" card: the month's expense total and one segmented bar with a legend (one shade of the accent ramp per
   category, largest first). Then Expense and Income lists side by side: each row shows a swatch, the name, "N this
