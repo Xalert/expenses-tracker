@@ -6,8 +6,9 @@ import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { DayList } from "@/components/transactions/day-list";
 import { BalanceSparkline } from "@/components/wallets/wallet-cards";
 import { WalletForm } from "@/components/wallets/wallet-form";
+import { WalletMonthChart } from "@/components/wallets/wallet-month-chart";
 import { nextMenuIndex } from "@/components/wallets/wallet-menu";
-import { balanceAfterLabel } from "@/lib/day-labels";
+import { balanceAfterLabel, walletDayAside } from "@/lib/day-labels";
 import { balanceRange, changeLabel, entryCountLabel, isFlat, sparklinePoints, walletBars } from "@/lib/wallet-chart";
 import type { TransactionView } from "@/server/transactions";
 
@@ -189,8 +190,40 @@ describe("wallet chart helpers", () => {
     expect(bars[2]).toMatchObject({ value: 0 });
     expect(bars[3]).toMatchObject({ value: 300000, tone: "income" });
     expect(bars[5]).toEqual({ date: "2026-11-06", value: 0, tone: "future" });
-    expect(cap).toEqual({ date: "2026-11-04", label: "In €3,000.00" });
+    expect(cap).toEqual({ date: "2026-11-04", label: "In €3,000.00", tone: "income" });
     expect(max).toBeCloseTo((1500 * 1.2) / 0.6);
+  });
+
+  it("walletBars colours a capped day's pill by direction: money out takes the expense tone", () => {
+    const days = [
+      { date: "2026-11-01", inMinor: 0, outMinor: 1000, closingMinor: 0 },
+      { date: "2026-11-02", inMinor: 0, outMinor: 1200, closingMinor: 0 },
+      { date: "2026-11-03", inMinor: 100, outMinor: 115000, closingMinor: 0 },
+      { date: "2026-11-04", inMinor: 0, outMinor: 900, closingMinor: 0 },
+    ];
+    expect(walletBars("2026-11", days, "EUR").cap).toEqual({ date: "2026-11-03", label: "Out €1,150.00", tone: "expense" });
+  });
+
+  it("the wallet chart's cap pill uses the income / expense tokens, never the accent", () => {
+    const days = Array.from({ length: 5 }, (_, i) => ({
+      date: `2026-11-0${i + 1}`,
+      inMinor: i === 3 ? 300000 : 0,
+      outMinor: i === 3 ? 0 : 1000,
+      closingMinor: 0,
+    }));
+    const html = renderToStaticMarkup(
+      <WalletMonthChart
+        walletName="ING"
+        month="2026-11"
+        currency="EUR"
+        data={{ openingMinor: 0, inMinor: 300000, outMinor: 4000, entryCount: 5, totalEntryCount: 5, days, projectedDays: [] }}
+        isCurrentMonth
+      />,
+    );
+    const pill = html.match(/<span data-cap-tone="([a-z]+)" class="([^"]*)"/);
+    expect(pill?.[1]).toBe("income");
+    expect(pill?.[2]).toContain("bg-income");
+    expect(pill?.[2]).not.toContain("bg-accent");
   });
 
   it("labels: the month change, entry counts and the day header's balance after", () => {
@@ -202,6 +235,15 @@ describe("wallet chart helpers", () => {
     expect(entryCountLabel(27)).toBe("27 entries");
     expect(balanceAfterLabel(123456, "EUR")).toBe("Balance after €1,234.56");
     expect(balanceAfterLabel(-1500, "JPY")).toBe("Balance after -¥1,500");
+    expect(balanceAfterLabel(123456, "EUR", { projected: true })).toBe("Balance after €1,234.56 · projected");
+  });
+
+  it("a wallet day header: the balance after for days so far, the projected one after today, else nothing", () => {
+    const closings = new Map([["2026-11-08", 1000]]);
+    const projected = new Map([["2026-11-20", 400]]);
+    expect(walletDayAside("2026-11-08", closings, projected, "EUR")).toBe("Balance after €10.00");
+    expect(walletDayAside("2026-11-20", closings, projected, "EUR")).toBe("Balance after €4.00 · projected");
+    expect(walletDayAside("2026-10-31", closings, projected, "EUR")).toBeNull();
   });
 
   it("the card sparkline is muted when nothing changed and coloured by the change otherwise", () => {

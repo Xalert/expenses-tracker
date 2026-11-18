@@ -58,6 +58,15 @@ export function parseListParams(sp: SearchParams): ListParams {
   };
 }
 
+/**
+ * True when the query carries a key with an empty (or blank) value — `?q=` from the no-JS search form, `?wallet=`
+ * from the no-JS filter form's "All wallets". The page then redirects to `listHref(parseListParams(sp))`, the same
+ * list under its clean URL.
+ */
+export function hasEmptyParams(sp: SearchParams): boolean {
+  return Object.values(sp).some((v) => (Array.isArray(v) ? v : [v]).some((x) => x !== undefined && x.trim() === ""));
+}
+
 /** What the list shows: one month, all time, or an explicit `from` / `to` range (which overrides the month). */
 export type ListView =
   | { type: "month"; month: string }

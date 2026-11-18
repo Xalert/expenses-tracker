@@ -1,7 +1,10 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { DayBars, type DayBar } from "@/components/charts";
+import { ChevronIcon } from "@/components/ui/picker-icons";
+import { calendarWeeks, WEEKDAY_LABELS, WEEKDAY_NAMES } from "@/lib/calendar";
 import { axisTicks, pickScale } from "@/lib/chart-scale";
+import { cn } from "@/lib/cn";
 import { dayMonthLabel } from "@/lib/day-labels";
 import { formatMonth } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
@@ -103,6 +106,108 @@ export function DayStrip({
           );
         })}
       </div>
+
+      <DayPicker
+        month={month}
+        monthLabel={monthLabel}
+        spentByDate={new Map(timeline.days.map((d) => [d.date, d.expenseMinor]))}
+        today={today}
+        selectedDate={selectedDate}
+        hrefFor={(date) => (date === selectedDate ? monthHref : hrefFor(date))}
+        ariaLabelFor={(date, value) =>
+          `${dayMonthLabel(date)}: ${money(value)} spent${date === selectedDate ? ". Shown; select to show the whole month" : ""}`
+        }
+      />
     </section>
+  );
+}
+
+/**
+ * Phones only (below `sm`): the bars are about 10px wide there, so a `<details>` "Pick a day" opens the month as a
+ * Monday-first calendar of 44px day links (the same links and labels as the bars; a dot marks a day with spending).
+ * Native disclosure: works without JavaScript.
+ */
+export function DayPicker({
+  month,
+  monthLabel,
+  spentByDate,
+  today,
+  selectedDate,
+  hrefFor,
+  ariaLabelFor,
+}: {
+  month: string;
+  monthLabel: string;
+  spentByDate: ReadonlyMap<string, number>;
+  today: string;
+  selectedDate?: string;
+  hrefFor(date: string): string;
+  ariaLabelFor(date: string, value: number): string;
+}) {
+  // Drop the weeks that hold no day of this month (calendarWeeks always gives six).
+  const weeks = calendarWeeks(month).filter((week) => week.some((d) => d.startsWith(month)));
+  return (
+    <details className="group mt-2 sm:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1 text-[13px] font-semibold text-accent-hover [&::-webkit-details-marker]:hidden">
+        Pick a day
+        <ChevronIcon dir="right" className="size-4 transition-transform group-open:rotate-90" />
+      </summary>
+      <table className="w-full table-fixed border-collapse text-center text-sm tabular-nums">
+        <caption className="sr-only">Days of {monthLabel}</caption>
+        <thead>
+          <tr>
+            {WEEKDAY_LABELS.map((w, i) => (
+              <th key={w} scope="col" className="pb-1 text-[11px] font-semibold text-muted-foreground">
+                <abbr title={WEEKDAY_NAMES[i]} className="no-underline">
+                  {w}
+                </abbr>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {weeks.map((week) => (
+            <tr key={week[0]}>
+              {week.map((date) => {
+                if (!date.startsWith(month)) return <td key={date} />;
+                const spent = spentByDate.get(date) ?? 0;
+                const selected = date === selectedDate;
+                return (
+                  <td key={date} className="p-0">
+                    <Link
+                      href={hrefFor(date)}
+                      scroll={false}
+                      aria-label={ariaLabelFor(date, spent)}
+                      aria-current={selected ? "date" : undefined}
+                      className={cn(
+                        "relative mx-auto flex h-11 w-full max-w-11 flex-col items-center justify-center rounded-full font-semibold",
+                        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                        selected
+                          ? "bg-accent text-accent-foreground"
+                          : date > today
+                            ? "text-muted-foreground hover:bg-surface-muted"
+                            : "text-foreground hover:bg-surface-muted",
+                        date === today && !selected && "underline underline-offset-4",
+                      )}
+                    >
+                      {Number(date.slice(8))}
+                      {spent > 0 && (
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "absolute bottom-1.5 size-1 rounded-full",
+                            selected ? "bg-accent-foreground" : "bg-accent",
+                          )}
+                        />
+                      )}
+                    </Link>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }

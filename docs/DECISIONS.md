@@ -226,6 +226,12 @@ Added 2026-11-08.
 | An empty optional `DatePicker` (`allowEmpty`, the transaction filters — that form was replaced by the chip row in redesign step 4; `allowEmpty` is kept) renders no hidden input | The filter form is a GET `next/form`; an empty field would otherwise add `from=` to the URL. `parseListParams` would ignore it anyway, so the "N active" count and the Export CSV link are unaffected either way | built |
 | The dashboard month label opens a month picker; "This month" appears only away from the current month | Going back a year took twelve clicks; the ‹ › links stay plain links so they work without JS | planner |
 | Popovers have no portal; they sit under their trigger and shift sideways to stay inside the viewport | Small and enough for these two uses; no horizontal scroll at 375px | built |
+| /transactions redirects a URL with any empty query value (`?q=`, `?wallet=`) to the same list's clean URL (`hasEmptyParams` → `listHref`) | The no-JS search and filter forms post every field; normalising on the server keeps one URL per view without scripts, and the forms need no special-casing | planner (2026-11-18) |
+| Without JavaScript the /transactions filters are a `<noscript>` GET form of native selects (Month · Wallet · Type · Category, "Apply"); the popover chips are hidden then (`data-needs-js`), the Month chip and its ‹ › links stay | Keeps the JS chips exactly as they are; one small form instead of a second set of disclosures. The month select offers next month, the current one, the 24 before it (plus an older month in view) and All time; choosing applies to the month and drops a selected day or range | planner (2026-11-18) |
+| Day-strip bars as links tile their row (no grid gap; the 2px / 5px gap is drawn inside each link) and span the full bar-row height. At 375px a hit area is about 10 × 48px (72px tall rows only add the cap label above). Below `sm` a native `<details>` "Pick a day" opens a Monday-first calendar of 44 × 44px day links (same hrefs and labels; a dot marks spending) | 31 columns cannot each be 44px wide on a phone; a calendar of the same links is the comfortable path, works without JS and adds no state | planner (2026-11-18) |
+| Opening a list row moves focus to the first control of its form (the Expense / Income switch's checked option; for a transfer, From). When the row holding the focus leaves the list (Delete, or a Save that moves it off the page or month) focus goes to the same row if it reappeared (moved to another day), else the next row, else the previous, else the list heading (`[data-list-heading]`, else the page's `<h1>`), with a polite announcement ("Expense deleted. Focus is on the next entry.") | The first control rather than the amount: Tab order then matches the form, and a phone does not open its keyboard on every row tap. The announcement uses a live region outside React so it survives the list unmounting when the page empties | planner (2026-11-18) |
+| A capped day's label pill follows its bar: muted (`bg-border-strong`) while another day is selected; on the wallet chart coloured by direction, In `bg-income` / Out `bg-expense` with `text-surface` | One colour story per day; `text-surface` gives the right polarity in both themes (light text on the light theme's dark tokens, dark text on the dark theme's light ones) without new tokens | planner (2026-11-18) |
+| `getWalletMonth` returns `projectedDays` (day N+1 to the month's end, the balance carried through the future-dated entries) next to `days`; the wallet page labels such a day "Balance after €… · projected". The charts still stop at today | The day header then always has its balance; a separate field keeps every chart, card and summary that reads `days` unchanged | planner (2026-11-18) |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
 
@@ -422,14 +428,11 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - "Manage categories" in the transaction form navigates away and loses what was typed.
 - Switching the form between Transfer and Expense/Income clears a typed amount.
 - If a category is the only one of its kind and has transactions, another must be created before it can be removed.
-- Without JavaScript, an empty note search on /transactions leaves `q=` in the URL (harmless); with it the URL is
-  clean. The filter chips themselves need JavaScript (popovers); without it only the search, the day-strip links,
-  pagination and the per-row edit links work.
-- The /transactions day-strip bars are about 9px wide at 375px, well under the 44px touch target; the month chip and
-  the list are the comfortable path on phones.
-- Opening a /transactions row does not move focus into its form (Tab from the row button reaches it next); after a
-  Delete from inside a row, or a Save that moves the entry to another page or month, focus falls back to the page.
-- With a day selected in the strip, a capped day's amount pill stays in the accent colour while its bar is muted.
+- Without JavaScript the /transactions Month chip's label still renders as a button that does nothing (its ‹ › links
+  and the `<noscript>` filter form below do the work); the no-JS month select covers 24 months back and one ahead
+  (plus the month in view), older months are reached with ‹.
+- The day-strip bars themselves stay about 10px wide at 375px (the hit areas now touch and are 48px tall); the
+  "Pick a day" calendar is the 44px path on phones.
 - The name-length message says "under 40 characters" although exactly 40 is allowed (wallet and category names;
   first name / surname now say "80 characters or fewer").
 - An unterminated quote in a CSV stops parsing at that line, so later problems are only reported once it is fixed.
@@ -439,12 +442,8 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 - A file over 6 MB that bypasses the browser's size check gets the framework's generic error instead of the app's
   message.
 - Popovers never open upwards: near the bottom of the screen the calendar's lower rows need a scroll to reach.
-- On the wallet chart a capped day's label pill is in the accent colour even when it is money in (the bar itself is
-  green); the label says "In" or "Out".
 - A wallet's starting balance uses the decimal keyboard on phones (as before step 5), which on iOS has no minus key;
   a negative starting balance has to be pasted or entered on another keyboard.
-- Future-dated entries on a wallet page show no "Balance after" in their day header (`getWalletMonth.days` stops at
-  today).
 - **On phones the Add dialog does not put focus in the amount when it opens**; `Dialog` focuses its panel there, so
   it takes Tab (✕, the type switch, then the amount). From `sm` up the amount (`data-autofocus`) is focused.
   Deliberate: auto-focusing on a phone would open the keyboard over half the bottom sheet.
@@ -479,6 +478,13 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
   when it does).
 
 ### Not verified
+
+- **The /transactions and wallet-page fixes of 2026-11-18 are covered by render and service tests only**, not yet
+  tried in a browser: focus moving into an opened row's form and, after a Delete or a Save that moves the entry
+  away, to the next row / previous row / list heading with its announcement (the logic relies on a layout-effect
+  cleanup running before React detaches the row, and on `setTimeout(0)` landing after the refreshed list commits);
+  the `<noscript>` filter form and the `<style>` hiding the popover chips with scripts off; the "Pick a day"
+  calendar at 360–375px; the cap pill colours in both themes.
 
 - **Password change (2026-11-17) is covered by service tests only.** Not yet tried in a browser: the account
   menu's "Account settings" link closing the popover, the form clearing after success, a password manager picking

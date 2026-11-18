@@ -61,7 +61,8 @@ function Chip({
   const close = () => setOpen(false);
   const grouped = Boolean(before || after);
   const chip = (
-    <div ref={anchor} className="relative">
+    // `data-needs-js`: hidden without JavaScript (the page's <noscript> filter form takes over the listbox chips).
+    <div ref={anchor} className="relative" data-needs-js={popup === "listbox" ? "" : undefined}>
       <button
         ref={trigger}
         type="button"

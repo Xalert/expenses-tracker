@@ -12,7 +12,7 @@ import { getCurrentUser, requireUser } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { currencyName } from "@/lib/currencies";
 import { currentMonth, formatMonth, isValidMonth, todayISO } from "@/lib/dates";
-import { balanceAfterLabel } from "@/lib/day-labels";
+import { walletDayAside } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
@@ -63,6 +63,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
   const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
   const closingByDate = new Map(data.days.map((d) => [d.date, d.closingMinor]));
+  // Days after today: the balance the future-dated entries lead to, labelled "projected".
+  const projectedByDate = new Map(data.projectedDays.map((d) => [d.date, d.closingMinor]));
   const endMinor = data.days.at(-1)?.closingMinor ?? data.openingMinor;
   const sinceStart = endMinor - data.openingMinor;
   const name = monthName(month);
@@ -201,7 +203,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
 
         <section aria-labelledby="wallet-entries" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1">
-            <h2 id="wallet-entries" className="text-[15px] font-bold text-foreground">
+            <h2 id="wallet-entries" data-list-heading="" tabIndex={-1} className="text-[15px] font-bold text-foreground">
               Entries in {formatMonth(month)}
             </h2>
             <Link href={transactionsHref} className="text-[13px] font-semibold text-accent-hover hover:underline">
@@ -221,10 +223,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 today={today}
                 returnTo={pageHref}
                 showWallet={false}
-                aside={(date) => {
-                  const closing = closingByDate.get(date);
-                  return closing === undefined ? null : balanceAfterLabel(closing, wallet.currency);
-                }}
+                aside={(date) => walletDayAside(date, closingByDate, projectedByDate, wallet.currency)}
               />
             </InlineEditProvider>
           )}

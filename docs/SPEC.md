@@ -395,11 +395,13 @@ getMonthInsights(userId, { month; currency }): {
   noSpendDays: { days; outOf; previousDays; previousOutOf };   // days 1..N with no expense in this currency (outOf = N);
                                                               // previous* = the same over the whole previous month
 }
-getWalletMonth(userId, walletId, month): {                    // null when the wallet is not the user's (archived works)
+getWalletMonth(userId, walletId, month, { today? }): {         // null when the wallet is not the user's (archived works)
   openingMinor;                     // balance at the start of the month: initial + every entry dated before it
   inMinor; outMinor;                // the whole month, transfers included (each leg in its own wallet's amount)
   entryCount; totalEntryCount;      // entries this month / ever
   days: { date; inMinor; outMinor; closingMinor }[]   // days 1..N; closingMinor = balance after that day
+  projectedDays: { date; inMinor; outMinor; closingMinor }[]   // days N+1..month end (empty for a past month), the
+                                    // balance carried on through future-dated entries; not drawn by the charts
 } | null
 // transactions.ts additions
 listDayTotals(userId, filters: TransactionFilters, dates: string[]): { date; currency; netMinor }[]
@@ -787,6 +789,14 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       search is a GET `<form role="search" action="/transactions">` with hidden inputs for the other params (no-JS)
       and `onSubmit` pushing a clean URL (an empty search drops `q`); then the Export CSV pill (hidden when the list
       is empty). At 375px the chips wrap and the search + export share a full-width line.
+      **Clean URLs**: a request with any empty (or blank) query value (`?q=`, `?wallet=` from a no-JS form) is
+      redirected to `listHref(parseListParams(query))` (`hasEmptyParams`).
+      **Without JavaScript** (`NoScriptFilters`, server, rendered by the page inside `<noscript>`): a GET
+      `<form action="/transactions" aria-label="Filters">` of native selects — Month (next month, the current month
+      as the empty default, the 24 before it, the month in view if older, "All time"), Wallet ("All wallets", archived
+      marked), Type, Category (`<optgroup>` Expense / Income) — with hidden `q` and `currency` and an "Apply" button;
+      a selected day or range is replaced by the chosen month. A `<style>` in it hides the Wallet / Type / Category
+      chips (`data-needs-js`); the Month chip and its ‹ › links stay.
       **Month stepper**: when the view is a single month (not all time, a range or a single day), the Month chip is
       one bordered control with a ‹ link before and a › link after it (plain `next/link`s, `scroll={false}`,
       `aria-label` "Previous month, October 2026 ([)" / "Next month, December 2026 (])", also the `title`), all
@@ -814,6 +824,14 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       accent (`aria-current="date"`, label "… Shown; select to show the whole month") and links back to the month,
       and the heading line reads "€64.20 on 3 November" with a "Show all of November 2026" link. Axis labels as on
       the Overview (`axisTicks`). Title "Spent per day · EUR", then "€1,531.44 in November 2026".
+      **Hit areas**: as links the bars have no grid gap; each link fills its column and the full bar-row height (48px)
+      and the visible 2px / 5px gap is an inset of the bar inside it, so the targets tile the row (about 10 × 48px
+      each at 375px). With a day selected, a capped day's label pill is muted (`bg-border-strong text-foreground`)
+      like its bar, unless the capped day is the selected one. **Phones** (below `sm`): under the axis a native
+      `<details>` "Pick a day" (`DayPicker`) opens a Monday-first `<table>` calendar of the month (weeks with none of
+      its days dropped, weekday `<abbr>` headers) whose day links are 44px tall and up to 44px wide, with the bars'
+      hrefs, `aria-label`s and `aria-current`; the selected day in the accent, days after today muted, today
+      underlined, a small dot on days with spending.
     - **List** (`DayList`, server, inside `InlineEditProvider` + `ExpandableList`): `groupByDate` over the page's
       items; one 18px card per day: an `<h2>` with `dayHeaderLabel(date, today)` ("Today · Sunday 8", "Yesterday ·
       Saturday 7", "Tuesday 3" in today's month, "Tue 3 Nov" in today's year, "Tue 3 Nov 2025") and on the right
@@ -832,6 +850,16 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       today and the list URL reach every panel once through `InlineEditProvider`. On `ok` the row closes, focus
       returns to its button, the message is announced and `router.refresh()` runs; errors show inline and focus the
       first invalid control.
+      **Focus** (`ExpandableRow`): opening a row by its button moves focus to the panel's first control (a radio
+      group's checked option: the Expense / Income switch; a transfer's From). Each row button carries
+      `data-expandable-row=<id>`. When a row that is open or holds the focus leaves the DOM (Delete; a Save that
+      moves the entry to another page or month) and focus has fallen to `<body>` on the same pathname, focus goes to
+      `pickFocusTarget(focusCandidates(order, id))`: the same row if it came back (moved to another day), else the
+      next row, else the previous one, else the list heading (`[data-list-heading]` — the wallet page's "Entries in
+      …" — else the page's `<h1>`, given `tabindex=-1`). A polite live region outside React then says
+      "<notice> Focus is on the next entry." / "… The list is empty." — the notice is "Expense deleted." /
+      "Income deleted." / "Transfer deleted." (set by `ConfirmDeleteForm`'s `onConfirmed`) or "<save message>. It is
+      no longer in this list.".
     - **Empty states**: no wallets / no transactions at all (as before); a month with nothing in it and no other
       filter: "Nothing in December 2026." with "‹ November 2026" and "All time" buttons; otherwise "No matching
       transactions" + "Clear filters". The chip row shows whenever the user has any transaction.
@@ -889,7 +917,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     `sm`) box with **stacked** bars — one column per calendar day, money out at the bottom (accent), money in on top
     (`--income`) via `DayBar.base`, transfers included; days after day N are `future` stubs (`walletBars`). Bar scale:
     `pickScale` over each day's in + out, divided by 0.6 as on the Overview; one huge day is capped with the label
-    "In €4,200.00" / "Out €1,150.00" (its larger side). Line: `RunningLine` of `days[].closingMinor` (foreground),
+    "In €4,200.00" / "Out €1,150.00" (its larger side), the pill coloured by that direction (`cap.tone`: In
+    `bg-income`, Out `bg-expense`, both `text-surface`). Line: `RunningLine` of `days[].closingMinor` (foreground),
     starting on the left edge at `openingMinor`, scaled by `balanceRange` (min / max of the opening and closings ±
     15% of the range; a flat month gets ±10% of its size, at least ±100 minor, so it is drawn mid-box); it stops at
     day N. Axis labels as on the Overview (`axisTicks`). Text alternative: the line's `aria-label` ("Balance of ING
@@ -902,8 +931,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     **Entries**: "Entries in November 2026" with "Open in Transactions" (`/transactions?wallet=<id>&month=<month>`),
     then `listTransactions(userId, { walletId, month, limit: 200 })` in `InlineEditProvider` (all wallets, archived
     flagged; `returnTo` = this page with its month) + `DayList showWallet={false} aside=…`: each day's header shows
-    `balanceAfterLabel(closing)` from `getWalletMonth.days`; a future-dated day (after today) has no closing there
-    and shows nothing on the right. There is **no pagination** on this page: past 200 entries in a month a line says
+    `walletDayAside`: `balanceAfterLabel(closing)` from `getWalletMonth.days`, and for a future-dated day (after
+    today) the projected balance from `projectedDays`, "Balance after €… · projected". The "Entries in …" `<h2>` is
+    the list heading (`data-list-heading`) that focus falls back to when the last entry is deleted. There is **no pagination** on this page: past 200 entries in a month a line says
     "Showing the latest 200 of N entries…" with a link to Transactions. An empty month: "No entries in November
     2026." in a card.
   - **Wallet dialog** (`components/wallets/wallet-form.tsx`, `new/new-wallet.tsx`, `[id]/edit/edit-wallet.tsx`):
