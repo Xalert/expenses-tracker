@@ -28,7 +28,7 @@ test.describe("the Add dialog (N shortcut)", () => {
 
     let dialog = await openAddDialogWithN(page);
     // From `sm` up the amount has focus on open; on a phone the sheet itself (no keyboard popping up).
-    if (test.info().project.name === "desktop") {
+    if ((page.viewportSize()?.width ?? 0) >= 640) {
       await expect(dialog.getByRole("textbox", { name: "Amount" })).toBeFocused();
     } else {
       await expect(dialog.getByRole("textbox", { name: "Amount" })).not.toBeFocused();

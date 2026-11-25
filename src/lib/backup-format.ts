@@ -17,6 +17,8 @@ export const BACKUP_LIMITS = {
   categories: 1_000,
   manualRates: 10_000,
   recurring: 1_000,
+  /** One per category plus the overall one. */
+  budgets: 1_001,
   /** transactions + transfers together. */
   entries: IMPORT_MAX_ROWS,
 } as const;
@@ -81,6 +83,23 @@ export const backupCategorySchema = z.object({
   /** Optional: added after version 1 shipped (old files lack it, and the version stays 1). */
   archived: z.boolean({ error: "Expected true or false." }).optional().default(false),
   archivedAt,
+  /**
+   * Optional (added after version 1 shipped): the category's colour, a key of the wallet-group palette
+   * (`GROUP_COLORS`); anything else reads as none. Restored only on categories the import creates.
+   */
+  color: z.string({ error: "Expected text." }).max(40, { error: "Text is too long." }).nullable().optional(),
+});
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): the monthly budgets. `category` names an expense
+ * category of the file (null or absent: the overall budget); one amount in `currency`, as integer minor units plus the
+ * informational decimal string.
+ */
+export const backupBudgetSchema = z.object({
+  category: text.nullable().optional(),
+  currency: currencyCode,
+  amountMinor: positiveInt,
+  amount: decimal.optional(),
 });
 
 /**
@@ -164,6 +183,10 @@ export const backupSchema = z.object({
     .array(backupRecurringSchema)
     .max(BACKUP_LIMITS.recurring, { error: `At most ${BACKUP_LIMITS.recurring} repeating entries.` })
     .optional(),
+  budgets: z
+    .array(backupBudgetSchema)
+    .max(BACKUP_LIMITS.budgets, { error: `At most ${BACKUP_LIMITS.budgets} budgets.` })
+    .optional(),
 });
 
 export type Backup = z.output<typeof backupSchema>;
@@ -174,6 +197,7 @@ export type BackupTransaction = Backup["transactions"][number];
 export type BackupTransfer = Backup["transfers"][number];
 export type BackupManualRate = NonNullable<Backup["manualRates"]>[number];
 export type BackupRecurring = NonNullable<Backup["recurring"]>[number];
+export type BackupBudget = NonNullable<Backup["budgets"]>[number];
 
 /** `transactions[3].amountMinor` from a zod issue path. */
 export function formatIssuePath(path: readonly PropertyKey[]): string {

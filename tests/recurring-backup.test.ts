@@ -2,6 +2,7 @@
 // rule the account already has is skipped), and the entries keep their link to the rule.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
+import { listBudgets, setBudget } from "@/server/budgets";
 import { buildBackup } from "@/server/export";
 import { previewImport, runImport } from "@/server/import";
 import { createRecurringEntry, listRecurring, pauseRecurring } from "@/server/recurring";
@@ -125,5 +126,17 @@ describe("backup: repeating entries", () => {
     expect(await runImport(bob.id, JSON.stringify(backup))).toMatchObject({ imported: true, recurringToAdd: 0 });
     expect(await listRecurring(bob.id)).toEqual([]);
     expect((await listTransactions(bob.id)).items.every((t) => t.recurringId === null)).toBe(true);
+  });
+});
+
+describe("backup: repeating entries and budgets together", () => {
+  it("round-trips both into another account, onto the same category", async () => {
+    await setBudget(alice.id, { categoryId: alice.cat("Housing"), currency: "EUR", amountMinor: 120_000 });
+    const bob = await makeUser(db, "bob@example.com");
+    const result = await runImport(bob.id, JSON.stringify(await buildBackup(alice.id)));
+    expect(result).toMatchObject({ imported: true, budgetsToAdd: 1, recurringToAdd: 2, transactionsToAdd: 5 });
+    const [budget] = await listBudgets(bob.id);
+    const rent = (await listRecurring(bob.id)).find((r) => r.categoryName === "Housing")!;
+    expect(budget.categoryId).toBe(rent.categoryId);
   });
 });

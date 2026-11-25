@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
 import { recurringTransactions, transactions } from "@/db/schema";
+import { listBudgets, setBudget } from "@/server/budgets";
 import { archiveCategory, changeCategoryKind, deleteCategory, unarchiveCategory } from "@/server/categories";
 import {
   createRecurringEntry,
@@ -430,5 +431,23 @@ describe("categories and rules", () => {
     expect((await getRecurring(alice.id, r.rule.id))!.walletName).toBe("Main");
     const rows = await db.select().from(recurringTransactions);
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe("rules and budgets together", () => {
+  it("a rule blocks the kind change, so the category's budget stays", async () => {
+    await setBudget(alice.id, { categoryId: alice.cat("Housing"), currency: "EUR", amountMinor: 100_000 });
+    const r = await createRecurringEntry(alice.id, rent("2026-11-25"), { frequency: "monthly" }, TODAY);
+    await deleteTransaction(alice.id, r.transaction.id);
+    await expect(changeCategoryKind(alice.id, alice.cat("Housing"), { kind: "income" })).rejects.toThrow("1 repeating entry");
+    expect((await listBudgets(alice.id)).map((b) => b.categoryId)).toEqual([alice.cat("Housing")]);
+  });
+
+  it("removing a category moves its rules to the replacement; its budget goes with it", async () => {
+    await setBudget(alice.id, { categoryId: alice.cat("Housing"), currency: "EUR", amountMinor: 100_000 });
+    const r = await createRecurringEntry(alice.id, rent("2026-11-25"), { frequency: "monthly" }, TODAY);
+    await deleteCategory(alice.id, alice.cat("Housing"), { moveToCategoryId: alice.cat("Bills") });
+    expect((await getRecurring(alice.id, r.rule.id))!.categoryId).toBe(alice.cat("Bills"));
+    expect(await listBudgets(alice.id)).toEqual([]);
   });
 });

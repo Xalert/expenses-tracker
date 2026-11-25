@@ -66,6 +66,14 @@ section holds what replaced it.
 | Archived wallets are hidden from pickers and dashboard totals; an existing entry may stay on one when edited, new entries are refused | History stays intact and editable without reviving the wallet | built |
 | Dates are `YYYY-MM-DD` strings with no time or time zone | An expense belongs to a calendar day; avoids day-shift bugs | planner |
 | Transfer legs carry a copy of the transfer's note | So the note search on the transactions list finds transfers | built |
+| (2026-11-25) "Reconcile balance" on the wallet page: the user types the wallet's actual balance (in its currency, through `parseAmount`, may be negative) and a date (default today, never later); the difference from the tracked balance at the end of that day is recorded as one entry dated that day: income when positive, an expense when negative, in a category "Balance adjustment" of that kind (created when missing), note "Balance adjustment". A zero difference records nothing and says the balance already matches | A tracked balance drifts from the real one (a forgotten coffee, a bank fee); hunting for the missing entry is slow | planner |
+| (2026-11-25) Reconciling records an entry rather than changing the initial balance | An entry is visible, dated, editable and deletable and does not rewrite history; it is an ordinary entry and counts in the month's figures like any other | planner |
+| (2026-11-25) Reconciling an archived wallet, or one in an archived group, is refused as for any new entry; one service (`reconcileWallet`, `userId` first) reads the balance and writes the entry in one DB transaction with the wallet row locked (`FOR UPDATE`), so two submissions cannot both add the difference | Same rule as every new entry; a double submit must not double the correction | planner |
+| (2026-11-25) The interface is a panel on the wallet page opened from the ⋯ menu, with no new route; it shows live what saving will record and, after saving, a confirmation of what was added | Reconciling is occasional and belongs to one wallet | planner |
+| (2026-11-25) The wallet page's big balance is now the balance at the end of today: entries dated later are left out, with a line "€… projected after the entries dated later" when they change it. It used to include every entry, under the label "Balance today" | The page already calls days after today "projected", and reconciling as of today compares with the balance at the end of today; with the old figure the page would not show the balance typed while a future-dated entry exists. /wallets and the Overview still show the balance including future-dated entries (see Known gaps) | built |
+| (2026-11-25) An archived "Balance adjustment" category is used as it is and stays archived; the name is matched ignoring case, within the entry's kind only | Reconciling never fails on it and never changes the user's category settings; the entry keeps it when edited, as any entry with an archived category | built |
+| (2026-11-25) The reconcile panel is open while the URL has `?reconcile=1` (the ⋯ menu item links there; Close and Escape go back to the page and return focus to the ⋯ button); the action is bound on the server and passed down | A real URL works without JavaScript, and the preview's data (every day's closing balance up to today, `listWalletClosingBalances`) is only loaded while the panel is open. A Server Action bound inside the client component hung on a no-JavaScript post in the e2e test | built |
+| (2026-11-25) After saving, the panel stays open with the confirmation ("Added an expense of €12.40 on 25 Nov 2026 in “Balance adjustment”. The balance on that day is now €975.26.") and empty fields; for a date in another month than the one shown, it links to that month | The confirmation is what the brief asks for; the entry is otherwise not visible when it falls in another month | built |
 | Another user's row behaves exactly like a missing row | No information leak about what exists | built |
 
 ### Accounts and sign-in
@@ -162,6 +170,27 @@ Added 2026-11-18 (closing the category gaps):
 | The "Top category" (Overview insight card) is ranked in JS by one function, `pickTopCategory` (amount, then the lower-cased name by UTF-16 code units, then id), in both the per-currency and the converted view | The SQL `lower()` order depends on the database collation and `localeCompare` on the locale, so the two views could name different categories on a tie | planner |
 | *(2026-11-18)* Every category list is ordered in one place, in JS: `sortCategories` / `compareCategoryNames` (`src/lib/category-order.ts`: expense first, active before archived, then the name lower-cased compared by code point, then id); the services sort after the query, and `pickTopCategory`, the spending split and the dashboard's per-category list break ties with the same name rule | Chosen over `COLLATE "C"` on `lower(name)`: Postgres' `lower()` itself depends on the database's ctype for non-ASCII letters, so only JS gives the same order on every instance (and PGlite); category lists are small. Not `localeCompare` either (runtime- and locale-dependent) | planner |
 | *(2026-11-18)* After a kind change the row's new card announces it and takes the focus (its heading at once, then the row's button once the refreshed list has it), told by the old card through a window event | The two cards are separate components; focus left on the old card's heading pointed at a list the row was no longer in | planner |
+
+### Budgets and category colours
+
+| Decision | Why | Decided by |
+|---|---|---|
+| (2026-11-25) A budget is one amount for every month, with no history; a past month is compared with the current amount | Simple to set and to read; a history of amounts is a feature nobody asked for yet | planner |
+| (2026-11-25) Budgets are for expense categories only, plus one optional overall budget; the currency is one the user holds a wallet in (archived wallets included); the typed amount goes through `parseAmount(value, currency)` | Income has no "limit"; a currency without a wallet would be a typo | planner |
+| (2026-11-25) Progress is always in the budget's own currency over every wallet, each day's spending converted at that day's rate as in the "All in" views (a currency without a rate left out and named); it ignores the page's currency and "All in / only" switches | A budget means one figure; it must not change when the user flips a view switch | planner |
+| (2026-11-25) Budgets are account-wide: with a wallet group selected their progress is not shown, one line says they cover all groups | Showing a group's spending against an account-wide limit would be wrong; a per-group budget is a known gap | planner |
+| (2026-11-25) Removing a category removes its budget (FK cascade, said in the removal confirmation); transfers never count | A budget of a category that no longer exists means nothing | planner |
+| (2026-11-25) Archiving a category keeps its budget, and its row still shows the meter; the budget can still be changed | Archiving is undone with one click and loses nothing elsewhere either; an archived category can still have entries that month | built |
+| (2026-11-25) Switching an expense category to income removes its budget in the same DB transaction (`budgetRemoved`), and the row says so before the click and in the success message | The kind change is only possible while nothing uses the category, so nothing worth keeping is lost; refusing the change instead would add a step for no gain | built |
+| (2026-11-25) The overall budget is the first row of the expense card ("Overall budget · all spending"), and a category's budget is set in the row's existing editor, under the rename / colour form | The brief asked for the existing inline editor; one place for everything about a category | built |
+| (2026-11-25) The meter: "€120.00 of €300.00", "€180.00 left" / "€20.00 over" (danger colour), a neutral fill (`--muted-foreground`, `--danger` once over) and, for the current month, a tick at day N ÷ days with "40% spent · day 10 of 30" under it. The bar is `aria-hidden`; the text says the same | The tick against the fill answers "am I ahead of the month?" without a second colour; a green "on track" fill would read as income | built |
+| (2026-11-25) Over means above the limit; reaching it exactly says "Limit reached"; the percentage is rounded down | "100% spent" should not show while there is still a cent left | built |
+| (2026-11-25) The Overview's Budgets card sits between the four insight cards and Wallets / Latest: the overall budget and the three category budgets with the largest share spent (ties in the category order), with a link to /categories ("All budgets (N more)" when some are not shown) | Leaves the existing four cards as they were; "closest to or over the limit" = largest share | built |
+| (2026-11-25) `getMonthBudgets` takes `convert` from the page: the page's own conversion when it has one (Overview, /categories in "All in"), else `getConversion` for the month when the user holds more than one currency | One conversion per request, no network call for a single-currency account; services never read the clock | built |
+| (2026-11-25) Backup: optional `budgets[]` (`category` by name, absent for overall) and an optional `color` per category, version 1. Import only adds: a missing budget is created, an existing one kept (notice `budgets-kept` when it differs); a colour only on categories the import creates. The budget currency need not be held | The contract of the manual rates and groups ("import adds, never changes"); a budget does not depend on a wallet | planner |
+| (2026-11-25) A category can have a colour from the wallet-group palette (`GROUP_COLORS`), picked in the row editor (the shared `ColorChoice`, now in `src/components/ui`, with 44px targets for categories; the group forms keep their 32px) and shown as a round dot before the name on /categories, in the entry form's category pills and in the Overview's Budgets card. Not on transaction rows | Another change was touching the transaction rows at the same time; the picker and the dots are where categories are chosen and managed | planner |
+| (2026-11-25) The spending split keeps its rank ramp; a category's own colour is never used in the split. The row's ramp swatch is now a small square (as in the split's legend) and the category colour a round dot, so the two never read as the same thing | The palette has a red and an amber that sit next to the ramp's terracotta and orange: used in the split they would be confused with another category's ramp step, and a split of six arbitrary colours would lose the "largest = strongest" reading | built |
+| (2026-11-25) The rename form became "name + colour + Save": the success message is "Renamed to …" when the name changed, else "Saved …" | One form per row keeps the editor short; the old "Rename" label no longer fit | built |
 
 ### Import and export
 
@@ -329,7 +358,8 @@ Added 2026-11-08.
 | The README has a short "Development" section with the everyday `make` commands (dev, check, test, test-e2e, watch, demo-reset, down), one-line blocks; everything else stays in `docs/DEVELOPMENT.md` | The owner wants them runnable straight from the README (2026-11-17); this relaxes the earlier "no dev commands in the README" rule for these only | owner |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
-| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433 | planner (ask), built |
+| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433. *(Extended 2026-11-25 to Firefox and WebKit, next row.)* | planner (ask), built |
+| **The e2e suite in Firefox and WebKit too (2026-11-25)**: projects `desktop-firefox` and `desktop-webkit` (the desktop tests at 1280px) and `phone-webkit` (the phone tests at 375px with touch, the nearest Playwright has to iOS Safari); `desktop` and `phone` stay Chromium under their old names. No Firefox phone project: Playwright's Firefox does not support `isMobile`. CI installs all three browsers (`--with-deps`) and runs every project | Headless Chromium alone had left Safari and Firefox unchecked. A test that has to tell the layouts apart reads the viewport width (the app's own `sm` breakpoint), not the project name. In WebKit the `consoleErrors` fixture ignores one message: "Fetch API cannot load …?_rsc=… due to access control checks.", WebKit's rejection of a Next.js link prefetch that a `page.goto` cancels while the old page is still alive (Chromium and Firefox stay silent; soft navigations between pages logged none, checked with a throwaway probe test). Only that same-origin `_rsc` form is ignored, and only in WebKit. `e2e/wallets.spec.ts` reads the group names through the region found by its heading: in Playwright 1.65's Firefox a multi-element query under a region located by its accessible name makes the next query crash the content process (SIGSEGV), also on a one-section static page, so it is the test tool, not the app | planner (ask), built |
 | README reduced to a landing page (2026-11-10): what the app is, the Docker quick start, a self-hosting pointer and links. "Run it", "Debugging", "Scripts" and "Layout" moved unchanged to `docs/DEVELOPMENT.md`; the import/export, statement importer and accounts paragraphs were dropped because `docs/SPEC.md`, `docs/STATEMENT-IMPORTER.md` and `docs/SELF-HOSTING.md` already hold them. Supersedes the "five-minute path" README above; the one-line `bash` block rule now applies to `docs/DEVELOPMENT.md` | The owner found the README had too many commands and wants only a quick Docker start, a short description and the self-hosting pointer there | owner |
 
 ### Interface
@@ -362,6 +392,7 @@ Added 2026-11-08.
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 | *(2026-11-18)* Without JavaScript the /transactions Month chip's popover button is hidden like the other popover chips and a `<noscript>` link with the same label jumps to the no-JS filter form's Month select (`#no-script-month`) | The label looked like a button that did nothing; the ‹ › links keep working, and the form below is where a month is chosen without scripts. With scripts nothing changes | planner |
 | **Fix (2026-11-18, found by the e2e suite): pickers focus their first item with `preventScroll`** (date picker days, month grid, the /transactions filter chips' options) | On open the focus ran before the Popover had re-placed itself above a trigger near the bottom, so the browser scrolled the page to the panel's first, below position and the panel never flipped | built |
+| **Fix (2026-11-25, found by the e2e suite in Firefox and WebKit): "+ New category" focuses the new pill from an effect, not a `requestAnimationFrame`** | The state updates that remount the category picker with the new pill checked run inside the action's transition; in Firefox (3 runs in 4) and WebKit (1 in 4) the frame callback often ran before that commit, found no pill, and the pill never got focus. An effect runs after the commit. Chromium had always passed. Covered by `e2e/entries.spec.ts` ("+ New category creates the category…") in all three engines | built |
 | **Fix (2026-11-18, found by the e2e suite): the charts' screen-reader day tables are hidden by an `sr-only` wrapper, not by `sr-only` on the `<table>`** | A table does not shrink to the 1px width: on the wallet page with a long wallet name the hidden table was 470px wide and the page scrolled sideways at 375px | built |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -491,6 +522,7 @@ Decided and built 2026-11-25 (SPEC "Recurring entries"). The table and `transact
 | The marker is a small loop icon after the category with "(repeats)" for screen readers; the link to /recurring is in the open row's footer ("Repeating entry"), not on the marker | The marker sits inside the row's button, where a link cannot go | built |
 | An imported rule keeps the file's next date and paused state (paused as of the import); its due entries are made by the next request like any rule's. A rule matches an existing one on wallet, category, kind, amount, note, frequency, interval, start and end date; next date and paused are not compared | Re-importing one's own backup must add nothing, even after the rule moved on | built |
 | A category named only by a backup rule (not in the file's `categories`) is created like any other category the import needs | The rule names its category by kind + name, so the file may not list it | built |
+| *(merge with budgets)* Removing a category moves its rules to the replacement but not its budget (the budget goes with the category, as the budgets work decided); a rule blocks the kind change before the budget removal that an allowed change makes. An import writes categories, then budgets, then rules, then entries | Each feature keeps its own rule; the order lets budgets and rules point at created categories and entries at created rules | built |
 
 ### Wallet groups
 
@@ -522,6 +554,31 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 | *(2026-11-18)* The backup gains an optional top-level `groups: [{ name, color, archived }]` in display order; an import creates every listed group the account lacks (empty ones too), after the account's own groups, and never changes an existing group | Round-trips order, colour and archived state without a version bump; old files still import; "import adds, never changes" | built |
 | *(2026-11-18)* An archived group can be renamed and recoloured without unarchiving it: an Edit toggle in its row of the "Archived groups" section opens the Groups card's form (the service always allowed it) | Unarchiving just to rename showed it in the switcher meanwhile; one form for both lists | planner |
 | *(2026-11-18)* The entry services refuse new entries (and moving an entry) onto a wallet whose group is archived, exactly as onto an archived wallet; an entry already on it keeps it when edited | Before, only the pickers hid such wallets; the rule now holds for every caller | planner |
+
+### Reports
+
+Built 2026-11-25 (SPEC "Reports").
+
+| Decision | Why | Decided by |
+|---|---|---|
+| *(2026-11-25)* A yearly view at `/reports`, a new top-menu entry "Reports" between Categories and Import & export, with its null page under `@modal/` | Every other view is one month | planner |
+| *(2026-11-25)* `?year=YYYY`, default the current year in the account's time zone, a year stepper like the month switcher, no stepping into the future | The same URL-state pattern as `?month=` | planner |
+| *(2026-11-25)* The Overview's currency switch, "All in <currency> / <currency> only" switch, conversion (each day at that day's rate, a currency without a rate left out and named, the same notes and Rates link) and wallet-group scope, reusing its pieces | One rule for every converted view | planner |
+| *(2026-11-25)* Transfers never count; archived wallets and categories do | It is history | planner |
+| *(2026-11-25)* Contents: the year's income / expenses / net against the previous year (the current year against the same period of the previous one), a month-by-month chart linking each month to the Overview, category-by-month tables for expenses and income linking each cell to the filtered /transactions; an empty state for a year with no entries | The planner's brief | planner |
+| *(2026-11-25)* A year is one `getConversion` over the previous and the shown year (one provider range request at most, none once stored) and one SQL query grouped by date, kind, currency and category; nothing per month | Up to 731 days of rates and a year of entries must not mean 12 round trips | planner |
+| *(2026-11-25)* "Same period" for the current year is 1 Jan – today against 1 Jan – the same date a year earlier (`addMonths(today, -12)`: 29 Feb → 28 Feb) | The day-precise version of the Overview's "through day N" pace | built |
+| *(2026-11-25)* The year's totals, chart and tables include entries dated after today (like the Overview's month figures); only the compared figure stops at today, and the card says "€X by 25 Nov vs …" when the two differ | The totals then match the chart and the tables, and the comparison stays like-for-like | built |
+| *(2026-11-25)* Income and expenses are two bars per month on one scale; net is a separate small row of up / down bars on its own scale (labelled "Net (own scale)"), with the compact net written under each month from `sm` up; no cap rule | Net can be negative and is much smaller than either flow, so drawing it on the bars' scale (or as a second axis) would make it unreadable; months rarely have one outlier the way days do | built |
+| *(2026-11-25)* The net row has no figures below `sm` (twelve 28px columns cannot hold "+€1.2K"); the figures are in each month's link name, its `title`, the hidden table and the Net card | Text that would truncate or overlap reads worse than none | built |
+| *(2026-11-25)* Future months are not links (the Overview would clamp them to the current month) and are drawn as `--chart-future` stubs | A link that lands somewhere else is a trap | built |
+| *(2026-11-25)* The category tables use whole units without a symbol ("1,235"), the currency named once above the table, the exact amount in each link's accessible name and `title` | Thirteen money columns with cents and symbols do not fit even at 1280px | built |
+| *(2026-11-25)* On phones the tables scroll sideways inside their card with a sticky category column; the scroller is `relative` | The page must not scroll sideways; the `sr-only` caption (absolutely positioned) otherwise escaped the scroller and widened the page by the table's width — the e2e layout check caught it | built |
+| *(2026-11-25)* Only non-zero cells are links; zero cells are a muted dash. A row total links to the category over the year (`from` / `to`), a month total to that month and kind. Links carry `currency` (and `view=only`) so the day strip shows the same currency | A link to an empty list is noise; the totals deserve the same drill-down as the cells | built |
+| *(2026-11-25)* The default currency for a year is the one with the most entries in that year (`pickDefaultCurrencyBetween`, `pickDefaultCurrency`'s rule over a date range; `pickDefaultCurrency` now calls it) | The month rule applied to the year; a one-line refactor instead of a second copy | built |
+| *(2026-11-25)* `currencyConditions` and `converter` in `insights.ts` are exported (unchanged) for `reports.ts` | Reuse the month services' scoping and conversion instead of copying them | built |
+| *(2026-11-25)* Net's comparison has no percentage ("vs +€900.00 in 2025"); income and expenses show whole-percent change, "nothing in 2025" when the previous figure is 0 | A percentage of a net amount that can change sign reads badly | built |
+| *(2026-11-25)* The year stepper has no picker (the month switcher has one); years start at 1900 | Years are few and one step apart; plain links work without JavaScript | built |
 
 ### Process
 
@@ -605,7 +662,17 @@ New features beyond these have not been chosen yet.
 - **No list of a rule's entries** *(2026-11-25)*: /recurring shows how many entries a rule made, but /transactions
   has no filter by rule.
 - **Manual exchange rates are not in the CSV** (only in the JSON backup since 2026-11-18): a CSV moves entries, not
-  rates.
+  rates. The same holds for budgets and category colours (2026-11-25).
+- **Budgets (2026-11-25): no per-group budget, no history, no rollover.** A budget covers every wallet group, so in a
+  group scope its progress is hidden rather than shown for that group; changing the amount rewrites past months'
+  comparison too; unspent money does not carry over. No notification when a budget is exceeded (the app has no
+  notifications), and no budget for income.
+- **A budget whose currency's last wallet was deleted** keeps working (its progress converts as usual), but saving it
+  again is refused until a wallet in that currency exists or another currency is chosen; the form still shows its
+  currency so the user sees why.
+- **Category colours are not on transaction rows** (`day-list`, `transaction-list`), nor in the /transactions
+  category filter or the dashboard's per-category lists; the dot is on /categories, the entry form's pills and the
+  Overview's Budgets card only.
 - **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
   refusal ("The upload failed…" in the panel); browsers always send the header for a `FormData` body.
 - *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
@@ -637,6 +704,21 @@ New features beyond these have not been chosen yet.
   component as the Add form.
 - *(2026-11-25)* A rule whose wallet is created archived by a backup import is created as given; it pauses itself at
   its next due date rather than being refused at import.
+- **Balances with future-dated entries differ between pages (2026-11-25).** The wallet page's big balance is the
+  balance at the end of today (future-dated entries left out, shown as "projected"); the /wallets cards and the
+  Overview's Wallets card still use `WalletView.balanceMinor`, which includes every entry. With a future-dated entry
+  the two show different numbers. Not changed with the reconcile work, which stays on the wallet page.
+- **Reconcile without JavaScript** can only use today's date (the date picker needs scripts), and the ⋯ menu that
+  leads to it needs scripts too: `/wallets/<id>?reconcile=1` works without them.
+- **The reconcile row lock covers two reconciliations only:** an ordinary new entry (`createTransaction`) does not lock
+  the wallet row, so one saved in the same instant can land between the balance read and the adjustment.
+- **/reports below `sm`** shows the month-by-month net as bars only, without figures (see the Reports decisions), and
+  the chart's columns are about 28px wide: the month links are full-height columns, so they are wide enough to
+  tap but narrower than 44px. The category tables need sideways scrolling for most months.
+- **/reports has no yearly export or print view**, and no comparison beyond the previous year (no multi-year trend).
+- **A cell link on /reports with "All in" counts converted amounts, but the /transactions list it opens shows each
+  entry in its own currency**, so the list's sum can differ from the cell for a category with entries in several
+  currencies.
 
 ### Statement importer gaps
 
@@ -657,10 +739,23 @@ New features beyond these have not been chosen yet.
 
 ### Not verified
 
-- **End-to-end browser suite (2026-11-18): what it does and does not cover.** `e2e/` (Playwright, Chromium,
-  production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in a real
-  browser what the entries below list as covered. It runs in headless Chromium only: no Safari / Firefox, no real
-  touch device (the phone project emulates a 375px touch viewport), no screen reader (announcements and labels are
+- **/reports (2026-11-25).** Checked: service and render tests on PGlite, `e2e/reports.spec.ts` and
+  `e2e/layout.spec.ts` (headless Chromium, 375px and 1280px, both schemes, manual rates only), screenshots at 375px
+  and 1280px in light and dark of a full past year, the partial current year and an empty year, looked at by eye.
+  One live request to Frankfurter for a 23-month range came back with every business day. Not checked: the page
+  converting with the live provider in the browser (the e2e server runs with `EXCHANGE_RATES=false`), a screen
+  reader on the chart and the tables, Safari / Firefox (sticky table column), and the query time on a large real
+  account.
+
+- **End-to-end browser suite (2026-11-18, three engines since 2026-11-25): what it does and does not cover.** `e2e/`
+  (Playwright, production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in
+  a real browser what the entries below list as covered. Since 2026-11-25 every desktop test also runs in
+  Playwright's Firefox and WebKit, and every phone test in WebKit (all passing in two full runs in a row and one with
+  CI's settings, on macOS arm64; the Linux builds CI uses have not been run here). These are Playwright's headless
+  builds of the engines, not a released Firefox or Safari: no Safari on a Mac or iPhone, no iOS (the
+  `phone-webkit` project is desktop WebKit with a 375px touch viewport, not Mobile Safari's keyboard, gestures or
+  viewport behaviour), no Firefox on Android, no real
+  touch device (the phone projects emulate a 375px touch viewport), no screen reader (announcements and labels are
   checked through the accessibility tree, not heard), no real clipboard, file picker (files are set on the input) or
   password manager, and the 375px / dark-mode checks are for sideways overflow and the scheme's background, not a
   visual review.
@@ -726,7 +821,7 @@ New features beyond these have not been chosen yet.
 - **Password change (2026-11-17).** The account menu's "Account settings" link closing the popover, the form
   clearing after success, another signed-in browser being sent to `/login` while this one stays, and the new
   password signing in: covered by `e2e/account.spec.ts`. Not checked: a password manager picking up the new
-  password (Playwright's Chromium has none).
+  password (Playwright's browsers have none).
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
@@ -836,7 +931,8 @@ New features beyond these have not been chosen yet.
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
   headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not
-  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox.
+  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox (the e2e suite's picker tests run
+  in Playwright's Firefox and WebKit since 2026-11-25; see the suite entry above).
 - **Native dialogs were not exercised**: the confirmation dialog was stubbed, and test files were injected by
   script rather than chosen in a real file picker; downloads were fetched by script.
 - **No real spreadsheet application** was used to open or re-save an exported CSV.
@@ -907,3 +1003,16 @@ New features beyond these have not been chosen yet.
   between server and account around midnight (the hook uses `todayInZone(user.timeZone)`, as every page does), a
   rule caught up across a daylight-saving change (dates are plain strings, so none is expected), and the hook's
   failure path (logged, request continues) other than by reading the code.
+- **Reconcile balance (2026-11-25).** The wallet row lock (`FOR UPDATE OF wallets`) was checked once by hand on
+  Postgres 17 (eight reconciliations of one wallet at once: one recorded the difference, seven found it matched; a
+  ninth on another wallet at the same time shared the newly created category), not by a test: the service test runs
+  on PGlite, which has one connection and so runs them one after the other. Checked in Chromium only (desktop and the 375px phone project, light and dark by screenshot);
+  the live preview's announcement (`aria-live`) was not heard with a screen reader.
+- **Budgets and category colours (2026-11-25)** were checked with unit / render / action tests, the backup round
+  trip, two e2e tests (setting a budget and seeing it on /categories and the Overview, a refused amount kept; picking
+  a colour with the keyboard and seeing the dot in the entry form) and by eye: screenshots of /categories (closed and
+  with a row open) and the Overview on the demo data at 375px and 1280px in both schemes. Not checked: the meter
+  with live provider rates (the screenshots ran with `EXCHANGE_RATES=false`, so RON and USD showed as "not counted"),
+  a screen reader reading the meter inside a row button (its text is long: the counts, the amount and the budget
+  lines are all part of the button's name), and two people setting the same category's first budget at the same
+  moment (the unique-violation retry is not exercised by a test).

@@ -11,6 +11,7 @@ const PAGES = [
   "/wallets",
   "/wallets/new",
   "/categories",
+  "/reports",
   "/data",
   "/account",
   "/rates",

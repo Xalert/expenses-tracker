@@ -6,6 +6,7 @@ import { AddButton } from "@/components/shell/add-button";
 import { DayList } from "@/components/transactions/day-list";
 import { InlineEditProvider } from "@/components/transactions/inline-edit";
 import { InsightCard, LinkButton } from "@/components/ui";
+import { ReconcileForm } from "@/components/wallets/reconcile-form";
 import { WalletMenu } from "@/components/wallets/wallet-menu";
 import { WalletMonthChart } from "@/components/wallets/wallet-month-chart";
 import { getCurrentUser, requireUser } from "@/lib/auth";
@@ -19,8 +20,10 @@ import { listCategories } from "@/server/categories";
 import { toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
 import { countRecurringForWallet } from "@/server/recurring";
+import { getWalletBalanceOn, listWalletClosingBalances } from "@/server/reconcile";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
+import { reconcileWalletAction } from "../actions";
 import { parseWalletId } from "../form-input";
 
 /** The month's entries on this page: no pagination here; "Open in Transactions" has the full list. */
@@ -28,7 +31,8 @@ const MONTH_LIMIT = 200;
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ month?: string | string[] }>;
+  /** `reconcile=1` opens the "Reconcile balance" panel (the wallet menu links there). */
+  searchParams: Promise<{ month?: string | string[]; reconcile?: string | string[] }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -64,6 +68,13 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const hidden = archived || wallet.groupArchived;
   const self = `/wallets/${wallet.id}`;
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
+  const reconcileHref = `${self}?${isCurrentMonth ? "" : `month=${month}&`}reconcile=1`;
+  const reconcileOpen = !hidden && sp.reconcile === "1";
+  // The balance at the end of today: entries dated later are "projected" on this page (the day headers), so they
+  // are left out here too, and a reconciliation as of today makes this exactly the balance typed.
+  const balanceToday = (await getWalletBalanceOn(user.id, wallet.id, today)) ?? wallet.balanceMinor;
+  const projectedMinor = wallet.balanceMinor;
+  const reconcileData = reconcileOpen ? await listWalletClosingBalances(user.id, wallet.id, today) : null;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
   const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
   const closingByDate = new Map(data.days.map((d) => [d.date, d.closingMinor]));
@@ -129,14 +140,19 @@ export default async function WalletPage({ params, searchParams }: Props) {
               <p
                 className={cn(
                   "mt-2 text-[36px] leading-none font-extrabold tracking-[-0.03em] tabular-nums sm:text-[44px]",
-                  wallet.balanceMinor < 0 ? "text-expense" : "text-foreground",
+                  balanceToday < 0 ? "text-expense" : "text-foreground",
                 )}
               >
-                {money(wallet.balanceMinor)}
+                {money(balanceToday)}
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 Balance today · started with {money(wallet.initialBalanceMinor)}
               </p>
+              {projectedMinor !== balanceToday && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {money(projectedMinor)} projected after the entries dated later
+                </p>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {!hidden &&
@@ -156,9 +172,25 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 archived={archived}
                 canDelete={wallet.transactionCount === 0}
                 recurringCount={wallet.transactionCount === 0 ? await countRecurringForWallet(user.id, wallet.id) : 0}
+                reconcileHref={hidden ? undefined : reconcileHref}
               />
             </div>
           </div>
+
+          {reconcileOpen && reconcileData && (
+            <ReconcileForm
+              action={reconcileWalletAction.bind(null, wallet.id)}
+              walletId={wallet.id}
+              walletName={wallet.name}
+              currency={wallet.currency}
+              today={today}
+              initialBalanceMinor={reconcileData.initialBalanceMinor}
+              closings={reconcileData.closings}
+              closeHref={pageHref}
+              month={month}
+              walletHref={self}
+            />
+          )}
 
           {archived && (
             <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">

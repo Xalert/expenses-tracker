@@ -7,9 +7,14 @@ import { Popover } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { deleteWalletConfirm } from "@/lib/usage-text";
 import { ActionButton } from "./action-button";
+import { RECONCILE_INPUT_ID, walletMenuTriggerId } from "./reconcile-form";
 
 const itemClass = "flex! h-11! w-full justify-start! rounded-xl! px-3! text-sm font-semibold";
 const plainItem = cn(itemClass, "text-foreground! hover:bg-surface-muted!");
+const menuLinkClass = cn(
+  "flex h-11 items-center rounded-xl px-3 text-sm font-semibold text-foreground hover:bg-surface-muted",
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+);
 
 /** Up / Down / Home / End between the menu's items (a `role="menu"` has its own arrow-key navigation). */
 export function nextMenuIndex(key: string, current: number, count: number): number | null {
@@ -29,7 +34,8 @@ export function nextMenuIndex(key: string, current: number, count: number): numb
 }
 
 /**
- * The wallet page's "⋯" button and its menu: Edit (the edit dialog), Archive or Unarchive (with the confirm the
+ * The wallet page's "⋯" button and its menu: Edit (the edit dialog), Reconcile balance (`reconcileHref`, the
+ * page's reconcile panel; only while the wallet takes entries), Archive or Unarchive (with the confirm the
  * Archive button always had), and Delete while the wallet has no entries. Opening focuses the first item; arrows,
  * Home and End move; Escape closes and returns focus to the button; Tab leaves (and closes).
  */
@@ -39,6 +45,7 @@ export function WalletMenu({
   archived,
   canDelete,
   recurringCount = 0,
+  reconcileHref,
 }: {
   walletId: number;
   walletName: string;
@@ -46,6 +53,8 @@ export function WalletMenu({
   canDelete: boolean;
   /** Repeating entries on the wallet: Delete's confirmation says they go with it. */
   recurringCount?: number;
+  /** The page with `?reconcile=1` (the Reconcile balance panel); omitted while the wallet takes no new entries. */
+  reconcileHref?: string;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
@@ -72,6 +81,7 @@ export function WalletMenu({
     <div ref={anchor} className="relative">
       <button
         ref={trigger}
+        id={walletMenuTriggerId(walletId)}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -101,13 +111,25 @@ export function WalletMenu({
             href={`/wallets/${walletId}/edit`}
             role="menuitem"
             onClick={close}
-            className={cn(
-              "flex h-11 items-center rounded-xl px-3 text-sm font-semibold text-foreground hover:bg-surface-muted",
-              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-            )}
+            className={menuLinkClass}
           >
             Edit wallet
           </Link>
+          {reconcileHref && (
+            <Link
+              href={reconcileHref}
+              scroll={false}
+              role="menuitem"
+              onClick={() => {
+                close();
+                // Already open: the URL does not change, so put focus in the form here.
+                requestAnimationFrame(() => document.getElementById(RECONCILE_INPUT_ID)?.focus());
+              }}
+              className={menuLinkClass}
+            >
+              Reconcile balance
+            </Link>
+          )}
           {archived ? (
             <ActionButton
               action={unarchiveWalletAction.bind(null, walletId)}

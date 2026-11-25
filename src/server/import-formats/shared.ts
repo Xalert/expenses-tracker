@@ -77,7 +77,14 @@ export type CategorySpec = {
   archivedAt?: string;
   /** CSV: the `category` row that describes it, to report a second one. */
   detailsLoc?: Loc;
+  /** Backup: the category's colour (a `GROUP_COLORS` key); set on a category the import creates. */
+  color?: GroupColor;
 };
+/**
+ * Backup only: a monthly budget. `category`: index into `categories` (an expense category of the file), or null for
+ * the overall budget.
+ */
+export type BudgetSpec = { category: number | null; currency: string; amountMinor: number; loc: Loc };
 /** Backup only: one of the user's own exchange rates (validated; `rate` normalised as `parseRateInput` gives it). */
 export type ManualRateSpec = { currency: string; base: string; effectiveDate: string; rate: string; loc: Loc };
 export type EntrySpec = {
@@ -169,6 +176,8 @@ export type ParsedFile = {
   manualRates?: ManualRateSpec[];
   /** Backup only: the file's `recurring` list (absent in older backups); imported additively. */
   recurring?: RecurringSpec[];
+  /** Backup only: the file's `budgets` (absent in older backups); imported additively. */
+  budgets?: BudgetSpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];
   /** Unpaired transfer halves; a format's `finalize` turns them into `transfers` (or entries / problems). */

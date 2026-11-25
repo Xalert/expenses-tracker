@@ -17,15 +17,28 @@ export async function signInContext(context: BrowserContext, token: string, base
   await context.addCookies([{ name: SESSION_COOKIE, value: token, url: baseURL, httpOnly: true, sameSite: "Lax" }]);
 }
 
+/**
+ * WebKit rejects a fetch that a document navigation cancels with "Fetch API cannot load <url> due to access control
+ * checks." while the old page is still alive, and Next.js's link prefetches (`?_rsc=`) surface that as an unhandled
+ * rejection. So every `page.goto` that leaves a page with prefetches still in flight logged one in WebKit (Chromium and
+ * Firefox stay silent). The page is gone by then, so nobody sees it; only this exact same-origin `_rsc` message is
+ * ignored, and only in WebKit.
+ */
+// Playwright's WebKit splits the message at the URL's colon: name "Fetch API cannot load http", message "/127.0.0.1:…".
+const WEBKIT_CANCELLED_PREFETCH = /^Fetch API cannot load http:\/{1,2}127\.0\.0\.1:\d+\/\S*[?&]_rsc=\S+ due to access control checks\.$/;
+
 export const test = base.extend<Fixtures>({
   allowConsoleErrors: [[], { option: true }],
   consoleErrors: [
-    async ({ page, allowConsoleErrors }, use) => {
+    async ({ page, allowConsoleErrors, browserName }, use) => {
       const errors: string[] = [];
       page.on("console", (msg) => {
         if (msg.type() === "error") errors.push(msg.text());
       });
-      page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
+      page.on("pageerror", (err) => {
+        if (browserName === "webkit" && WEBKIT_CANCELLED_PREFETCH.test(`${err.name}:${err.message}`)) return;
+        errors.push(`pageerror: ${err.message}`);
+      });
       await use(errors);
       const unexpected = errors.filter((e) => !allowConsoleErrors.some((re) => re.test(e)));
       expect(unexpected, "console errors").toEqual([]);

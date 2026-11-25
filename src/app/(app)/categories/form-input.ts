@@ -14,6 +14,25 @@ export function parseCategoryId(value: unknown): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * A budget's bound target: null (the overall budget) or a category id; undefined for anything else (the action
+ * answers "not found").
+ */
+export function parseBudgetTarget(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return parseCategoryId(value) ?? undefined;
+}
+
+/**
+ * The `color` field of the rename form: absent (an older form, or no colour radios) → undefined (unchanged); "" →
+ * null (none); anything else is passed on for the service to check against the palette.
+ */
+export function colorField(formData: FormData): string | null | undefined {
+  const v = formData.get("color");
+  if (v === null) return undefined;
+  return typeof v === "string" && v !== "" ? v : null;
+}
+
 /** Raw `name` field (the service normalises and validates it). */
 export function nameField(formData: FormData): string {
   const v = formData.get("name");

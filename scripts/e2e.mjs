@@ -3,7 +3,8 @@
 // a fresh, throwaway database. Steps:
 //   1. a Postgres: E2E_DATABASE_URL when set (CI's service container), otherwise compose.e2e.yaml (tmpfs, port 5434);
 //   2. `npm run build` (skipped with E2E_SKIP_BUILD=1) and the standalone copy steps of the Dockerfile;
-//   3. `playwright test` with any extra arguments (its webServer starts .next/standalone/server.js on that database);
+//   3. `playwright test` with any extra arguments, e.g. `--project=desktop-webkit` for one browser (its webServer starts
+//      .next/standalone/server.js on that database);
 //   4. compose down -v, also when a step fails or the run is interrupted.
 // The database name must contain "e2e": the suite wipes it at the start (e2e/global-setup.ts).
 import { spawnSync } from "node:child_process";

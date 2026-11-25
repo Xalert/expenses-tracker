@@ -86,7 +86,8 @@ test: node_modules
 
 # End-to-end browser tests (e2e/, Playwright): a throwaway Postgres (compose.e2e.yaml, 127.0.0.1:5434, tmpfs), a
 # production build, the tests, then everything torn down. Never touches the dev database. First time:
-# `npx playwright install chromium`. ARGS go to `playwright test`; E2E_SKIP_BUILD=1 reuses the last build.
+# `npx playwright install chromium firefox webkit`. ARGS go to `playwright test` (one browser:
+# ARGS="--project=desktop-firefox"); E2E_SKIP_BUILD=1 reuses the last build.
 test-e2e: node_modules
 	npm run -s test:e2e -- $(ARGS)
 

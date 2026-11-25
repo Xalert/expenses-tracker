@@ -2,8 +2,9 @@ import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, manualRates, recurringTransactions, transactions, transfers, walletGroups, wallets } from "@/db/schema";
+import { budgets, categories, manualRates, recurringTransactions, transactions, transfers, walletGroups, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
+import { isGroupColor } from "@/lib/group-colors";
 import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
 import { minorToInputValue } from "@/lib/money";
@@ -100,6 +101,12 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       .from(recurringTransactions)
       .where(eq(recurringTransactions.userId, userId))
       .orderBy(asc(recurringTransactions.id));
+    const budgetRows = await tx
+      .select({ categoryId: budgets.categoryId, currency: budgets.currency, amountMinor: budgets.amountMinor })
+      .from(budgets)
+      .where(eq(budgets.userId, userId))
+      .orderBy(asc(budgets.id));
+    const categoryNameOf = new Map(categoryRows.map((c) => [c.id, c.name]));
 
     const walletRef = new Map(walletRows.map((w, i) => [w.id, i + 1]));
     const currencyOf = new Map(walletRows.map((w) => [w.id, w.currency]));
@@ -129,6 +136,7 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         kind: c.kind,
         archived: c.archivedAt !== null,
         ...(c.archivedAt ? { archivedAt: c.archivedAt.toISOString() } : {}),
+        ...(isGroupColor(c.color) ? { color: c.color } : {}),
       })),
       transactions: txRows.map((t) => ({
         date: t.date,
@@ -168,6 +176,16 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         nextDate: r.nextDate,
         paused: r.pausedAt !== null,
       })),
+      // The overall budget first (no `category`), then the category budgets in the order they were first set. A budget
+      // names its expense category (names are unique per kind).
+      budgets: budgetRows
+        .map((b) => ({
+          ...(b.categoryId === null ? {} : { category: categoryNameOf.get(b.categoryId)! }),
+          currency: b.currency,
+          amountMinor: b.amountMinor,
+          amount: minorToInputValue(b.amountMinor, b.currency),
+        }))
+        .sort((a, b) => (a.category === undefined ? -1 : b.category === undefined ? 1 : 0)),
     };
   }, SNAPSHOT);
 }

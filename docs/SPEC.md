@@ -27,16 +27,18 @@ this file in the same change and call the deviation out in your final report.
   sets it and runs `next build` / `next start`, so they work in any shell, Windows `cmd` included.
 - Tests live in `tests/*.test.ts(x)`. `tests/helpers.ts` gives `useFreshDb()` (async: truncates every app table of the
   file's in-memory PGlite, restarting identities, installs it via `setDb` and returns it) and `await makeUser(db, email)` (user + default categories, `cat(name)` → category id).
-- End-to-end tests live in `e2e/*.spec.ts` (Playwright, Chromium; `playwright.config.ts`). `scripts/e2e.mjs` starts
+- End-to-end tests live in `e2e/*.spec.ts` (Playwright: Chromium, Firefox, WebKit; `playwright.config.ts`). `scripts/e2e.mjs` starts
   `compose.e2e.yaml` (project `expenses-tracker-e2e`, `127.0.0.1:5434`, tmpfs) unless `E2E_DATABASE_URL` is set,
   builds (unless `E2E_SKIP_BUILD=1`), copies `.next/static` and `public/` into the standalone output as the
   Dockerfile does, runs `playwright test` (its `webServer` starts `node .next/standalone/server.js` with
   `EXCHANGE_RATES=false`) and runs `compose down -v` afterwards, also on failure. The config refuses a database whose
   name lacks `e2e` (or on port 5433); `e2e/global-setup.ts` empties it first. Seeding goes through the services
   (`e2e/support/seed.ts`, `server-only` stubbed by `e2e/tsconfig.json`), one fresh user per test; a session is a
-  `sessions` row plus the `et_session` cookie. Projects: `desktop` 1280px (all but `@phone-only`), `phone` 375px
-  with touch (`@phone` and `@phone-only`). The `consoleErrors` fixture fails a test on any console error or uncaught
-  page error unless it lists the pattern in `allowConsoleErrors`. vitest only includes `tests/**`.
+  `sessions` row plus the `et_session` cookie. Projects: `desktop` 1280px (all but `@phone-only`) in Chromium, with
+  the same tests as `desktop-firefox` and `desktop-webkit`; `phone` 375px with touch (`@phone` and `@phone-only`) in
+  Chromium, and the same as `phone-webkit`. The `consoleErrors` fixture fails a test on any console error or uncaught
+  page error unless it lists the pattern in `allowConsoleErrors`; in WebKit it also ignores the "Fetch API cannot
+  load …?_rsc=… due to access control checks." rejection of a Next.js prefetch that a `page.goto` cancelled. vitest only includes `tests/**`.
 
 - **Development database.** `compose.dev.yaml` runs `postgres:17-alpine` (user, password and database
   `expenses`; port `127.0.0.1:5433`; named volume `expenses-dev-pg`; an init script creates a second database
@@ -87,6 +89,14 @@ this file in the same change and call the deviation out in your final report.
   creation), and an initial balance. `balance = initial + Σ income + Σ transfer_in − Σ expense − Σ transfer_out`.
   A wallet with transactions cannot be deleted, only archived (hidden from pickers and dashboard totals; its
   history stays visible). A wallet with no transactions can be deleted.
+  - **Reconciling** a wallet: the user gives its actual balance (in the wallet's currency, may be negative) and a
+    date (default today, never after the user's today). The difference = actual − the balance at the end of that
+    date (initial + every entry dated on or before it, transfers included; later entries left out, as the wallet
+    page's "projected" days). Positive → one **income** entry, negative → one **expense**, dated that day, of
+    `|difference|`, note "Balance adjustment", in the user's category "Balance adjustment" of that kind (matched
+    ignoring case; created when missing; an archived one is used as it is and stays archived). Zero → nothing is
+    recorded. It is an ordinary entry (editable, deletable, counted in the month's figures); the initial balance is
+    never changed. Refused for an archived wallet or one in an archived group, as any new entry.
 - **Category** ("transaction type"): per user, has a `kind` (`expense` | `income`). Seeded on registration:
   expense → Food, Groceries, Bills, Transport, Housing; income → Salary, Refund, Extra Income.
   The defaults are only a starting point: users add, rename, archive and remove categories freely at `/categories`,
@@ -115,7 +125,8 @@ this file in the same change and call the deviation out in your final report.
   the amount sent and the amount received (no exchange-rate service). Legs are only ever edited/deleted through
   the transfer, never individually.
 - **No currency conversion, except the "All in <currency>" views.** Totals are grouped per currency everywhere
-  except, in their default "All in <currency>" view, the Overview, the /transactions day strip and /categories,
+  except, in their default "All in <currency>" view, the Overview, the /transactions day strip, /categories and
+  /reports,
   which convert every wallet into the selected currency (amounts at each day's rate; the Overview's Wallets total
   at the rate of the day its balances are for: today, or a past month's last day; see Overview → "Converted
   view"). Wallet pages never convert (one wallet is one currency). Nothing converted is ever stored; only the
@@ -364,6 +375,7 @@ src/
   lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
   app/(app)/@modal/                                 # intercepted dialog routes: (.)transactions/new, (.)wallets/new, (.)wallets/[id]/edit
   server/insights.ts                                # per-currency timelines and insight figures (redesign)
+  server/reports.ts  lib/reports.ts  components/reports/  (app)/reports/   # the year view (see "Reports")
   server/exchange-rates.ts  server/manual-rates.ts  lib/fx.ts   # provider rates (DB cache), own rates, conversion maths
   (app)/rates/                                    # /rates: the user's own exchange rates (page, actions, forms)
   components/dashboard/conversion.tsx             # ConvertSwitch + ConversionNotes ("All in <currency>" controls)
@@ -380,6 +392,9 @@ src/
   components/data/copy-context-button.tsx           # client: "Copy to clipboard" for the wallets & categories export
   server/wallets.ts  server/wallet-groups.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
+  server/budgets.ts  lib/budgets.ts                 # budgets: service + pure display helpers ("Budgets")
+  components/categories/budget-meter.tsx  budget-form.tsx  components/dashboard/budgets-card.tsx
+  components/ui/color-choice.tsx                    # colour radios of the group and category forms
   server/users.ts  server/_validate.ts (internal helpers)
   app/manifest.ts                                   # web app manifest (/manifest.webmanifest); icons in public/
 scripts/seed.ts  scripts/generate-icons.mjs  tests/  drizzle/
@@ -411,9 +426,9 @@ each as `Promise<…>`. Ids are `number`. Accessing another user's row
 behaves exactly like a missing row: getters resolve `null`, mutations reject with `NOT_FOUND`.
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
-`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
+`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
-`frequency`, `interval`, `endDate`, `nextDate` (repeating entries).
+`actualBalance`, `color`, `today`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries).
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -464,8 +479,22 @@ updateWallet(userId, walletId, { name, initialBalanceMinor }): WalletView     //
 archiveWallet(userId, walletId): WalletView / unarchiveWallet(userId, walletId): WalletView
 deleteWallet(userId, walletId): void                                           // CONFLICT if it has transactions
 
+// reconcile.ts
+BALANCE_ADJUSTMENT = "Balance adjustment"                                      // the category name and the entry's note
+getWalletBalanceOn(userId, walletId, date, db?): number | null                 // initial + entries dated ≤ date; null if not owned
+listWalletClosingBalances(userId, walletId, through): { initialBalanceMinor; closings: [date, closingMinor][] } | null
+//   every date ≤ through that has entries, ascending, with the balance at its end (the reconcile form's live preview;
+//   `balanceOnDate` in src/lib/reconcile.ts reads any day from it)
+reconcileWallet(userId, walletId, { actualBalanceMinor, date }, { today }):
+  { trackedBalanceMinor; actualBalanceMinor; differenceMinor; transaction: TransactionView | null; categoryCreated: boolean }
+//   the rule under Domain rules → Reconciling. NOT_FOUND (no field) for a missing / another user's wallet; VALIDATION
+//   (no field) for an archived wallet or group, field `actualBalance` (not a safe integer, or a difference beyond it),
+//   field `date` (invalid, or after `today`: "Choose today or an earlier date."). One DB transaction: the wallet row
+//   is locked FOR UPDATE, the balance read, the category found or created (insert … on conflict do nothing, then
+//   read; read FOR SHARE like createTransaction) and the entry inserted, so two submissions cannot both add it.
+
 // categories.ts
-type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null }
+type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null; color: GroupColor | null }   // color: a GROUP_COLORS key; a stored value outside the palette reads as null
 listCategories(userId, kind?, opts?: { includeArchived?: boolean }): CategoryView[]   // archived excluded by default; `sortCategories` (src/lib/category-order.ts): expense first, active before archived, then name lower-cased by code point, then id — sorted in JS, never SQL lower(name)
 getCategory(userId, categoryId): CategoryView | null                           // archived included
 seedDefaultCategories(userId, tx?)                                             // called inside registration's DB transaction; idempotent
@@ -473,8 +502,10 @@ DEFAULT_CATEGORIES: Record<'expense' | 'income', string[]>
 type CategoryWithUsage = CategoryView & { transactionCount: number }
 listCategoriesWithUsage(userId, opts?): CategoryWithMonthUsage[]               // archived included; same order as listCategories
 createCategory(userId, { name, kind }): CategoryView                           // VALIDATION (field name | kind), CONFLICT (field name) on duplicate
-renameCategory(userId, categoryId, { name }): CategoryView                     // NOT_FOUND; same rules; changing only the letter case of its own name is allowed
-changeCategoryKind(userId, categoryId, { kind }): CategoryView                 // NOT_FOUND; same kind → no-op; in use → CONFLICT (field kind);
+renameCategory(userId, categoryId, { name, color? }): CategoryView             // NOT_FOUND; same rules; changing only the letter case of its own name is allowed;
+                                                                               // color omitted → unchanged, null / "" → none, outside GROUP_COLORS → VALIDATION (field color)
+changeCategoryKind(userId, categoryId, { kind }): CategoryView & { budgetRemoved: boolean }   // NOT_FOUND; same kind → no-op; in use → CONFLICT (field kind);
+                                                                               // expense → income removes the category's budget in the same DB transaction;
                                                                                // name taken in the new kind → CONFLICT (field kind); the category row is locked
                                                                                // FOR UPDATE and createTransaction reads it FOR SHARE, so no entry slips in between
 archiveCategory(userId, categoryId): CategoryView / unarchiveCategory(userId, categoryId): CategoryView   // NOT_FOUND; idempotent (first archive date kept)
@@ -826,7 +857,7 @@ values (Sand light, Graphite dark) are in "UI direction".
 
 The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
 listed there. Every amount is shown in its own currency; nothing is converted (the exception is the
-"All in <currency>" view of the Overview, the /transactions day strip and /categories, below). Where a screen shows one currency
+"All in <currency>" view of the Overview, the /transactions day strip, /categories and /reports, below). Where a screen shows one currency
 at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 
 - **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
@@ -839,7 +870,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   autocapitalise / autocorrect / spellcheck.
 - **App shell** (`(app)/layout.tsx`) — **no sidebar and no bottom tab bar.** A top bar on every signed-in page:
   brand mark + "Expenses" (links to `/`), then the main menu **Overview · Transactions · Wallets · Categories ·
-  Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
+  Reports · Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
   (initials from `user.displayName` in a circle) opening a popover with the display name, the user-ID / email line
   (see Auth) and Sign out. **Group switcher** (only with two or more wallet groups): a select left of the account
   button, see "Wallet groups". On narrow screens the bar is two rows: brand + account button, then the menu as a
@@ -859,7 +890,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - As built (step 1): `src/app/(app)/@modal/` has `default.tsx` (null), the intercepted `(.)transactions/new`,
     `(.)wallets/new`, `(.)wallets/[id]/edit`, and **a `page.tsx` returning null at every other `(app)` route**
     (`page.tsx` for `/`, `transactions/`, `transactions/[id]/edit/`, `transactions/transfers/[id]/edit/`,
-    `wallets/`, `wallets/[id]/`, `categories/`, `data/`, `account/`, `rates/`). Without them a soft navigation out of a dialog leaves
+    `wallets/`, `wallets/[id]/`, `categories/`, `reports/`, `data/`, `account/`, `rates/`). Without them a soft navigation out of a dialog leaves
     the slot on the dialog's segment, and in `next dev` opening the same dialog again was then ignored. The docs'
     catch-all `@modal/[...catchAll]` is not usable: Next 16's strict route matching then rejects the `(auth)`
     pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
@@ -896,7 +927,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      coloured), **Top category** (name, share and amount), **Pace vs <previous month>** (expenses through day N
      this month minus through day N last month, "less/more spent than by 8 Oct"), **No-spend days** ("1 of 8",
      plus the previous month's figure).
-  3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
+  3. **Budgets** (only when the account has a budget; `BudgetsCard`, see "Budgets → Screens").
+  4. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
      with a link to Transactions), side by side from `lg` up.
   - **Converted view** (`src/lib/fx.ts`, `src/server/exchange-rates.ts`). `?view=` applies to the whole page:
     - `all` (default, left out of the URL): every wallet counts, converted into the selected currency.
@@ -935,7 +967,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 - **Provider**: Frankfurter (`https://api.frankfurter.dev/v1/<from>..<to>?base=EUR`), ECB reference rates, no API
   key, cross rates through EUR. A converted view asks `getDailyRates(from, to)` for the days from a week before
   `from` to `min(to, today)` (the Overview and the strip: the previous and the shown month; /categories: the shown
-  month). Requests are made only when something needs converting; 4 s timeout; never throws.
+  month; /reports: the previous and the shown year, one range). Requests are made only when something needs converting; 4 s timeout; never throws.
 - **Stored in the database, shared by every user and process**: each published day's rates in `exchange_rates`,
   each calendar day asked about in `exchange_rate_days`. The database is looked up first and only the days it has
   no current answer for are fetched (one request for the span from the first to the last such day). A day's answer
@@ -1174,17 +1206,40 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - **/wallets/[id]** (`[id]/page.tsx`, `components/wallets/{wallet-month-chart,wallet-menu}.tsx`): a breadcrumb
     `<nav aria-label="Breadcrumb"><ol>` "Wallets / <name>" (`aria-current="page"`). The header card (20px radius):
     `<h1>` name (22px/800), the currency pill (`bg-surface-raised`, `title` = currency name), an "Archived" pill
-    when archived; the balance (36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started
-    with <initial balance>". On the right: Expense / Income / Transfer secondary pills with the kind dot
+    when archived; the balance at the end of today (`getWalletBalanceOn(…, today)`: entries dated later left out;
+    36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started with <initial balance>", and,
+    when entries dated after today change it, "€… projected after the entries dated later" (`WalletView.balanceMinor`,
+    which counts every entry). On the right: Expense / Income / Transfer secondary pills with the kind dot
     (`bg-expense-dot` / `bg-income` / `bg-transfer`) linking to `/transactions/new?wallet=<id>&kind=…&returnTo=<this
     page>` (the dialog ignores `returnTo`; the no-JS full page returns here), and the "⋯" button
     (`aria-haspopup="menu"`, "More actions for <name>") opening a `Popover role="menu"`: "Edit wallet" (link to
-    `/wallets/<id>/edit`, the dialog), Archive (confirm) or Unarchive, and "Delete wallet" (confirm, danger text)
-    when `transactionCount === 0`; each `role="menuitem"`, 44px tall. Opening focuses the first item; Up / Down
+    `/wallets/<id>/edit`, the dialog), "Reconcile balance" (link to this page with `reconcile=1`, keeping `?month=`;
+    not offered for an archived wallet or one in an archived group), Archive (confirm) or Unarchive, and "Delete
+    wallet" (confirm, danger text) when `transactionCount === 0`; each `role="menuitem"`, 44px tall. Opening focuses the first item; Up / Down
     wrap, Home / End jump (`nextMenuIndex`); Escape and Tab close as any `Popover`; Archive / Unarchive close the
     menu on success, Delete redirects to `/wallets`. The page renders `<AddButton href="/transactions/new?wallet=<id>"
     />` unless archived. Archived: a muted notice ("… Unarchive it from the ⋯ menu to use it again.") replaces the
     three pills, and the shell's default Add button stays.
+    **Reconcile balance** (`components/wallets/reconcile-form.tsx`, `reconcileWalletAction` bound to the wallet on the
+    server): with `?reconcile=1` (ignored for an archived wallet or group) a `<section>` "Reconcile balance"
+    (`bg-surface-open`, 16px radius) opens in the header card under the header row. A line explains that the
+    difference becomes one entry in "Balance adjustment", dated that day, editable like any other. Fields: "Actual
+    balance" (`actualBalance`, `inputMode="decimal"`, hint "In EUR, up to 2 decimals. May be negative (use −).") and
+    "As of the end of" (`DatePicker` `date`, default and `max` = the user's today). Under them a polite live line:
+    "Tracked balance at the end of today: €987.66." (or "of 10 Nov 2026") and, once the amount parses, "This adds an
+    expense of €12.40." / "This adds income of €5.00." / "The balance already matches. Nothing will be added."; the
+    tracked balance for any date comes from `listWalletClosingBalances` (loaded only while the panel is open) through
+    `balanceOnDate`. Buttons: Close (a link to the page without `reconcile`) and "Record adjustment" (primary,
+    "Recording…" while pending); stacked full width on phones. Opening focuses the balance input (also when the menu
+    item is chosen with the panel already open); Close and Escape (not while the date picker is open) go back with
+    `router.replace` and focus the ⋯ button (`id="wallet-menu-<id>"`). The action follows the usual pattern
+    (`parseReconcile`: an empty or unparseable amount → `fieldErrors.actualBalance`, a bad date → `fieldErrors.date`,
+    values echoed; the fields remount on every result and focus the first invalid one), calls `reconcileWallet` with
+    `todayInZone(user.timeZone)`, revalidates `("/", "layout")` and returns `{ ok: true, message, values: { date } }`:
+    the panel stays open with a `role="status"` confirmation ("Added an expense of €12.40 on 25 Nov 2026 in “Balance
+    adjustment”. The balance on that day is now €975.26." / "The balance already matches €50.00 on 25 Nov 2026.
+    Nothing was added.") and empty fields; for a date outside the month shown it adds a link "Show October 2026".
+    Without JavaScript the form posts and the page renders the confirmation (the date is then today).
     **Month chart** (inside the header card, under a divider): "Balance through November 2026" and the
     `MonthSwitcher` (`basePath=/wallets/<id>`; `?month=` invalid → current, later than the current month → clamped to
     it). `WalletMonthChart`: legend Balance · Out · In (its `title` says the scales differ), a 160px (220px from
@@ -1273,7 +1328,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     transfer edit page no switch). The amount is a 72px-tall box with a 44px (48px from `sm`) extrabold
     `tabular-nums` input and the currency text beside it (`<id>-currency`, in the input's `aria-describedby`):
     "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
-    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then two dashed pills after the pills (so
+    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind (a category with a colour shows it as a
+    round dot before its name in the pill, `CategoryOption.color`), then two dashed pills after the pills (so
     Tab reaches them after the group): "+ New category" and the "Manage categories" link. With no category of the
     kind the pills are replaced by "You have no expense categories yet. Add one to record an expense." (the two
     dashed pills stay; there is no submit). Wallet: `PillPicker name="walletId"` of the active wallets
@@ -1352,13 +1408,20 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     - **Lists**: one `<section>` card per kind — `<h2 tabIndex=-1>` "Expense · 5 categories" (active ones), a visible
       `role="status"` line under it — each its own `ExpandableList` (one open row per card, archived rows included).
       With only archived categories the empty line reads "No active expense categories. Add one below …". Row summary: a 10px
-      swatch (expense: its ramp colour from the split via `rowShare`, so the colour follows the amount rank, not the
-      row order; an expense with nothing this month: a hollow `--border-strong` ring; income: `bg-income`), **name**
-      and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
+      swatch (expense: a small **square** in its ramp colour from the split via `rowShare`, as in the split's legend,
+      so the colour follows the amount rank, not the row order; an expense with nothing this month: a hollow
+      `--border-strong` square; income: a round `bg-income` dot), the category's own **colour** as a round dot
+      (`GroupDot`, only when it has one) right before the **name**, and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
       only, `w-12` / `sm:w-20`, `h-1.5`, `aria-hidden`, with ", N% of the month's spending" as visually hidden text
       after the amount) and the amount (income in `text-income`, unsigned; "—" muted, read as "nothing in EUR").
+      An expense category with a budget adds the **budget meter** on a line of its own inside the row button (see
+      "Budgets → Screens"); the expense card starts with the **Overall budget** row.
     - **Open row** (`CategoryPanel`, region "Edit Food"): "New name for “Food”" + the input (focused and
-      selected on open, accent border) + Rename (primary) + Cancel. Under a divider:
+      selected on open, accent border), the **Colour** radios (`ColorChoice` from `src/components/ui/color-choice.tsx`,
+      field `color`: "No colour" then the six palette dots, 44px targets, arrow keys move the choice; the same
+      component as the wallet-group forms, which keep 32px swatches) + Save (primary) + Cancel; one form,
+      `renameCategoryAction` (message "Renamed to “X”." when the name changed, else "Saved “X”."). Expense categories
+      then get the budget form under a divider ("Budgets → Screens"). Under a divider:
       - **Kind**: unused → "Make it an income category" (secondary pill; a hidden `kind` field with the other kind,
         `changeCategoryKindAction`, no confirm); used → the muted line "Used by N transactions, so it stays an expense
         category: changing it would turn those entries into income." A refusal (it gained entries meanwhile, or the
@@ -1366,6 +1429,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       - **Archive**: "Archive" (secondary pill, no confirm — one click undoes it) with "Hides it from the entry form;
         its entries stay in reports and history."; archived → "Unarchive" with "Archived: hidden from the entry
         form. …" (`setCategoryArchivedAction(id, archived)`).
+      With a budget, the kind change adds "Budgets are for expenses only, so its budget is removed with the change."
+      and the removal says "Its budget is removed with it." (in the `confirm()` of an unused one, as a line above the
+      button of a used one).
       Under another divider the remove flow: unused → "Remove Food" (ghost button in `--danger`, `confirm()`); used
       → "Remove, moving its N transactions to" + a select of the card's other **active** categories plus "A new
       expense category…" (`value="new"`), which shows "Name of the new expense category" (`moveToNewCategoryName`)
@@ -1415,7 +1481,95 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   `?returnTo=<path>` for their full-page form (only same-site relative paths starting with a single `/`; default
   `/transactions`); the dialog ignores it and closes instead.
 
+## Budgets
+
+A monthly spending limit per expense category, plus an optional overall one (all spending). Table `budgets` (see
+"Data model"); service `src/server/budgets.ts`; pure display helpers `src/lib/budgets.ts`.
+
+### Rules
+
+- **One amount for every month**, in one currency; no history. A past month is compared with the current amount.
+- **Expense categories only**, one budget per category and one overall per user (the partial unique indexes).
+  Archived categories may have one.
+- The **currency** is one the user holds a wallet in (archived wallets count); the typed amount goes through
+  `parseAmount(value, currency)` in the action, the service takes minor units.
+- **Progress is measured in the budget's own currency over every wallet** (archived included, every wallet group):
+  the month's expenses in the category (overall: all expenses), summed per category, date and currency, each sum
+  converted once at that date's rate (`tableFor(convert, date)`, the same mechanism as the "All in <currency>"
+  views). A currency without a rate is left out and named (`missingCurrencies`). It never depends on the page's
+  currency switch or "All in / only" switch. Transfers and income never count.
+- **Account-wide.** In a group scope progress is not shown; one line says "Budgets cover all your wallet groups, so
+  their progress shows only with All groups selected." (both on /categories and in the Overview card). The budget
+  form still works there.
+- **A category's life:** removing it removes its budget (FK `on delete cascade`); archiving keeps the budget and its
+  progress (archiving is undone with one click, so nothing is thrown away); switching an expense category to income
+  removes its budget in the same DB transaction (`changeCategoryKind` → `budgetRemoved`). A refused kind change keeps it.
+- In the backup (JSON) only, not in the CSV ("Import / export").
+
+### Services
+
+```ts
+// src/server/budgets.ts
+type BudgetView = { id; categoryId: number | null /* null = overall */; currency; amountMinor }
+type BudgetProgress = BudgetView & {
+  category: { name; archived: boolean; color: GroupColor | null } | null /* null = overall */;
+  spentMinor; remainingMinor /* amount − spent, negative when over */; missingCurrencies: string[] }
+type MonthBudgets = { month; budgets: BudgetProgress[] /* overall first, then the category order */;
+  elapsed: { day; days } | null /* the current month only: day N (monthDayN) of the month's length */ }
+listBudgets(userId): BudgetView[]                                              // overall first, then by category id
+setBudget(userId, { categoryId: number | null; currency; amountMinor }): BudgetView   // create or replace in place.
+//   VALIDATION: currency not a code (field currency) or not held ("Choose the currency of one of your wallets (EUR, JPY).",
+//   or "Add a wallet first…" without wallets; field currency); amountMinor not a positive safe integer (field amount);
+//   an income category (field categoryId). NOT_FOUND (field categoryId): missing or another user's category.
+//   Reads the category FOR SHARE (a concurrent kind change waits); a unique violation from a simultaneous first
+//   write retries as a replace.
+removeBudget(userId, categoryId: number | null): boolean                       // false when there was none (or not the user's)
+getMonthBudgets(userId, { month; today; convert?: Conversion }): MonthBudgets  // VALIDATION (field month / today).
+//   Without `convert` only spending already in a budget's currency counts; every other currency is missing.
+// src/lib/budgets.ts (pure)
+budgetShare / budgetPercent (floored) / isOver / budgetBar(b, elapsed): { fill /* capped at 1 */; pace: number | null }
+spentOfLine ("€120.00 of €300.00"), leftLine ("€180.00 left" | "Limit reached" | "€20.00 over"),
+paceLine ("40% spent · day 10 of 30"; a past month "40% spent"), missingLine ("RON not counted: no exchange rate")
+closestToLimit(budgets, limit = 3)                                             // category budgets only, largest share first
+```
+
+The pages call `getMonthBudgets` only without a group scope and when the account has budgets; `convert` is the page's
+own conversion when it has one, else `getConversion(user.id, monthStart, monthEnd)` when the user holds more than one
+currency (archived wallets included).
+
+Actions (`src/app/(app)/categories/actions.ts`, bound target = category id or `null` for overall):
+`setBudgetAction(target, prev, formData)` (fields `amount`, `currency`; "Enter an amount.", the currency-precision
+messages of the entry form, "Enter an amount greater than zero."; success "Budget for “Food”: €300.00 a month." /
+"Overall budget: €2,000.00 a month."), `removeBudgetAction(target)` ("Removed the budget for “Food”." / "Removed the
+overall budget."). Both `revalidatePath("/", "layout")` and echo `values` on errors. `changeCategoryKindAction`
+appends "Its budget was removed." when it was.
+
+### Screens
+
+- **Budget meter** (`BudgetMeter`, `src/components/categories/budget-meter.tsx`, phrasing content so it fits inside a
+  row button): "€120.00 of €300.00" and, right-aligned, "€180.00 left" (muted) or "€20.00 over" (`text-danger`); an
+  8px bar (`aria-hidden`; the text carries the same figures): the fill is the share spent, capped at the end,
+  `bg-muted-foreground`, `bg-danger` once over; for the current month a 2px `bg-foreground` tick (ringed in
+  `--surface`) at day N ÷ days, so "60% spent at day 10 of 30" reads at a glance; under it "40% spent · day 10 of
+  30" and, when some spending is left out, "RON not counted: no exchange rate".
+- **/categories**, expense card: the first row is **Overall budget** · all spending, with "€2,000.00 a month" or
+  "Not set" on the right and the meter under it; its panel is the budget form + Cancel. Every expense row with a
+  budget shows "Budget:" (visually hidden) + the meter on a line of its own (the row button wraps, `flex-wrap`,
+  indented to the name). The open row's **budget form** (`BudgetForm`, after the rename / colour form): label "Monthly
+  budget for “Food”" (overall: "… for all spending"), the amount (`inputMode="decimal"`, echoed after a refused
+  save), the currency (a `Select` keyed on its value when there are several held currencies, "Budget currency" for
+  screen readers; one currency: a hidden field and the code as text), "Set budget" / "Save budget"; a note "Now
+  €300.00 a month. The same amount every month, over all your wallets and groups; spending in other currencies is
+  converted at each day's rate."; with a budget, "Remove the budget for Food" (ghost, danger, no confirm). Without
+  wallets: "Add a wallet to set a budget: …". Success closes the row and announces in the card's status line.
+- **Overview** `BudgetsCard` (`src/components/dashboard/budgets-card.tsx`), between the insight cards and Wallets /
+  Latest when the account has a budget: heading "Budgets", a link to `/categories` (with the month in view)
+  "Manage budgets" or "All budgets (N more)", then a grid (1 / 2 / 4 columns) of the overall budget ("All
+  spending") and the three category budgets closest to or over their limit (`closestToLimit`), each name (with its
+  colour dot, "(archived)" when archived) over its meter. In a group scope only the one line.
+
 ## Import / export
+
 
 Purpose: data portability for a self-hosted app — back up an account, move it to another instance, and get
 transactions in and out of a spreadsheet. Importing bank statements in arbitrary formats (column mapping,
@@ -1434,11 +1588,14 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   written for an archived category, restored on import; absent → archived as of the import); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received; an optional top-level `manualRates[]`
   (the user's own exchange rates from `/rates`: `{ currency, base, effectiveDate, rate }`, `rate` the exact decimal
-  string stored, by currency then date; absent in older files); an optional top-level `recurring[]` (the repeating
+  string stored, by currency then date; absent in older files); an optional `color` per category (a `GROUP_COLORS`
+  key, written only when set; anything else reads as none); an optional top-level `budgets[]` (`{ category?, currency,
+  amountMinor, amount }`: `category` names an expense category of the file, absent or null for the overall budget;
+  the overall one first; absent in older files); an optional top-level `recurring[]` (the repeating
   entries: `{ id, walletId, kind, category, amountMinor, amount, note, frequency, interval, startDate, endDate,
   nextDate, paused }` — the wallet by the file's wallet id, the category by `kind` + name, `nextDate` null = ended; in
   creation order; absent in older files) and, per transaction, an optional `recurringId` (the `recurring[].id` that
-  made it). References use ids local to the file.
+  made it). The version stays 1. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
@@ -1518,7 +1675,15 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   - Categories are matched by kind + name (ignoring case); missing ones are created (from a backup with its
     archived flag and `archivedAt`, from a CSV with its category row's archived date; the preview's
     `categoriesToCreate` entry then carries `archived: true` and the preview card says "(archived)" after its name).
-    An existing category's archived state is left untouched.
+    An existing category's archived state is left untouched. A backup category's `color` is set only on a category
+    the import creates (an existing one keeps its own); two file categories merged into one keep the first colour.
+  - **Budgets** (backup `budgets`): each one the account lacks (the overall one, or a category — existing or
+    created by the import — without a budget) is added; one the account already has is kept as it is, with a notice
+    `budgets-kept` when the file's currency or amount differs (as the manual rates). Problems: an unknown currency
+    code, a `category` that names no expense category of the file (an income one is named as such), a second budget
+    for the same category (ignoring case) or a second overall one, a decimal `amount` that disagrees with
+    `amountMinor`. The currency need not be held. The preview counts them (`budgetsToAdd`, "Budgets: N to add to the
+    Categories page."; also in the confirmation differences and the success line).
   - **Manual exchange rates** (backup `manualRates`): each one the account lacks (by currency + effective date) is
     added; one the account already has for that currency and date is kept as it is (import adds, never changes),
     with a notice `manual-rates-kept` when the file's rate or base differs. Validated like `setManualRate` (ISO
@@ -1781,7 +1946,7 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
   walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
   groupsToCreate: string[]; categoriesToCreate: { name; kind; archived?: true }[]; manualRatesToAdd: number /* backup */;
-  recurringToAdd: number; duplicateRecurring: number /* backup */;
+  budgetsToAdd: number /* backup */; recurringToAdd: number; duplicateRecurring: number /* backup */;
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
@@ -1796,8 +1961,9 @@ type ImportContext = { timeZone /* validated: account's, else browser's, else UT
   timeZoneSource: 'account' | 'browser' | 'none'; timeZoneFallback: boolean /* browser sent an invalid zone */;
   unpairedTransfersAsEntries: boolean }
 type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, non-empty */; csvHeader(): string[] /* lower-cased, lazy */ }
-type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc? */;
+type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc?, color? */;
   manualRates?: ManualRateSpec[] /* backup: { currency; base; effectiveDate; rate; loc } */;
+  budgets?: BudgetSpec[] /* backup: { category: index into categories | null (overall); currency; amountMinor; loc } */;
   recurring?: RecurringSpec[] /* backup: { kind; wallet; category; amountMinor; note; frequency; interval; startDate; endDate; nextDate; paused; loc } */;
   entries: EntrySpec[] /* EntrySpec.recurring?: index into recurring (backup) */; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
   problems: ImportProblem[]; notices: ImportNotice[]; unpairedTransferRows: number; rowCount: number;
@@ -1919,7 +2085,9 @@ ordinary entry on each of its dates. Built 2026-11-25 (decisions in DECISIONS "R
   unarchiving, the user resumes by hand. Archiving alone does nothing until an occurrence is due.
 - **Categories:** a rule counts as **use** for the kind change (refused while any rule uses the category). Removing a
   category "moving its entries to" a replacement moves its rules too, in the same DB transaction; a category used
-  only by rules needs a replacement as well. Messages say "used by 3 transactions and 1 repeating entry".
+  only by rules needs a replacement as well. Messages say "used by 3 transactions and 1 repeating entry". With
+  budgets: the rules move to the replacement but the removed category's budget does not (it goes with the category);
+  a kind change blocked by a rule never reaches the budget removal that an allowed change does.
 - **Wallets:** deleting a wallet without entries deletes its rules (the FK cascades); the Delete confirmation says so
   when it has any ("Its repeating entry is deleted with it."). Renaming or moving a wallet to another group keeps its
   rules.
@@ -2234,6 +2402,102 @@ As built (order, colour, archive):
   wallets, the pages show their normal empty states.
 - **Import** (`/data`): see "Import / export"; new wallets go into the selected group, and from two groups the panel
   says so and the preview names each wallet's group and the groups to create.
+
+## Reports
+
+Every other view is one month; `/reports` is one year. Added 2026-11-25.
+
+### Rules
+
+- **What counts**: expenses and income only (transfers never count, as everywhere), dated in the year, on every
+  wallet of the selected currency — archived wallets and archived categories included (it is history) — narrowed
+  to the selected wallet group (the scope, as on the Overview). Future-dated entries of the year count in the
+  year's totals, the chart and the tables, like the Overview's month figures.
+- **Converted view**: the Overview's rule and controls. `?view=only` → only wallets in the currency; "All in
+  <currency>" (default when a wallet, archived included, is in another currency) → every currency, each day's sums
+  converted at that day's rate (`tableFor`: provider rate, else the user's own); a currency without a rate is left
+  out and named (`monthConversionNotes`, `ratesNeeded`, "Enter a rate for …"). One `getConversion(userId,
+  <previous year>-01-01, <year>-12-31)` serves the page: `getDailyRates` asks the provider for one range (a week
+  before the previous year's 1 January to `min(31 Dec, today)`), only for the days not stored yet, so a year is at
+  most **one** provider request and none once stored (a past day fetched after it ended is final). Checked live
+  on 2026-11-25: Frankfurter answers a 23-month range with every business day (486 days × 30 currencies).
+- **Comparison**: a past year against the whole previous year. The current year against **the same period** of the
+  previous year: 1 January to today against 1 January to the same date a year earlier (`addMonths(today, -12)`, so
+  29 Feb → 28 Feb). Entries dated after today are then in the year's totals but not in the compared figure; the
+  card says so ("€88.00 by 25 Nov vs …").
+- **Year**: `?year=YYYY` (four digits, 1900 or later), default the current year in the account's time zone
+  (`todayInZone`); a later year is clamped to the current one, anything invalid is the current year. No stepping
+  into the future or before 1900.
+- **Currency**: `resolveOverviewCurrency` — a held `?currency=` (archived wallets included) wins, else the currency
+  with the most expense + income entries in the year (`pickDefaultCurrencyBetween`, the same rule as
+  `pickDefaultCurrency` over a date range), else (only archived wallets) their first currency by code.
+
+### Services
+
+```ts
+// insights.ts (shared helpers, exported for reports.ts; behaviour unchanged)
+pickDefaultCurrencyBetween(userId, from, to, opts?: { groupId? }): string | null   // pickDefaultCurrency over [from, to]
+currencyConditions(userId, currency | null, narrow?)  converter(to, convert?)          // the month services' own helpers
+
+// reports.ts
+type YearTotals = { incomeMinor; expenseMinor; netMinor }
+type ReportCategoryRow = { categoryId; name; archived: boolean; months: number[] /* 12, Jan first */; totalMinor }
+getYearReport(userId, { year: 'YYYY'; currency; today: 'YYYY-MM-DD'; groupId?; convert?: Conversion }): {
+  year;
+  totals: YearTotals;                                  // every entry dated in the year
+  months: (YearTotals & { month: 'YYYY-MM' })[];       // 12
+  comparison: { previousYear; through: { current; previous } | null;   // null for a past year
+                current: YearTotals; previous: YearTotals };            // current year: both run to `through`
+  expenseCategories: ReportCategoryRow[]; incomeCategories: ReportCategoryRow[];   // amount ≠ 0 only; largest
+                                                       // total first, then compareCategoryNames, then id
+  missingCurrencies?: string[];                        // with convert only
+}
+// Invalid year → VALIDATION (field year); currency → (field currency); today → (field date). One SQL query:
+// sums per date, kind, wallet currency and category over the previous and the shown year; everything else in JS.
+```
+
+`src/lib/reports.ts` (pure): `isValidYear`, `resolveReportYear(requested, maxYear)`, `yearMonths(year)`,
+`reportsHref(year, currency | null, maxYear, view)` (`/reports?year=…&currency=…&view=only`, the current year and
+the default view left out), `comparisonThrough(year, today)`, `periodLabel(date)` ("1 Jan – 25 Nov"),
+`percentChange(current, previous)` (whole percent, null when previous is 0), `comparisonSub(…)` (the line under a
+total), `wholeUnits(minor, currency)` (table cells: "1,235"), `compactMoney(minor, currency, { signed? })` ("€1.2K").
+
+### Screen
+
+- **/reports** ("Reports", in the main menu between Categories and Import & export; `@modal/reports/page.tsx`
+  returns null). `PageHeader` "Reports" with "2026 · EUR" (+ " · <group>") under it; the actions: `YearStepper`
+  (`components/reports/year-stepper.tsx`: ‹ 2026 › as plain links with 44px arrows, the next arrow inert at the
+  current year, "This year" when another year is shown; links keep `currency` only when it came from the URL, and
+  `view=only`), the `CurrencySwitch` (Overview rule for showing it) and the `ConvertSwitch` (when another currency is
+  held). `ConversionNotes` under the header. No wallets → "Create your first wallet" (or "No wallets in <group>").
+  A year with no counted entry → an empty state "No entries in 2024" (no chart, no tables).
+- **Totals**: a muted `<h2>` "2026 so far, against the same period of 2025 (1 Jan – 25 Nov)" or "The whole of 2025,
+  against 2024", then three `InsightCard`s — Income (income tone), Expenses, Net (signed, `toneOf`) — each with
+  `comparisonSub`: "vs €9,100.00 in 2025 · +12%" (net: "vs +€900.00 in 2025", no percentage), "nothing in 2025"
+  when there was nothing. Two columns on phones (Net spans both), three from `sm`.
+- **Month by month** card (`components/reports/year-chart.tsx`): legend (Income · Expenses · Net (own scale)), then
+  twelve columns each with two bars from a shared baseline — income `bg-income`, expenses `bg-accent` — on one scale
+  (the largest month; its compact amount labels the top-left), 150px tall (220px from `sm`); a month with nothing
+  shows a 2px `--border` stub. Months after the current one are not yet happened: `--chart-future` stubs, muted
+  labels, no link. Under the month labels, a 40px row of net bars around a dashed midline (up `bg-income`, down
+  `bg-expense`, on their own scale) and, from `sm`, the net per month in compact form ("+€1.2K", income / expense
+  text). Every month that has begun is a link (the whole column height, under the drawing, which is
+  `pointer-events-none`; hover shades the column) to that month on the Overview (`overviewHref(month, currency,
+  …, view)`), named "March 2026: income …, expenses …, net …. Open on the Overview" with the same text as `title`.
+  The bars are a `role="img"` with a summary ("Income and expenses per month in EUR, 2026. Most spent: Aug, …. Most
+  income: …. December has not happened yet."); a visually hidden table lists Month / Income / Expenses / Net
+  ("Not yet" for later months).
+- **Expenses by category**, then **Income by category** (`components/reports/category-year-table.tsx`): a card per
+  kind, a real `<table>` (`sr-only` caption): Category, Jan … Dec, Total; one row per category with an amount in
+  the year (largest first; "archived" under an archived one's name), a Total row. Cells are whole units of the
+  currency, no symbol (the line under the heading says "EUR, whole units"); income amounts in `text-income`. A
+  non-zero cell is a link (≥ 44px tall) named "Food, March 2026: €123.45" (exact, also its `title`) to
+  `/transactions?month=2026-03&category=<id>&currency=EUR` (+ `view=only`); a row total links to the category over
+  the whole year (`from` / `to`), a month total to `month` + `kind`. Zero cells are a muted dash ("nothing" for
+  screen readers). **Phones**: the table scrolls sideways inside its card (`overflow-x-auto`, the scroller is
+  `relative` so the `sr-only` caption cannot widen the page), the category column is `sticky` on `--surface`, and
+  the line under the heading adds "scroll sideways for every month" below `md`. The page itself never scrolls
+  sideways (`e2e/reports.spec.ts`, `e2e/layout.spec.ts`).
 
 ## Deployment — self-hosted with Docker
 

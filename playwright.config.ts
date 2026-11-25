@@ -6,9 +6,13 @@ import { defineConfig } from "@playwright/test";
  * Postgres, builds, and calls `playwright test`; running `npx playwright test` directly needs E2E_DATABASE_URL and a
  * finished build. See docs/DEVELOPMENT.md "End-to-end tests".
  *
- * Projects: `desktop` (1280px) runs every test except those tagged `@phone-only`; `phone` (375px, touch) runs the
- * tests tagged `@phone` or `@phone-only`.
+ * Projects: `desktop` (Chromium, 1280px) runs every test except those tagged `@phone-only`; `phone` (Chromium, 375px,
+ * touch) runs the tests tagged `@phone` or `@phone-only`. `desktop-firefox` and `desktop-webkit` run the desktop tests
+ * in Firefox and WebKit; `phone-webkit` runs the phone tests in WebKit (the nearest to iOS Safari Playwright has;
+ * Firefox has no `isMobile`, so there is no Firefox phone project). `--project=desktop` etc. picks one.
  */
+const desktop = { viewport: { width: 1280, height: 800 } };
+const phone = { viewport: { width: 375, height: 740 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
 const databaseUrl = process.env.E2E_DATABASE_URL ?? "";
 // The suite wipes this database (e2e/global-setup.ts): never let it point at the development data.
 if (!databaseUrl) throw new Error("E2E_DATABASE_URL is not set. Run the suite with `npm run test:e2e`.");
@@ -42,22 +46,11 @@ export default defineConfig({
     timezoneId: "Europe/Berlin",
   },
   projects: [
-    {
-      name: "desktop",
-      grepInvert: /@phone-only/,
-      use: { browserName: "chromium", viewport: { width: 1280, height: 800 } },
-    },
-    {
-      name: "phone",
-      grep: /@phone/,
-      use: {
-        browserName: "chromium",
-        viewport: { width: 375, height: 740 },
-        deviceScaleFactor: 2,
-        isMobile: true,
-        hasTouch: true,
-      },
-    },
+    { name: "desktop", grepInvert: /@phone-only/, use: { browserName: "chromium", ...desktop } },
+    { name: "phone", grep: /@phone/, use: { browserName: "chromium", ...phone } },
+    { name: "desktop-firefox", grepInvert: /@phone-only/, use: { browserName: "firefox", ...desktop } },
+    { name: "desktop-webkit", grepInvert: /@phone-only/, use: { browserName: "webkit", ...desktop } },
+    { name: "phone-webkit", grep: /@phone/, use: { browserName: "webkit", ...phone } },
   ],
   webServer: {
     command: "node .next/standalone/server.js",

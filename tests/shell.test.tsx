@@ -79,8 +79,15 @@ describe("initials", () => {
 });
 
 describe("main menu", () => {
-  it("lists the five destinations in order", () => {
-    expect(NAV_ITEMS.map((i) => i.label)).toEqual(["Overview", "Transactions", "Wallets", "Categories", "Import & export"]);
+  it("lists the six destinations in order", () => {
+    expect(NAV_ITEMS.map((i) => i.label)).toEqual([
+      "Overview",
+      "Transactions",
+      "Wallets",
+      "Categories",
+      "Reports",
+      "Import & export",
+    ]);
   });
 
   it("maps the page segment to its entry", () => {
@@ -88,6 +95,7 @@ describe("main menu", () => {
     expect(activeNavHref("transactions")).toBe("/transactions");
     expect(activeNavHref("wallets")).toBe("/wallets");
     expect(activeNavHref("data")).toBe("/data");
+    expect(activeNavHref("reports")).toBe("/reports");
     expect(activeNavHref("elsewhere")).toBeNull();
   });
 });
@@ -161,6 +169,7 @@ describe("@modal slot", () => {
   it("has a null page or an intercepted dialog for every app route (a soft navigation must reset the slot)", () => {
     const routes = pageRoutes();
     expect(routes).toContain("wallets/[id]");
+    expect(routes).toContain("reports");
     const missing = routes.filter(
       (r) => !existsSync(path.join(modalDir, r, "page.tsx")) && !existsSync(path.join(modalDir, `(.)${r}`, "page.tsx")),
     );

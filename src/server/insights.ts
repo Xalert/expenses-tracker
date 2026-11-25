@@ -106,10 +106,13 @@ export function monthDayN(month: string, today: string): number {
   return month < current ? monthLength(month) : 0;
 }
 
-type Narrow = { walletId?: number; groupId?: number; categoryId?: number };
+export type Narrow = { walletId?: number; groupId?: number; categoryId?: number };
 
-/** Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. */
-function currencyConditions(userId: number, currency: string | null, narrow: Narrow = {}): SQL[] {
+/**
+ * Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. Exported for
+ * the year report (`reports.ts`).
+ */
+export function currencyConditions(userId: number, currency: string | null, narrow: Narrow = {}): SQL[] {
   const conds: SQL[] = [eq(transactions.userId, userId), eq(wallets.userId, userId)];
   if (currency !== null) conds.push(eq(wallets.currency, currency));
   if (narrow.walletId !== undefined) conds.push(eq(transactions.walletId, narrow.walletId));
@@ -120,9 +123,9 @@ function currencyConditions(userId: number, currency: string | null, narrow: Nar
 
 /**
  * `amountMinor` in `from` on `date` → minor units of `to`: unchanged without `convert`, else at that date's rate
- * (null when there is none; the caller adds `from` to its missing set).
+ * (null when there is none; the caller adds `from` to its missing set). Exported for the year report (`reports.ts`).
  */
-function converter(to: string, convert: ConvertOption | undefined) {
+export function converter(to: string, convert: ConvertOption | undefined) {
   return (amountMinor: number, from: string, date: string): number | null =>
     !convert || from === to ? amountMinor : convertMinor(amountMinor, from, to, tableFor(convert, date));
 }
@@ -208,6 +211,16 @@ export async function pickDefaultCurrency(
   opts: { groupId?: number } = {},
 ): Promise<string | null> {
   const { from, to } = monthRange(assertMonth(month));
+  return pickDefaultCurrencyBetween(userId, from, to, opts);
+}
+
+/** `pickDefaultCurrency`'s rule over the dates [from, to] (both valid `YYYY-MM-DD`): a year on /reports. */
+export async function pickDefaultCurrencyBetween(
+  userId: number,
+  from: string,
+  to: string,
+  opts: { groupId?: number } = {},
+): Promise<string | null> {
   const db = await getDb();
   const inGroup = opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId);
   const busiest = await db
