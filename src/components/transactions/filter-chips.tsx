@@ -9,11 +9,13 @@ import { MonthGrid } from "@/components/ui/month-grid";
 import { ChevronIcon } from "@/components/ui/picker-icons";
 import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
+import { amountRangeLabel, type AmountRangeErrors } from "@/lib/amount-filter";
 import { formatMonth, shiftMonth } from "@/lib/dates";
-import { listHref, monthHref, resolveView, viewLabel, type ListParams } from "./list-params";
-import { NO_SCRIPT_MONTH_ID } from "./no-script-filters";
+import { GroupDot } from "@/components/wallets/group-dot";
+import { listHref, monthHref, resolveView, toggleIdHref, viewLabel, type ListParams } from "./list-params";
+import { NO_SCRIPT_AMOUNT_ID, NO_SCRIPT_MONTH_ID } from "./no-script-filters";
 
-type Option = { href: string; label: string; selected: boolean };
+type Option = { href: string; label: string; selected: boolean; key?: string; color?: string | null };
 type OptionGroup = { label?: string; options: Option[] };
 
 const focusRing = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
@@ -43,8 +45,11 @@ function Chip({
   before,
   after,
   noScriptHref,
+  multiselect,
   children,
 }: {
+  /** A listbox whose options toggle (Category, Tag): it stays open after a pick. */
+  multiselect?: boolean;
   /**
    * Without JavaScript the popover cannot open: the button is hidden (`data-needs-js`) and a link with the same label
    * to `noScriptHref` (the `<noscript>` filter form's matching select) stands in for it.
@@ -105,7 +110,8 @@ function Chip({
         trigger={trigger}
         id={panelId}
         role={popup}
-        aria-label={popup === "dialog" ? `Choose a ${name.toLowerCase()}` : name}
+        aria-multiselectable={multiselect}
+        aria-label={popup === "dialog" ? (name === "Amount" ? "Choose an amount range" : `Choose a ${name.toLowerCase()}`) : name}
         className={panelClassName}
       >
         {children(close)}
@@ -187,20 +193,24 @@ function OptionList({ groups, onPick }: { groups: OptionGroup[]; onPick: () => v
 
   const option = (o: Option) => (
     <Link
-      key={o.href + o.label}
+      // A stable key for a toggling option: the link (and the focus on it) survives the navigation it makes.
+      key={o.key ?? o.href + o.label}
       href={o.href}
       scroll={false}
       role="option"
       aria-selected={o.selected}
       tabIndex={-1}
-      onClick={onPick}
+      onClick={o.key?.startsWith("toggle-") ? undefined : onPick}
       className={cn(
         "flex min-h-10 items-center justify-between gap-3 rounded-xl px-3 text-sm font-medium",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
         o.selected ? "bg-accent-soft text-accent-soft-foreground" : "text-foreground hover:bg-surface-muted",
       )}
     >
-      <span className="truncate">{o.label}</span>
+      <span className="flex min-w-0 items-center">
+        {o.color && <GroupDot color={o.color} className="mr-2" />}
+        <span className="truncate">{o.label}</span>
+      </span>
       {o.selected && <span aria-hidden="true">✓</span>}
     </Link>
   );
@@ -290,10 +300,127 @@ function MonthPanel({
   );
 }
 
+
 /**
- * The /transactions filter row: chips Month · Wallet · Type · Category · Tag (each a popover; the choices are links, so
- * the URL holds the state), "Clear" when any filter besides the default month is set, the note search (a GET form;
- * Enter submits) and the Export CSV link. Wraps at 375px: the search and export share the last line.
+ * The Amount chip's panel: "At least" / "At most" in major units (each entry is compared in its own currency) and
+ * Apply, plus "Any amount" when a bound is set. A GET form (the URL holds the state); with JS it pushes a clean URL.
+ * Mounted only while open: focuses the first field (the one with the error, if any).
+ */
+function AmountPanel({
+  params,
+  errors,
+  onDone,
+}: {
+  params: ListParams;
+  errors: AmountRangeErrors;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  const minRef = useRef<HTMLInputElement>(null);
+  const maxRef = useRef<HTMLInputElement>(null);
+  const base = { ...params, page: 1 };
+
+  useEffect(() => {
+    // No scrolling: this runs before the Popover is placed (see OptionList).
+    (errors.max && !errors.min ? maxRef.current : minRef.current)?.focus({ preventScroll: true });
+    // Only on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const input = cn(
+    "h-11 w-full min-w-0 rounded-xl border bg-field px-3 text-sm text-foreground tabular-nums",
+    "placeholder:text-muted-foreground focus:border-accent focus:outline-2 focus:outline-ring/40",
+  );
+  const field = (side: "min" | "max", label: string, ref: React.RefObject<HTMLInputElement | null>) => {
+    const error = errors[side];
+    const id = `list-amount-${side}`;
+    return (
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <label htmlFor={id} className="text-xs font-semibold text-muted-foreground">
+          {label}
+        </label>
+        <input
+          ref={ref}
+          id={id}
+          name={side}
+          inputMode="decimal"
+          autoComplete="off"
+          maxLength={32}
+          defaultValue={params[side] ?? ""}
+          placeholder={side === "min" ? "0" : "Any"}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : "list-amount-hint"}
+          className={cn(input, error ? "border-danger" : "border-border")}
+        />
+        {error && (
+          <p id={`${id}-error`} className="text-xs font-medium text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <form
+      action="/transactions"
+      className="flex flex-col gap-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const data = new FormData(e.currentTarget);
+        const value = (k: string) => {
+          const v = data.get(k);
+          return typeof v === "string" && v.trim() ? v.trim() : undefined;
+        };
+        onDone();
+        router.push(listHref(base, { min: value("min"), max: value("max") }), { scroll: false });
+      }}
+    >
+      <div className="flex gap-2">
+        {field("min", "At least", minRef)}
+        {field("max", "At most", maxRef)}
+      </div>
+      <p id="list-amount-hint" className="text-xs text-muted-foreground">
+        Each entry is compared in its own currency. Both bounds are included.
+      </p>
+      <div className="flex items-center justify-between gap-2 border-t border-surface-muted pt-2">
+        {params.min || params.max ? (
+          <Link
+            href={listHref(base, { min: undefined, max: undefined })}
+            scroll={false}
+            onClick={onDone}
+            className={cn(
+              "inline-flex min-h-11 items-center rounded-full px-3 text-sm font-semibold text-muted-foreground hover:bg-surface-muted hover:text-foreground sm:min-h-10",
+              focusRing,
+            )}
+          >
+            Any amount
+          </Link>
+        ) : (
+          <span />
+        )}
+        <button type="submit" className={buttonClasses({ size: "sm", className: "min-h-11 sm:min-h-10" })}>
+          Apply
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** "Food", "Food +2", or `unknown` when none of the ids is known. */
+function multiLabel(ids: number[] | undefined, names: Map<number, string>, unknown: string): string | undefined {
+  if (!ids || ids.length === 0) return undefined;
+  const known = ids.map((id) => names.get(id)).filter((n): n is string => n !== undefined);
+  if (known.length === 0) return unknown;
+  return ids.length === 1 ? known[0] : `${known[0]} +${ids.length - 1}`;
+}
+
+/**
+ * The /transactions filter row: chips Month · Wallet · Type · Category · Tag · Amount (each a popover; the choices are
+ * links, so the URL holds the state; Category and Tag toggle several values and stay open), "Clear" when any filter
+ * besides the default month is set, the search (notes, categories, tags; a GET form; Enter submits) and the Export CSV
+ * link. Wraps at 375px: the search and export share the last line. An invalid amount bound is named in an alert line
+ * under the row.
  */
 export function FilterChips({
   params,
@@ -303,24 +430,26 @@ export function FilterChips({
   exportHref,
   showClear,
   tags = [],
+  amountErrors = {},
 }: {
   params: ListParams;
   /** The server's current month (the default view). */
   thisMonth: string;
   wallets: { id: number; name: string; currency: string; archived: boolean }[];
-  categories: { id: number; name: string; kind: "expense" | "income" }[];
+  categories: { id: number; name: string; kind: "expense" | "income"; color?: string | null }[];
   /** The user's tags (the Tag chip is left out when there are none and none is selected). */
   tags?: { id: number; name: string }[];
   /** Null hides the Export CSV link (nothing to export). */
   exportHref: string | null;
   showClear: boolean;
+  /** `amountRangeErrors(params)`: the Amount chip's problems. */
+  amountErrors?: AmountRangeErrors;
 }) {
   const router = useRouter();
   const view = resolveView(params, thisMonth);
   const base = { ...params, page: 1 };
 
   const wallet = wallets.find((w) => w.id === params.wallet);
-  const category = categories.find((c) => c.id === params.category);
   const kindLabel = { expense: "Expenses", income: "Income", transfer: "Transfers" } as const;
 
   const walletGroups: OptionGroup[] = [
@@ -345,172 +474,220 @@ export function FilterChips({
       ],
     },
   ];
+  const selectedCategories = new Set(params.categories ?? []);
   const categoryGroups: OptionGroup[] = [
-    { options: [{ href: listHref(base, { category: undefined }), label: "All categories", selected: !params.category }] },
+    {
+      options: [
+        { href: listHref(base, { categories: undefined }), label: "All categories", selected: selectedCategories.size === 0 },
+      ],
+    },
     ...(["expense", "income"] as const)
       .map((kind) => ({
         label: kind === "expense" ? "Expense" : "Income",
         options: categories
           .filter((c) => c.kind === kind)
-          .map((c) => ({ href: listHref(base, { category: c.id }), label: c.name, selected: c.id === params.category })),
+          .map((c) => ({
+            key: `toggle-category-${c.id}`,
+            href: toggleIdHref(params, "categories", c.id),
+            label: c.name,
+            color: c.color,
+            selected: selectedCategories.has(c.id),
+          })),
       }))
       .filter((g) => g.options.length > 0),
   ];
 
-  const tag = tags.find((t) => t.id === params.tag);
+  const selectedTags = new Set(params.tags ?? []);
   const tagGroups: OptionGroup[] = [
-    { options: [{ href: listHref(base, { tag: undefined }), label: "All tags", selected: !params.tag }] },
+    { options: [{ href: listHref(base, { tags: undefined }), label: "All tags", selected: selectedTags.size === 0 }] },
     ...(tags.length > 0
-      ? [{ options: tags.map((t) => ({ href: listHref(base, { tag: t.id }), label: t.name, selected: t.id === params.tag })) }]
+      ? [
+          {
+            options: tags.map((t) => ({
+              key: `toggle-tag-${t.id}`,
+              href: toggleIdHref(params, "tags", t.id),
+              label: t.name,
+              selected: selectedTags.has(t.id),
+            })),
+          },
+        ]
       : []),
   ];
+
+  const categoryValue = multiLabel(params.categories, new Map(categories.map((c) => [c.id, c.name])), "Unknown category");
+  const tagValue = multiLabel(params.tags, new Map(tags.map((t) => [t.id, t.name])), "Unknown tag");
+  const amountProblem = amountErrors.min ?? amountErrors.max;
+  const amountValue = amountRangeLabel(params.min, params.max);
 
   // A single month: ‹ › step through the months (the key hints match MonthStepShortcut). Not capped at this month.
   const prevMonth = view.type === "month" ? shiftMonth(view.month, -1) : null;
   const nextMonth = view.type === "month" ? shiftMonth(view.month, 1) : null;
   const listPanel = "w-64 max-w-[calc(100vw-16px)] max-h-80 overflow-y-auto p-1.5";
+  const multiPanel = "w-64 max-w-[calc(100vw-16px)] max-h-96 overflow-y-auto p-1.5";
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
-      <Chip
-        name="Month"
-        value={viewLabel(view, thisMonth)}
-        active={view.type !== "month" || view.month !== thisMonth}
-        popup="dialog"
-        panelClassName="w-72 max-w-[calc(100vw-16px)]"
-        noScriptHref={`#${NO_SCRIPT_MONTH_ID}`}
-        before={
-          prevMonth && (
-            <StepLink
-              href={monthHref(params, prevMonth, thisMonth)}
-              dir="left"
-              label={`Previous month, ${formatMonth(prevMonth)} ([)`}
-            />
-          )
-        }
-        after={
-          nextMonth && (
-            <StepLink
-              href={monthHref(params, nextMonth, thisMonth)}
-              dir="right"
-              label={`Next month, ${formatMonth(nextMonth)} (])`}
-            />
-          )
-        }
-      >
-        {(close) => <MonthPanel params={params} thisMonth={thisMonth} onDone={close} />}
-      </Chip>
-      {!(view.type === "month" && view.month === thisMonth) && (
-        <Link
-          href={monthHref(params, thisMonth, thisMonth)}
-          scroll={false}
-          title="This month (T)"
-          className={cn(
-            "inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-accent hover:underline sm:min-h-10",
-            focusRing,
-          )}
-        >
-          This month
-        </Link>
-      )}
-      {wallets.length > 0 && (
-        <Chip name="Wallet" value={wallet?.name} active={Boolean(wallet)} popup="listbox" panelClassName={listPanel}>
-          {(close) => <OptionList groups={walletGroups} onPick={close} />}
-        </Chip>
-      )}
-      <Chip
-        name="Type"
-        value={params.kind ? kindLabel[params.kind] : undefined}
-        active={Boolean(params.kind)}
-        popup="listbox"
-        panelClassName={listPanel}
-      >
-        {(close) => <OptionList groups={kindGroups} onPick={close} />}
-      </Chip>
-      {categories.length > 0 && (
-        <Chip name="Category" value={category?.name} active={Boolean(category)} popup="listbox" panelClassName={listPanel}>
-          {(close) => <OptionList groups={categoryGroups} onPick={close} />}
-        </Chip>
-      )}
-      {(tags.length > 0 || params.tag) && (
+    <div className="mb-4">
+      <div className="flex flex-wrap items-center gap-2">
         <Chip
-          name="Tag"
-          value={params.tag ? (tag?.name ?? "Unknown tag") : undefined}
-          active={Boolean(params.tag)}
+          name="Month"
+          value={viewLabel(view, thisMonth)}
+          active={view.type !== "month" || view.month !== thisMonth}
+          popup="dialog"
+          panelClassName="w-72 max-w-[calc(100vw-16px)]"
+          noScriptHref={`#${NO_SCRIPT_MONTH_ID}`}
+          before={
+            prevMonth && (
+              <StepLink
+                href={monthHref(params, prevMonth, thisMonth)}
+                dir="left"
+                label={`Previous month, ${formatMonth(prevMonth)} ([)`}
+              />
+            )
+          }
+          after={
+            nextMonth && (
+              <StepLink
+                href={monthHref(params, nextMonth, thisMonth)}
+                dir="right"
+                label={`Next month, ${formatMonth(nextMonth)} (])`}
+              />
+            )
+          }
+        >
+          {(close) => <MonthPanel params={params} thisMonth={thisMonth} onDone={close} />}
+        </Chip>
+        {!(view.type === "month" && view.month === thisMonth) && (
+          <Link
+            href={monthHref(params, thisMonth, thisMonth)}
+            scroll={false}
+            title="This month (T)"
+            className={cn(
+              "inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-accent hover:underline sm:min-h-10",
+              focusRing,
+            )}
+          >
+            This month
+          </Link>
+        )}
+        {wallets.length > 0 && (
+          <Chip name="Wallet" value={wallet?.name} active={Boolean(wallet)} popup="listbox" panelClassName={listPanel}>
+            {(close) => <OptionList groups={walletGroups} onPick={close} />}
+          </Chip>
+        )}
+        <Chip
+          name="Type"
+          value={params.kind ? kindLabel[params.kind] : undefined}
+          active={Boolean(params.kind)}
           popup="listbox"
           panelClassName={listPanel}
         >
-          {(close) => <OptionList groups={tagGroups} onPick={close} />}
+          {(close) => <OptionList groups={kindGroups} onPick={close} />}
         </Chip>
-      )}
-      {showClear && (
-        <Link
-          href="/transactions"
-          className={cn("rounded-full px-2 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground hover:underline", focusRing)}
-        >
-          Clear
-        </Link>
-      )}
-
-      <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
-        <form
-          action="/transactions"
-          role="search"
-          className="min-w-0 flex-1 sm:w-56 sm:flex-none"
-          onSubmit={(e) => {
-            // With JS: a clean URL (an empty search leaves `q` out). Without: the hidden fields keep the filters.
-            e.preventDefault();
-            const q = new FormData(e.currentTarget).get("q");
-            router.push(listHref(base, { q: typeof q === "string" && q.trim() ? q.trim() : undefined }), { scroll: false });
-          }}
-        >
-          {(
-            [
-              ["month", params.month],
-              ["wallet", params.wallet],
-              ["kind", params.kind],
-              ["category", params.category],
-              ["tag", params.tag],
-              ["from", params.from],
-              ["to", params.to],
-              ["currency", params.currency],
-              ["view", params.view],
-            ] as const
-          ).map(([name, value]) =>
-            value !== undefined ? <input key={name} type="hidden" name={name} value={String(value)} /> : null,
-          )}
-          <label htmlFor="list-q" className="sr-only">
-            Search notes
-          </label>
-          <input
-            key={params.q ?? ""}
-            id="list-q"
-            name="q"
-            type="search"
-            maxLength={200}
-            defaultValue={params.q ?? ""}
-            placeholder="Search notes"
-            autoComplete="off"
-            className={cn(
-              "h-11 w-full min-w-0 rounded-full border bg-field px-4 text-sm text-foreground sm:h-10",
-              "placeholder:text-muted-foreground focus:border-accent focus:outline-2 focus:outline-ring/40",
-              params.q ? "border-accent" : "border-border",
-            )}
-          />
-        </form>
-        {exportHref && (
-          // A plain <a>: the route handler answers with a file download (every row matching the current filters).
-          <a
-            href={exportHref}
-            download
-            className={buttonClasses({ variant: "secondary", className: "shrink-0 sm:h-10" })}
-            title="Export the transactions shown (every page) as CSV"
+        {(categories.length > 0 || params.categories) && (
+          <Chip
+            name="Category"
+            value={categoryValue}
+            active={Boolean(params.categories)}
+            popup="listbox"
+            multiselect
+            panelClassName={multiPanel}
           >
-            <DownloadIcon className="size-4" />
-            Export CSV
-          </a>
+            {(close) => <OptionList groups={categoryGroups} onPick={close} />}
+          </Chip>
         )}
+        {(tags.length > 0 || params.tags) && (
+          <Chip name="Tag" value={tagValue} active={Boolean(params.tags)} popup="listbox" multiselect panelClassName={multiPanel}>
+            {(close) => <OptionList groups={tagGroups} onPick={close} />}
+          </Chip>
+        )}
+        <Chip
+          name="Amount"
+          value={amountValue}
+          active={Boolean(amountValue)}
+          popup="dialog"
+          panelClassName="w-72 max-w-[calc(100vw-16px)]"
+          noScriptHref={`#${NO_SCRIPT_AMOUNT_ID}`}
+        >
+          {(close) => <AmountPanel params={params} errors={amountErrors} onDone={close} />}
+        </Chip>
+        {showClear && (
+          <Link
+            href="/transactions"
+            className={cn("rounded-full px-2 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground hover:underline", focusRing)}
+          >
+            Clear
+          </Link>
+        )}
+
+        <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
+          <form
+            action="/transactions"
+            role="search"
+            className="min-w-0 flex-1 sm:w-56 sm:flex-none"
+            onSubmit={(e) => {
+              // With JS: a clean URL (an empty search leaves `q` out). Without: the hidden fields keep the filters.
+              e.preventDefault();
+              const q = new FormData(e.currentTarget).get("q");
+              router.push(listHref(base, { q: typeof q === "string" && q.trim() ? q.trim() : undefined }), { scroll: false });
+            }}
+          >
+            {(
+              [
+                ["month", params.month],
+                ["wallet", params.wallet],
+                ["kind", params.kind],
+                ["category", params.categories?.join(",")],
+                ["tag", params.tags?.join(",")],
+                ["min", params.min],
+                ["max", params.max],
+                ["from", params.from],
+                ["to", params.to],
+                ["currency", params.currency],
+                ["view", params.view],
+                ["select", params.select === "page" ? "page" : params.select ? "1" : undefined],
+              ] as const
+            ).map(([name, value]) =>
+              value !== undefined ? <input key={name} type="hidden" name={name} value={String(value)} /> : null,
+            )}
+            <label htmlFor="list-q" className="sr-only">
+              Search notes, categories and tags
+            </label>
+            <input
+              key={params.q ?? ""}
+              id="list-q"
+              name="q"
+              type="search"
+              maxLength={200}
+              defaultValue={params.q ?? ""}
+              placeholder="Search notes, tags…"
+              autoComplete="off"
+              className={cn(
+                "h-11 w-full min-w-0 rounded-full border bg-field px-4 text-sm text-foreground sm:h-10",
+                "placeholder:text-muted-foreground focus:border-accent focus:outline-2 focus:outline-ring/40",
+                params.q ? "border-accent" : "border-border",
+              )}
+            />
+          </form>
+          {exportHref && (
+            // A plain <a>: the route handler answers with a file download (every row matching the current filters).
+            <a
+              href={exportHref}
+              download
+              className={buttonClasses({ variant: "secondary", className: "shrink-0 sm:h-10" })}
+              title="Export the transactions shown (every page) as CSV"
+            >
+              <DownloadIcon className="size-4" />
+              Export CSV
+            </a>
+          )}
+        </div>
       </div>
+      {amountProblem && (
+        // Not silent: an invalid bound is left out of the list and said here (the chip's panel shows it on its field).
+        <p role="alert" className="mt-2 text-sm font-medium text-danger">
+          Amount filter not applied: {amountProblem}
+        </p>
+      )}
     </div>
   );
 }

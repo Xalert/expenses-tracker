@@ -2,12 +2,14 @@ import Link from "next/link";
 import { RepeatIcon } from "@/components/shell/icons";
 import { transactionLabel } from "@/components/transaction-list";
 import { ExpandableList, ExpandableRow } from "@/components/ui/expandable-row";
+import { GroupDot } from "@/components/wallets/group-dot";
 import { cn } from "@/lib/cn";
 import { dayHeaderLabel, dayNetLabel, groupByDate } from "@/lib/day-labels";
 import { formatMoney, minorToInputValue } from "@/lib/money";
 import { withReturnTo } from "@/lib/return-to";
 import { joinTags } from "@/lib/tags";
 import type { DayTotal, TransactionView } from "@/server/transactions";
+import { RowCheckbox } from "./bulk-edit";
 import { InlineEditPanel, type InlineEntry } from "./inline-edit";
 
 const dotClass: Record<TransactionView["kind"], string> = {
@@ -35,6 +37,7 @@ export function inlineEntryOf(t: TransactionView): InlineEntry {
     return {
       type: "transfer",
       transferId: t.transferId,
+      entryId: t.id,
       fromWalletId: from.walletId,
       toWalletId: to.walletId,
       amount: minorToInputValue(from.amountMinor, from.currency),
@@ -107,6 +110,8 @@ function RowSummary({ t, showWallet }: { t: TransactionView; showWallet: boolean
       <span className={cn("size-2 shrink-0 rounded-full", dotClass[t.kind])} aria-hidden="true" />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
+          {/* The category's colour, as on /categories and in the entry form's pills (decorative). */}
+          {t.categoryColor && <GroupDot color={t.categoryColor} className="size-2" />}
           <span className="truncate font-semibold text-foreground">{transactionLabel(t)}</span>
           {t.recurringId !== null && <RepeatMarker />}
         </span>
@@ -148,7 +153,13 @@ export function DayList({
   returnTo,
   aside,
   showWallet = true,
+  selectable = false,
 }: {
+  /**
+   * Selection mode (/transactions `?select=1`): each row is a checkbox labelled by its summary (joined to the bulk
+   * bar's form, `RowCheckbox`) instead of an expandable editor. Needs a `BulkEditProvider` around it.
+   */
+  selectable?: boolean;
   items: TransactionView[];
   totals?: DayTotal[];
   today: string;
@@ -189,6 +200,23 @@ export function DayList({
                 {group.items.map((t) => {
                   const label = transactionLabel(t);
                   const amount = formatMoney(t.signedAmountMinor, t.currency, { signed: true });
+                  if (selectable) {
+                    return (
+                      <li key={t.id} className="last:rounded-b-[18px]">
+                        <label
+                          className={cn(
+                            "flex min-h-11 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left text-sm transition-colors sm:px-[18px]",
+                            "hover:bg-surface-open has-[:checked]:bg-accent-soft/60",
+                            "has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-ring",
+                            "[li:last-child>&]:rounded-b-[18px]",
+                          )}
+                        >
+                          <RowCheckbox id={t.id} />
+                          <RowSummary t={t} showWallet={showWallet} />
+                        </label>
+                      </li>
+                    );
+                  }
                   return (
                     <ExpandableRow
                       key={t.id}

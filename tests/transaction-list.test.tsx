@@ -11,6 +11,7 @@ const base: TransactionView = {
   currency: "EUR",
   categoryId: 3,
   categoryName: "Food",
+  categoryColor: null,
   amountMinor: 1250,
   signedAmountMinor: -1250,
   date: "2026-03-05",

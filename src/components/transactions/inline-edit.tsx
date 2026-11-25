@@ -35,6 +35,8 @@ export type InlineEntry =
   | {
       type: "transfer";
       transferId: number;
+      /** The row's own leg (what "Duplicate" passes as `?from=`). */
+      entryId: number;
       fromWalletId: number;
       toWalletId: number;
       amount: string;
@@ -154,6 +156,13 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
               className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
             >
               Open as page
+            </Link>
+            {/* The Add form prefilled from this entry, dated today (opens as the dialog from inside the app). */}
+            <Link
+              href={withReturnTo(`/transactions/new?from=${isTransfer ? entry.entryId : entry.id}`, ctx.returnTo)}
+              className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Duplicate
             </Link>
             {!isTransfer && entry.recurringId != null && (
               <Link

@@ -290,6 +290,7 @@ describe("DayList on a wallet page", () => {
     currency: "EUR",
     categoryId: 10,
     categoryName: "Food",
+    categoryColor: null,
     amountMinor: 480,
     signedAmountMinor: -480,
     date,

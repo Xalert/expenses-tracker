@@ -30,11 +30,16 @@ describe("parseListParams", () => {
       month: undefined,
       wallet: 2,
       kind: "transfer",
-      category: 7,
+      categories: [7],
+      tags: undefined,
+      min: undefined,
+      max: undefined,
       from: "2026-10-01",
       to: "2026-10-31",
       q: "rent",
       currency: undefined,
+      view: undefined,
+      select: undefined,
       page: 3,
     });
     expect(hasFilters(p, NOV)).toBe(true);
@@ -57,11 +62,16 @@ describe("parseListParams", () => {
       month: undefined,
       wallet: undefined,
       kind: undefined,
-      category: undefined,
+      categories: undefined,
+      tags: undefined,
+      min: undefined,
+      max: undefined,
       from: undefined,
       to: undefined,
       q: undefined,
       currency: undefined,
+      view: undefined,
+      select: undefined,
     });
     expect(hasFilters(p, NOV)).toBe(false);
     expect(parseListParams({ page: "1e3", wallet: "1.5" })).toMatchObject({ page: 1, wallet: undefined });

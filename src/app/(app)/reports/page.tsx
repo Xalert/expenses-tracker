@@ -203,8 +203,8 @@ export default async function ReportsPage({ searchParams }: Props) {
                 total={kind === "expense" ? totals.expenseMinor : totals.incomeMinor}
                 elapsed={elapsed}
                 hrefs={{
-                  cell: (category, month) => listHref({ ...stripParams, month, category }),
-                  rowTotal: (category) => listHref({ ...stripParams, category, from, to }),
+                  cell: (category, month) => listHref({ ...stripParams, month, categories: [category] }),
+                  rowTotal: (category) => listHref({ ...stripParams, categories: [category], from, to }),
                   monthTotal: (month) => listHref({ ...stripParams, month, kind }),
                 }}
               />

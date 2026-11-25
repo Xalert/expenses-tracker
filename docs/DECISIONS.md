@@ -496,6 +496,36 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
 | `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
+### Filters and bulk edit
+
+Decided and built 2026-11-25 (SPEC /transactions: chip row, Selection mode; /transactions/new `?from=`).
+
+| Decision | Why | Decided by |
+|---|---|---|
+| Amount range `?min=` / `?max=` in major units (decimal comma accepted), inclusive, compared with each entry in its own currency (`amount_minor` against the bound scaled by that currency's decimals); no conversion; an invalid or negative bound is an error on its field | One number works across wallets without rates; silently ignoring a typo would show a wrong list | planner |
+| Several categories (`?category=1,2,3`, the old single value still works) and several tags (`?tag=1,2`): any of them matches; different filters combine with AND | The usual meaning of a multi-select filter | planner |
+| The search also matches the category name and tag names (transfers still on their note) | One box finds "groceries" whether it is a category, a tag or a note | planner |
+| Everything that followed the filters follows the new ones (day totals, strip, month links, Clear, CSV export and its link, the no-JS form); unknown ids match nothing and show as unknown | Same list everywhere | planner |
+| The chips stay one row: Category and Tag become multi-select panels, Amount is a new chip with two inputs; category colour dots on day-list rows (carried on `TransactionView`, same query) | Usable at 375px; the colour already identifies categories elsewhere | planner |
+| Bulk edit: "Select" switches to selection mode (a checkbox per row, "Select all shown", "Select all N matching" applying to the whole filtered result re-evaluated on the server); Delete, Set category (entries of its kind; the rest skipped and counted), Add / Remove tag (expenses and income; the 10-tag limit holds); a transfer leg means its transfer (Delete removes both legs, the others skip it); one DB transaction each; archived categories refused; Delete confirms with counts, says there is no undo and points to the backup; a result line afterwards and selection mode ends | After a large import many entries need the same fix | planner |
+| Duplicate in an open row's footer opens Add prefilled (kind, wallet, category, amount, note, tags; transfers both sides) with today's date via `?from=<id>`; another user's / a missing id shows the empty form; archived wallet or category not preselected; the repeating rule never copied | Re-entering a similar entry is common | planner |
+| An amount bound may have at most 3 decimals (the most any currency has); with more decimals than a currency has it rounds inwards for that currency (min 12.5 = ¥13 and up, max 12.5 = up to ¥12), which is exactly "≥ 12.5" / "≤ 12.5" | Integer amounts compare exactly against a decimal bound | built |
+| A maximum below the minimum is an error on `max`; the list then applies the minimum only. An invalid bound is left out of the list (and of the CSV link) and named in an alert line under the chip row; the export route answers 400 for one | Showing the rest of the list is more useful than an empty page, and the alert keeps it from being silent | built |
+| The per-currency scaling is a `CASE` over the ISO codes whose decimals are not 2 (from Intl, inlined) on a correlated lookup of the wallet's currency (`src/server/_filters.ts`), so it also works in queries that do not join `wallets` | No currency table in the database; the codes come from the same Intl data as `currencyDecimals` | built |
+| `TransactionFilters` keeps `categoryId` / `tagId` and adds `categoryIds` / `tagIds` (merged); `ListParams.category` / `tag` became `categories` / `tags` arrays; at most 100 ids per filter | Existing callers and tests keep working; a bound on the URL and the SQL list | built |
+| Multi-select chips: each option is a link that toggles its id and the panel stays open; "All …" clears and closes. The no-JS form uses native `<select multiple>` (its repeated keys are redirected to the comma form) | Keeps the URL as the state, the listbox keyboard model and the existing option selectors; a native multiple select is the accessible no-JS control | built |
+| Commas in `category=` / `tag=` stay unencoded in the links the app writes | Readable URLs, as the planner's `?category=1,2,3` | built |
+| Selection mode is a URL state (`?select=1`; `?select=page` ticks every shown row), kept while filtering and paging; rows become labelled checkboxes and do not open in this mode | Works without JavaScript; no nested forms (the row editors stay out of the way) | built |
+| The bar is one form (`id="bulk-edit"`) and the row checkboxes join it with `form=`; with JavaScript it posts through `startTransition` so React does not reset the ticked boxes after a refused action | The form-reset gotcha in CLAUDE.md would clear the selection on a tag typo | built |
+| Delete's confirmation is a server step (the action returns the counts it found; "Delete N entries" posts them back and the delete refuses if the target changed), not `confirm()` | It states the server's count for "all matching", works without JavaScript and in every engine, and cannot delete more than was confirmed | built |
+| Set category, Add tag and Remove tag do not ask first; a target with nothing they apply to (no entry of the category's kind, only transfers) is an error on the field instead of a "changed 0" result | They are reversible by another bulk edit; an error keeps the selection to try another category | built |
+| At most **2,000 rows** (entries and transfer legs) per call; beyond: "That is 2,345 entries; one change can touch at most 2,000. Narrow the filters (a month at a time, say) and repeat. Nothing was changed." | One transaction stays short; a month of a heavy import fits | built |
+| Add tag creates the tag only when at least one entry gets it, matching an existing one ignoring case | Like the entry form and the importer: no empty tags from a no-op | built |
+| The outcome travels in the redirect URL (`?done=c.4.42.0.0.3`: numbers and ids only); the page looks the names up | Shows with and without JavaScript after a redirect; a hand-made URL can only produce wrong counts, never arbitrary text. Reloading shows the line again | built |
+| The month / N shortcuts are allowed while a checkbox has focus (not inside a modal) | Ticking rows puts focus on a checkbox (in Chromium), and "the shortcuts keep working in selection mode" | built |
+| The "Select" / "Done selecting" button sits in the page header next to "Repeating"; the bar is sticky from `sm` only | At 375px a sticky bar would cover a third of the screen | built |
+| Duplicate is a link in the footer next to "Open as page"; `duplicateInitial` lives in `transactions/form-options.ts` | The intercepted route opens it as the dialog; the full page works without JavaScript | built |
+
 ### Tags
 
 Decided and built 2026-11-25 (SPEC "Tags"). The tables came with migration `0007`, written beforehand by the planner.
@@ -507,7 +537,7 @@ Decided and built 2026-11-25 (SPEC "Tags"). The tables came with migration `0007
 | `src/server/tags.ts` lists (with use counts), renames (onto an existing name = merge, one DB transaction) and deletes (the entries stay); entry create / update replace the entry's set in the entry's DB transaction; `TransactionView.tags` is loaded without a query per row | One place for the rules; a merge is what a user renaming "Work" to "work trips" (existing) means | planner |
 | The entry form's Tags field works without JavaScript (a comma-separated text input) and keeps the Add sheet one row taller | Every form in the app works without scripts; the Add sheet must stay short on phones | planner |
 | Day-list rows show tags as small pills after the note, the rest as "+N" | Readable at 375px | planner |
-| /transactions filters by one tag (`?tag=<id>`), as a chip and in the no-JS form; strip, totals, export and month links follow it | Several tags come with a later package that reworks the filters | planner |
+| /transactions filters by one tag (`?tag=<id>`), as a chip and in the no-JS form; strip, totals, export and month links follow it *(superseded 2026-11-25 by "Filters and bulk edit": several tags)* | Several tags come with a later package that reworks the filters | planner |
 | Tag management is a "Tags" card on /categories (count linking to the entries, rename and delete inline); no new route | Tags sit next to categories in the user's mind; the menu stays short | planner |
 | **Deliberate:** Spendee labels stay appended to the note, they do not become tags | The note is part of an entry's duplicate identity: moving labels out of it would make files already imported import again | planner |
 | Native CSV: an optional `tags` column; tags are not part of the duplicate identity and a skipped duplicate gains no tags | "Import adds, never changes"; old files import as before | planner |
@@ -719,7 +749,7 @@ for now, so none of this is queued)
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
 - **Tags (2026-11-25): transfers cannot be tagged, repeating rules carry no tags** (only the first entry of an "Add
-  with Repeat" gets them), and /transactions filters by **one** tag at a time (several come with the filters rework).
+  with Repeat" gets them). /transactions filters by several tags (any of them; 2026-11-25), but not by "all of them".
   Tags have no colour and no page of their own; the Overview and /reports have no per-tag figures; the old
   `TransactionList` (not the day lists) shows no tags. The Statement Importer does not write the CSV `tags` column.
 - **Recurring transfers** *(2026-11-25)*: repeating entries are expenses and income only; a monthly move to savings
@@ -749,6 +779,14 @@ for now, so none of this is queued)
   real `data/app.db`.
 
 ### Rough edges
+
+- **Filters and bulk edit (2026-11-25).** Bulk edit has no undo (the confirmation points to the backup) and changes
+  only the category and tags: not the wallet, date or note. Tags match "any of", never "all of". Selection is per page:
+  ticks are lost when moving to another page or filter (only "Select all N matching" spans pages). The result line
+  comes back on a reload of its URL (it lives in `?done=`). Without JavaScript, "Select all shown" / "Clear" are links
+  that reload the page (ticks made before are replaced), and all three action fields show at once. Below `sm` the bar
+  is not sticky: after ticking rows far down the list one scrolls back up to Apply. The amount range cannot say "in
+  EUR only" (combine it with the Wallet filter).
 
 - Without JavaScript the no-JS month select covers 24 months back and one ahead (plus the month in view); older
   months are reached with ‹.
@@ -810,6 +848,17 @@ for now, so none of this is queued)
 
 ### Not verified
 
+- **Filters and bulk edit (2026-11-25).** Checked: service tests on PGlite (`tests/transaction-filters.test.ts`,
+  `tests/bulk.test.ts`: each filter alone and combined, EUR / JPY / KWD, the search over category and tag names, day
+  totals, strip, CSV export; every bulk action by ids and by filters, transfers, the tag limit, archived category,
+  another user's ids, the 2,000 bound, a forced mid-way failure rolled back), the action (`tests/bulk-actions.test.ts`)
+  and render / helper tests (`tests/bulk-ui.test.tsx`); `e2e/bulk.spec.ts` in all five projects (two categories +
+  amount, select and set category with the result line, "Select all N matching" + delete with the confirmation, the
+  no-JavaScript tick-and-delete, Duplicate); screenshots of the category and amount panels, the amount error, selection
+  mode, the delete confirmation and the result line at 375px and 1280px in light and dark, looked at by eye. Not
+  checked: a screen reader on the multi-select listbox (`aria-multiselectable` with link options) and the live count in
+  the bar; the query time of the amount `CASE` and the search's `exists` subqueries on a large account (no index added);
+  a no-JS "Select all N matching"; bulk edits racing an edit of the same rows in another tab beyond the row locks.
 - **Tags (2026-11-25).** Checked: service, import / export, action and render tests on PGlite; `e2e/tags.spec.ts` in
   all five projects (Chromium, Firefox, WebKit desktop; Chromium and WebKit phone), including the no-JS form;
   screenshots of the Add dialog with the Tags field, the day list with pills, the Tag chip, a filtered list and the

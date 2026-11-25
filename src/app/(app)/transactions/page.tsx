@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
 import { RepeatIcon } from "@/components/shell/icons";
+import { BulkEditProvider, BulkResult } from "@/components/transactions/bulk-edit";
 import { DayList } from "@/components/transactions/day-list";
 import { DayStrip } from "@/components/transactions/day-strip";
 import { FilterChips } from "@/components/transactions/filter-chips";
@@ -11,9 +12,11 @@ import { MonthStepShortcut } from "@/components/transactions/month-step-shortcut
 import { InlineEditProvider } from "@/components/transactions/inline-edit";
 import { NoScriptFilters } from "@/components/transactions/no-script-filters";
 import {
+  amountRangeErrors,
   dayHref,
   exportCsvHref,
   hasEmptyParams,
+  hasRepeatedParams,
   hasFilters,
   hasNonDateFilters,
   listFilters,
@@ -28,11 +31,13 @@ import {
 } from "@/components/transactions/list-params";
 import { Card, CurrencySwitch, EmptyState, LinkButton, PageHeader, buttonClasses } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
+import { decodeOutcome, describeOutcome } from "@/lib/bulk-result";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
 import { formatMonth, monthRange, shiftMonth, todayInZone } from "@/lib/dates";
 import { monthConversionNotes, ratesHref, ratesNeeded, resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
+import { bulkEditAction } from "./bulk-actions";
 import { toCategoryOptions, toTagOptions, toWalletOptions } from "./form-options";
 import { listTags } from "@/server/tags";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
@@ -60,8 +65,13 @@ export default async function TransactionsPage({
   const user = await requireUser();
   const sp = await searchParams;
   const params = parseListParams(sp);
-  // A no-JS GET form leaves empty fields in the URL (`?q=`, `?wallet=`): show the same list under its clean URL.
-  if (hasEmptyParams(sp)) redirect(listHref(params));
+  // A no-JS GET form leaves empty fields in the URL (`?q=`, `?wallet=`) and repeats the keys of a multiple select
+  // (`?category=1&category=2`): show the same list under its clean URL (`?category=1,2`). The bulk result rides along.
+  if (hasEmptyParams(sp) || hasRepeatedParams(sp)) {
+    const done = typeof sp.done === "string" && sp.done ? `done=${encodeURIComponent(sp.done)}` : "";
+    const clean = listHref(params);
+    redirect(done ? `${clean}${clean.includes("?") ? "&" : "?"}${done}` : clean);
+  }
   const today = todayInZone(user.timeZone);
   const thisMonth = today.slice(0, 7);
   const view = resolveView(params, thisMonth);
@@ -69,6 +79,9 @@ export default async function TransactionsPage({
   const groupId = selected?.id;
   const filters = { ...listFilters(params, thisMonth), groupId };
   const filtered = hasFilters(params, thisMonth);
+  // An invalid amount bound is left out of the filters (listFilters) and said on the Amount chip.
+  const amountErrors = amountRangeErrors(params);
+  const selecting = params.select !== undefined;
 
   const { items, total } = await listTransactions(user.id, {
     ...filters,
@@ -110,8 +123,10 @@ export default async function TransactionsPage({
         month: strip.month,
         currency,
         walletId: walletFilter?.id,
-        categoryId: params.category,
-        tagId: params.tag,
+        categoryIds: filters.categoryIds,
+        tagIds: filters.tagIds,
+        minAmount: filters.minAmount,
+        maxAmount: filters.maxAmount,
         groupId,
         convert,
       });
@@ -193,6 +208,18 @@ export default async function TransactionsPage({
   const tagFilterOptions = tagList.map((t) => ({ id: t.id, name: t.name }));
   const editTagOptions = toTagOptions(tagList);
 
+  // The last bulk edit's outcome (`?done=`, set by bulkEditAction's redirect): the result line.
+  const outcome = decodeOutcome(typeof sp.done === "string" ? sp.done : undefined);
+  let resultMessage: string | null = null;
+  if (outcome) {
+    const category = outcome.op === "category" ? categories.find((c) => c.id === outcome.categoryId) : undefined;
+    const tag = outcome.op === "addTag" || outcome.op === "removeTag" ? tagList.find((t) => t.id === outcome.tagId) : undefined;
+    resultMessage = describeOutcome(outcome, {
+      category: category ? { name: category.name, kind: category.kind } : undefined,
+      tag: tag?.name,
+    });
+  }
+
   // Single-month view: the neighbouring months, for the end-of-list row and the [ / ] keys (not for a day or range).
   const months =
     view.type === "month"
@@ -265,11 +292,24 @@ export default async function TransactionsPage({
         title="Transactions"
         description={anyAtAll ? describeCount(total, params, view, thisMonth) : undefined}
         actions={
-          // Not in the top menu: repeating entries are reached from here and from the marker on the entries they made.
-          <Link href="/recurring" className={buttonClasses({ variant: "secondary" })}>
-            <RepeatIcon className="size-4" />
-            Repeating
-          </Link>
+          <>
+            {total > 0 &&
+              (selecting ? (
+                <Link href={listHref(params, { select: undefined })} className={buttonClasses({ variant: "primary" })}>
+                  Done selecting
+                </Link>
+              ) : (
+                // Selection mode (bulk edit): a plain link, so it works without JavaScript.
+                <Link href={listHref(params, { select: "on" })} className={buttonClasses({ variant: "secondary" })}>
+                  Select
+                </Link>
+              ))}
+            {/* Not in the top menu: repeating entries are reached from here and from the marker on their entries. */}
+            <Link href="/recurring" className={buttonClasses({ variant: "secondary" })}>
+              <RepeatIcon className="size-4" />
+              Repeating
+            </Link>
+          </>
         }
       />
 
@@ -282,6 +322,7 @@ export default async function TransactionsPage({
           tags={tagFilterOptions}
           exportHref={total > 0 ? exportCsvHref(params, thisMonth, groupId) : null}
           showClear={filtered}
+          amountErrors={amountErrors}
         />
       )}
       {anyAtAll && (
@@ -293,6 +334,7 @@ export default async function TransactionsPage({
             wallets={walletOptions}
             categories={categoryOptions}
             tags={tagFilterOptions}
+            amountErrors={amountErrors}
           />
         </noscript>
       )}
@@ -305,8 +347,24 @@ export default async function TransactionsPage({
 
       {stripNode}
 
+      {resultMessage && <BulkResult message={resultMessage} />}
+
       {empty ? (
         <Card>{empty}</Card>
+      ) : selecting ? (
+        <BulkEditProvider
+          action={bulkEditAction}
+          preselectAll={params.select === "page"}
+          list={listHref(params, { select: undefined }).split("?")[1] ?? ""}
+          shown={items.length}
+          total={total}
+          categories={categories.filter((c) => !c.archivedAt).map((c) => ({ id: c.id, name: c.name, kind: c.kind }))}
+          tags={tagFilterOptions}
+          selectAllHref={listHref(params, { select: "page" })}
+          clearHref={listHref(params, { select: "on" })}
+        >
+          <DayList items={items} totals={totals} today={today} returnTo={currentHref} selectable />
+        </BulkEditProvider>
       ) : (
         <InlineEditProvider
           wallets={editWalletOptions}

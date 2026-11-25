@@ -6,7 +6,7 @@ import { getGroupScope } from "@/lib/group-scope";
 import { isFrequency } from "@/lib/recurrence";
 import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
-import { categoryOptions, param, parseId, tagOptions, walletOptions } from "../form-options";
+import { categoryOptions, duplicateInitial, param, parseId, tagOptions, walletOptions } from "../form-options";
 
 const KINDS: EntryKind[] = ["expense", "income", "transfer"];
 
@@ -53,13 +53,18 @@ export async function NewEntry({
 
   const today = todayInZone(user.timeZone);
   const repeatParam = param(searchParams.repeat);
+  const categories = await categoryOptions(userId);
+  // "Duplicate": `?from=<id>` wins over `kind` / `wallet`.
+  const copied = await duplicateInitial(userId, parseId(searchParams.from), today, { wallets, categories });
   return (
     <EntryForm
+      // A different source (or none) is a different form: its defaults apply on mount only.
+      key={copied ? `from-${param(searchParams.from)}` : "new"}
       variant={variant}
       wallets={wallets}
-      categories={await categoryOptions(userId)}
+      categories={categories}
       tags={await tagOptions(userId)}
-      initial={{ kind, walletId, fromWalletId: walletId, date: today }}
+      initial={copied ?? { kind, walletId, fromWalletId: walletId, date: today }}
       today={today}
       transactionAction={createTransactionAction}
       transferAction={createTransferAction}
