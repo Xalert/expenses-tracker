@@ -627,35 +627,58 @@ Built 2026-11-25 (SPEC "Reports").
 
 ## Next steps
 
-The to-do list, in the order worth doing (written 2026-11-18, after v0.1.0 was tagged). Tick or remove an item when
-it is done; the details of each gap are under "Known gaps" below.
+The to-do list, in the order worth doing (rewritten 2026-11-25, after the round of features that followed v0.1.0:
+the account's "today", budgets, repeating entries, reports, tags, reconciliation, filters and bulk edit, the
+home-screen install, Firefox / WebKit in the browser suite). Tick or remove an item when it is done; the details of
+each gap are under "Known gaps" below.
 
-**Finishing the v0.1.0 release**
+**Releasing this round** (it is on the branch `next-features`, not on `main`, and nothing is pushed)
+
+- [ ] The owner reads the branch (and tries it on the demo database, `make dev`), then merges it into `main`.
+- [ ] Cut the release (`make release VERSION=0.2.0`; `CHANGELOG.md` "Unreleased" is written). The pushed workflows
+  are the first run of the Firefox / WebKit projects on Linux and of the Dependabot config.
+- [ ] Upgrade the owner's own instance: `pg_dump` of `expenses` first, then the new image, then check that the
+  migrations up to `0007_budgets-recurring-tags` applied.
+- [ ] Set the account's time zone under Account settings if it is empty: "today" follows it since this round.
+
+**Left from the v0.1.0 release**
 
 - [x] The `v0.1.0` workflow run is green and `ghcr.io/xalert/expenses-tracker` carries `0.1.0`, `0.1` and `0`
   (one digest, amd64 and arm64), with an SBOM, provenance and a cosign signature object in the registry (checked
   2026-11-18).
 - [ ] Run `cosign verify` on the `0.1.0` image once (`docs/SELF-HOSTING.md`, "Verifying the image"): the signing
   step passed in CI and the signature is in the registry, but it has not been verified from a machine with cosign.
-- [ ] Upgrade the owner's own instance: `pg_dump` of `expenses` first, then the new image, then check that the six
-  migrations (`0001` to `0006`) applied.
 
-**Before the instance is reachable from the internet**
+**Before the instance is reachable from the internet** (the owner said on 2026-11-25 that the app is personal-only
+for now, so none of this is queued)
 
 - [ ] HTTPS behind a reverse proxy, with `COOKIE_SECURE` and `TRUST_PROXY=1`.
 - [ ] `ALLOW_REGISTRATION=false` once the accounts exist.
 - [ ] Backups from host cron (the `BACKUP_INTERVAL_HOURS` loop does not survive a reboot), and `backups/` copied
   off the machine.
+- [ ] Security headers (Content-Security-Policy, `frame-ancestors`, Referrer-Policy, HSTS): the app sets none.
+- [ ] A second sign-in factor (TOTP or passkeys).
 
 **Checks that need a person or a real device** (see "Not verified")
 
-- [ ] On a real iPhone: the Add sheet's drag-to-close, and the "±" toggle keeping the keyboard open.
-- [ ] Safari and Firefox; the browser suite runs in headless Chromium only.
-- [ ] Dark mode and the 375px layouts by eye; a screen-reader pass.
+- [ ] On a real iPhone: the Add sheet's drag-to-close, the "±" toggle keeping the keyboard open, and the app added
+  to the home screen (icon, title, status bar, the top bar and Add button in standalone mode). The same install on
+  an Android phone.
+- [ ] Real Safari and a released Firefox: the suite now runs in Playwright's WebKit and Firefox builds, which found
+  two real bugs, but those are not the released browsers.
+- [ ] Dark mode and the 375px layouts by eye on the new screens; a screen-reader pass (budget meters, the report
+  chart and tables, the tags field, selection mode).
+- [ ] The converted views of budgets and reports with live provider rates (every check ran with rates off or with
+  manual rates).
 - [ ] Weekend-only and holiday-only date ranges against the live Frankfurter API.
 
 **Optional work** (gaps left on purpose; none is queued)
 
+- [ ] Repeating transfers; a rule's upcoming occurrences as "projected" days on the wallet page; tags on rules.
+- [ ] Budgets per wallet group, and a history of past budget amounts (a past month is compared with today's).
+- [ ] Tags on transfers.
+- [ ] A wallet card's "this month" change stopping at today, like the balance next to it.
+- [ ] Reports: a yearly export or print view; more than one year back.
 - [ ] Statement Importer: pair cross-currency transfers between two statements.
 - [ ] Statement Importer: virtualise the review table (slow with a few thousand rows).
 - [ ] Statement Importer: a merge option when loading a context file (it replaces the lists today).
@@ -664,7 +687,14 @@ it is done; the details of each gap are under "Known gaps" below.
 - [ ] Typing a date into the date picker.
 - [ ] Importing a context file into the app itself.
 
-New features beyond these have not been chosen yet.
+**Considered on 2026-11-25 and not built** (each needs a decision by the owner first)
+
+- Wallets shared between accounts: the owner said not to build it.
+- Splitting one entry across categories: it breaks the rule that an entry has one category, which every report,
+  import and export relies on.
+- Receipt attachments: needs a decision on where files live (the image holds no data; Postgres or a new volume).
+- Category icons (colours were added), and an administrator page (listing users, resetting passwords in the app
+  instead of `scripts/reset-password.mjs`).
 
 ## Known gaps
 
