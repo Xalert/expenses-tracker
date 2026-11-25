@@ -207,6 +207,18 @@ export function EntryForm({
   // Categories made with "+ New category" since the page was rendered; the refreshed props bring them too (deduped).
   const [created, setCreated] = useState<CategoryOption[]>([]);
   const allCategories = [...categories, ...created.filter((c) => !categories.some((p) => p.id === c.id))];
+  // The pill of a category just created, focused once the picker has remounted with it checked. An effect, not a
+  // requestAnimationFrame: the update runs inside the action's transition, which need not have committed by the next
+  // frame (in Firefox and WebKit it often had not), so the callback found no pill and focus was lost.
+  const focusCreated = useRef<number | null>(null);
+  useEffect(() => {
+    const id = focusCreated.current;
+    if (id === null) return;
+    const pill = formRef.current?.querySelector<HTMLInputElement>(`input[name="categoryId"][value="${id}"]`);
+    if (!pill) return;
+    focusCreated.current = null;
+    pill.focus();
+  });
   // Bumped to remount the form with a restored draft.
   const [remount, setRemount] = useState(0);
   // Defaults for the uncontrolled fields (amount, note…) that win over the echoed / initial values, for one form
@@ -475,14 +487,9 @@ export function EntryForm({
                 idPrefix={idPrefix}
                 pillClassName={cn(dashedPill, focusRing)}
                 onCreated={(c) => {
+                  focusCreated.current = c.id;
                   setCreated((list) => [...list, c]);
                   setCategoryId(String(c.id));
-                  // After the picker has remounted with the new pill checked.
-                  requestAnimationFrame(() =>
-                    formRef.current
-                      ?.querySelector<HTMLInputElement>(`input[name="categoryId"][value="${c.id}"]`)
-                      ?.focus(),
-                  );
                 }}
               />
               {/* Leaves the form: what was typed is kept as a draft and comes back when this form opens again. */}
