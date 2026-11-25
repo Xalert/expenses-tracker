@@ -3,7 +3,7 @@ import { seedEntry, seedGroup, seedTransfer, seedWallet } from "./support/seed";
 
 // Every main page, with enough data to fill its cards, at 375px in both colour schemes: nothing scrolls sideways and
 // nothing logs a console error (the fixture checks that after each test).
-const PAGES = ["/", "/transactions", "/transactions/new", "/wallets", "/wallets/new", "/categories", "/data", "/account", "/rates"];
+const PAGES = ["/", "/transactions", "/transactions/new", "/wallets", "/wallets/new", "/categories", "/reports", "/data", "/account", "/rates"];
 
 for (const colorScheme of ["light", "dark"] as const) {
   test.describe(`${colorScheme} scheme`, () => {

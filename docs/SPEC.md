@@ -125,7 +125,8 @@ this file in the same change and call the deviation out in your final report.
   the amount sent and the amount received (no exchange-rate service). Legs are only ever edited/deleted through
   the transfer, never individually.
 - **No currency conversion, except the "All in <currency>" views.** Totals are grouped per currency everywhere
-  except, in their default "All in <currency>" view, the Overview, the /transactions day strip and /categories,
+  except, in their default "All in <currency>" view, the Overview, the /transactions day strip, /categories and
+  /reports,
   which convert every wallet into the selected currency (amounts at each day's rate; the Overview's Wallets total
   at the rate of the day its balances are for: today, or a past month's last day; see Overview → "Converted
   view"). Wallet pages never convert (one wallet is one currency). Nothing converted is ever stored; only the
@@ -373,6 +374,7 @@ src/
   lib/chart-scale.ts  lib/overview.ts               # pure chart scale + Overview helpers (cap rule, axis, pace wording)
   app/(app)/@modal/                                 # intercepted dialog routes: (.)transactions/new, (.)wallets/new, (.)wallets/[id]/edit
   server/insights.ts                                # per-currency timelines and insight figures (redesign)
+  server/reports.ts  lib/reports.ts  components/reports/  (app)/reports/   # the year view (see "Reports")
   server/exchange-rates.ts  server/manual-rates.ts  lib/fx.ts   # provider rates (DB cache), own rates, conversion maths
   (app)/rates/                                    # /rates: the user's own exchange rates (page, actions, forms)
   components/dashboard/conversion.tsx             # ConvertSwitch + ConversionNotes ("All in <currency>" controls)
@@ -420,7 +422,7 @@ each as `Promise<…>`. Ids are `number`. Accessing another user's row
 behaves exactly like a missing row: getters resolve `null`, mutations reject with `NOT_FOUND`.
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
-`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
+`receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
 `actualBalance`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
@@ -849,7 +851,7 @@ values (Sand light, Graphite dark) are in "UI direction".
 
 The look, tokens and shared patterns are in "UI direction" below; the reference mock-ups are the Design canvas
 listed there. Every amount is shown in its own currency; nothing is converted (the exception is the
-"All in <currency>" view of the Overview, the /transactions day strip and /categories, below). Where a screen shows one currency
+"All in <currency>" view of the Overview, the /transactions day strip, /categories and /reports, below). Where a screen shows one currency
 at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 
 - **/login, /register** — a centred card on the page background (brand mark + "Expenses" above it; a faint
@@ -862,7 +864,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   autocapitalise / autocorrect / spellcheck.
 - **App shell** (`(app)/layout.tsx`) — **no sidebar and no bottom tab bar.** A top bar on every signed-in page:
   brand mark + "Expenses" (links to `/`), then the main menu **Overview · Transactions · Wallets · Categories ·
-  Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
+  Reports · Import & export** (`aria-current="page"` on the active one, shown as a filled pill), then the account button
   (initials from `user.displayName` in a circle) opening a popover with the display name, the user-ID / email line
   (see Auth) and Sign out. **Group switcher** (only with two or more wallet groups): a select left of the account
   button, see "Wallet groups". On narrow screens the bar is two rows: brand + account button, then the menu as a
@@ -882,7 +884,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - As built (step 1): `src/app/(app)/@modal/` has `default.tsx` (null), the intercepted `(.)transactions/new`,
     `(.)wallets/new`, `(.)wallets/[id]/edit`, and **a `page.tsx` returning null at every other `(app)` route**
     (`page.tsx` for `/`, `transactions/`, `transactions/[id]/edit/`, `transactions/transfers/[id]/edit/`,
-    `wallets/`, `wallets/[id]/`, `categories/`, `data/`, `account/`, `rates/`). Without them a soft navigation out of a dialog leaves
+    `wallets/`, `wallets/[id]/`, `categories/`, `reports/`, `data/`, `account/`, `rates/`). Without them a soft navigation out of a dialog leaves
     the slot on the dialog's segment, and in `next dev` opening the same dialog again was then ignored. The docs'
     catch-all `@modal/[...catchAll]` is not usable: Next 16's strict route matching then rejects the `(auth)`
     pages. A new `(app)` page needs its null page here; `tests/shell.test.tsx` fails until it has one. Each full page and its intercepted copy render one shared body from
@@ -958,7 +960,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
 - **Provider**: Frankfurter (`https://api.frankfurter.dev/v1/<from>..<to>?base=EUR`), ECB reference rates, no API
   key, cross rates through EUR. A converted view asks `getDailyRates(from, to)` for the days from a week before
   `from` to `min(to, today)` (the Overview and the strip: the previous and the shown month; /categories: the shown
-  month). Requests are made only when something needs converting; 4 s timeout; never throws.
+  month; /reports: the previous and the shown year, one range). Requests are made only when something needs converting; 4 s timeout; never throws.
 - **Stored in the database, shared by every user and process**: each published day's rates in `exchange_rates`,
   each calendar day asked about in `exchange_rate_days`. The database is looked up first and only the days it has
   no current answer for are fetched (one request for the span from the first to the last such day). A day's answer
@@ -2151,6 +2153,102 @@ As built (order, colour, archive):
   wallets, the pages show their normal empty states.
 - **Import** (`/data`): see "Import / export"; new wallets go into the selected group, and from two groups the panel
   says so and the preview names each wallet's group and the groups to create.
+
+## Reports
+
+Every other view is one month; `/reports` is one year. Added 2026-11-25.
+
+### Rules
+
+- **What counts**: expenses and income only (transfers never count, as everywhere), dated in the year, on every
+  wallet of the selected currency — archived wallets and archived categories included (it is history) — narrowed
+  to the selected wallet group (the scope, as on the Overview). Future-dated entries of the year count in the
+  year's totals, the chart and the tables, like the Overview's month figures.
+- **Converted view**: the Overview's rule and controls. `?view=only` → only wallets in the currency; "All in
+  <currency>" (default when a wallet, archived included, is in another currency) → every currency, each day's sums
+  converted at that day's rate (`tableFor`: provider rate, else the user's own); a currency without a rate is left
+  out and named (`monthConversionNotes`, `ratesNeeded`, "Enter a rate for …"). One `getConversion(userId,
+  <previous year>-01-01, <year>-12-31)` serves the page: `getDailyRates` asks the provider for one range (a week
+  before the previous year's 1 January to `min(31 Dec, today)`), only for the days not stored yet, so a year is at
+  most **one** provider request and none once stored (a past day fetched after it ended is final). Checked live
+  on 2026-11-25: Frankfurter answers a 23-month range with every business day (486 days × 30 currencies).
+- **Comparison**: a past year against the whole previous year. The current year against **the same period** of the
+  previous year: 1 January to today against 1 January to the same date a year earlier (`addMonths(today, -12)`, so
+  29 Feb → 28 Feb). Entries dated after today are then in the year's totals but not in the compared figure; the
+  card says so ("€88.00 by 25 Nov vs …").
+- **Year**: `?year=YYYY` (four digits, 1900 or later), default the current year in the account's time zone
+  (`todayInZone`); a later year is clamped to the current one, anything invalid is the current year. No stepping
+  into the future or before 1900.
+- **Currency**: `resolveOverviewCurrency` — a held `?currency=` (archived wallets included) wins, else the currency
+  with the most expense + income entries in the year (`pickDefaultCurrencyBetween`, the same rule as
+  `pickDefaultCurrency` over a date range), else (only archived wallets) their first currency by code.
+
+### Services
+
+```ts
+// insights.ts (shared helpers, exported for reports.ts; behaviour unchanged)
+pickDefaultCurrencyBetween(userId, from, to, opts?: { groupId? }): string | null   // pickDefaultCurrency over [from, to]
+currencyConditions(userId, currency | null, narrow?)  converter(to, convert?)          // the month services' own helpers
+
+// reports.ts
+type YearTotals = { incomeMinor; expenseMinor; netMinor }
+type ReportCategoryRow = { categoryId; name; archived: boolean; months: number[] /* 12, Jan first */; totalMinor }
+getYearReport(userId, { year: 'YYYY'; currency; today: 'YYYY-MM-DD'; groupId?; convert?: Conversion }): {
+  year;
+  totals: YearTotals;                                  // every entry dated in the year
+  months: (YearTotals & { month: 'YYYY-MM' })[];       // 12
+  comparison: { previousYear; through: { current; previous } | null;   // null for a past year
+                current: YearTotals; previous: YearTotals };            // current year: both run to `through`
+  expenseCategories: ReportCategoryRow[]; incomeCategories: ReportCategoryRow[];   // amount ≠ 0 only; largest
+                                                       // total first, then compareCategoryNames, then id
+  missingCurrencies?: string[];                        // with convert only
+}
+// Invalid year → VALIDATION (field year); currency → (field currency); today → (field date). One SQL query:
+// sums per date, kind, wallet currency and category over the previous and the shown year; everything else in JS.
+```
+
+`src/lib/reports.ts` (pure): `isValidYear`, `resolveReportYear(requested, maxYear)`, `yearMonths(year)`,
+`reportsHref(year, currency | null, maxYear, view)` (`/reports?year=…&currency=…&view=only`, the current year and
+the default view left out), `comparisonThrough(year, today)`, `periodLabel(date)` ("1 Jan – 25 Nov"),
+`percentChange(current, previous)` (whole percent, null when previous is 0), `comparisonSub(…)` (the line under a
+total), `wholeUnits(minor, currency)` (table cells: "1,235"), `compactMoney(minor, currency, { signed? })` ("€1.2K").
+
+### Screen
+
+- **/reports** ("Reports", in the main menu between Categories and Import & export; `@modal/reports/page.tsx`
+  returns null). `PageHeader` "Reports" with "2026 · EUR" (+ " · <group>") under it; the actions: `YearStepper`
+  (`components/reports/year-stepper.tsx`: ‹ 2026 › as plain links with 44px arrows, the next arrow inert at the
+  current year, "This year" when another year is shown; links keep `currency` only when it came from the URL, and
+  `view=only`), the `CurrencySwitch` (Overview rule for showing it) and the `ConvertSwitch` (when another currency is
+  held). `ConversionNotes` under the header. No wallets → "Create your first wallet" (or "No wallets in <group>").
+  A year with no counted entry → an empty state "No entries in 2024" (no chart, no tables).
+- **Totals**: a muted `<h2>` "2026 so far, against the same period of 2025 (1 Jan – 25 Nov)" or "The whole of 2025,
+  against 2024", then three `InsightCard`s — Income (income tone), Expenses, Net (signed, `toneOf`) — each with
+  `comparisonSub`: "vs €9,100.00 in 2025 · +12%" (net: "vs +€900.00 in 2025", no percentage), "nothing in 2025"
+  when there was nothing. Two columns on phones (Net spans both), three from `sm`.
+- **Month by month** card (`components/reports/year-chart.tsx`): legend (Income · Expenses · Net (own scale)), then
+  twelve columns each with two bars from a shared baseline — income `bg-income`, expenses `bg-accent` — on one scale
+  (the largest month; its compact amount labels the top-left), 150px tall (220px from `sm`); a month with nothing
+  shows a 2px `--border` stub. Months after the current one are not yet happened: `--chart-future` stubs, muted
+  labels, no link. Under the month labels, a 40px row of net bars around a dashed midline (up `bg-income`, down
+  `bg-expense`, on their own scale) and, from `sm`, the net per month in compact form ("+€1.2K", income / expense
+  text). Every month that has begun is a link (the whole column height, under the drawing, which is
+  `pointer-events-none`; hover shades the column) to that month on the Overview (`overviewHref(month, currency,
+  …, view)`), named "March 2026: income …, expenses …, net …. Open on the Overview" with the same text as `title`.
+  The bars are a `role="img"` with a summary ("Income and expenses per month in EUR, 2026. Most spent: Aug, …. Most
+  income: …. December has not happened yet."); a visually hidden table lists Month / Income / Expenses / Net
+  ("Not yet" for later months).
+- **Expenses by category**, then **Income by category** (`components/reports/category-year-table.tsx`): a card per
+  kind, a real `<table>` (`sr-only` caption): Category, Jan … Dec, Total; one row per category with an amount in
+  the year (largest first; "archived" under an archived one's name), a Total row. Cells are whole units of the
+  currency, no symbol (the line under the heading says "EUR, whole units"); income amounts in `text-income`. A
+  non-zero cell is a link (≥ 44px tall) named "Food, March 2026: €123.45" (exact, also its `title`) to
+  `/transactions?month=2026-03&category=<id>&currency=EUR` (+ `view=only`); a row total links to the category over
+  the whole year (`from` / `to`), a month total to `month` + `kind`. Zero cells are a muted dash ("nothing" for
+  screen readers). **Phones**: the table scrolls sideways inside its card (`overflow-x-auto`, the scroller is
+  `relative` so the `sr-only` caption cannot widen the page), the category column is `sticky` on `--surface`, and
+  the line under the heading adds "scroll sideways for every month" below `md`. The page itself never scrolls
+  sideways (`e2e/reports.spec.ts`, `e2e/layout.spec.ts`).
 
 ## Deployment — self-hosted with Docker
 

@@ -500,6 +500,31 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 | *(2026-11-18)* An archived group can be renamed and recoloured without unarchiving it: an Edit toggle in its row of the "Archived groups" section opens the Groups card's form (the service always allowed it) | Unarchiving just to rename showed it in the switcher meanwhile; one form for both lists | planner |
 | *(2026-11-18)* The entry services refuse new entries (and moving an entry) onto a wallet whose group is archived, exactly as onto an archived wallet; an entry already on it keeps it when edited | Before, only the pickers hid such wallets; the rule now holds for every caller | planner |
 
+### Reports
+
+Built 2026-11-25 (SPEC "Reports").
+
+| Decision | Why | Decided by |
+|---|---|---|
+| *(2026-11-25)* A yearly view at `/reports`, a new top-menu entry "Reports" between Categories and Import & export, with its null page under `@modal/` | Every other view is one month | planner |
+| *(2026-11-25)* `?year=YYYY`, default the current year in the account's time zone, a year stepper like the month switcher, no stepping into the future | The same URL-state pattern as `?month=` | planner |
+| *(2026-11-25)* The Overview's currency switch, "All in <currency> / <currency> only" switch, conversion (each day at that day's rate, a currency without a rate left out and named, the same notes and Rates link) and wallet-group scope, reusing its pieces | One rule for every converted view | planner |
+| *(2026-11-25)* Transfers never count; archived wallets and categories do | It is history | planner |
+| *(2026-11-25)* Contents: the year's income / expenses / net against the previous year (the current year against the same period of the previous one), a month-by-month chart linking each month to the Overview, category-by-month tables for expenses and income linking each cell to the filtered /transactions; an empty state for a year with no entries | The planner's brief | planner |
+| *(2026-11-25)* A year is one `getConversion` over the previous and the shown year (one provider range request at most, none once stored) and one SQL query grouped by date, kind, currency and category; nothing per month | Up to 731 days of rates and a year of entries must not mean 12 round trips | planner |
+| *(2026-11-25)* "Same period" for the current year is 1 Jan – today against 1 Jan – the same date a year earlier (`addMonths(today, -12)`: 29 Feb → 28 Feb) | The day-precise version of the Overview's "through day N" pace | built |
+| *(2026-11-25)* The year's totals, chart and tables include entries dated after today (like the Overview's month figures); only the compared figure stops at today, and the card says "€X by 25 Nov vs …" when the two differ | The totals then match the chart and the tables, and the comparison stays like-for-like | built |
+| *(2026-11-25)* Income and expenses are two bars per month on one scale; net is a separate small row of up / down bars on its own scale (labelled "Net (own scale)"), with the compact net written under each month from `sm` up; no cap rule | Net can be negative and is much smaller than either flow, so drawing it on the bars' scale (or as a second axis) would make it unreadable; months rarely have one outlier the way days do | built |
+| *(2026-11-25)* The net row has no figures below `sm` (twelve 28px columns cannot hold "+€1.2K"); the figures are in each month's link name, its `title`, the hidden table and the Net card | Text that would truncate or overlap reads worse than none | built |
+| *(2026-11-25)* Future months are not links (the Overview would clamp them to the current month) and are drawn as `--chart-future` stubs | A link that lands somewhere else is a trap | built |
+| *(2026-11-25)* The category tables use whole units without a symbol ("1,235"), the currency named once above the table, the exact amount in each link's accessible name and `title` | Thirteen money columns with cents and symbols do not fit even at 1280px | built |
+| *(2026-11-25)* On phones the tables scroll sideways inside their card with a sticky category column; the scroller is `relative` | The page must not scroll sideways; the `sr-only` caption (absolutely positioned) otherwise escaped the scroller and widened the page by the table's width — the e2e layout check caught it | built |
+| *(2026-11-25)* Only non-zero cells are links; zero cells are a muted dash. A row total links to the category over the year (`from` / `to`), a month total to that month and kind. Links carry `currency` (and `view=only`) so the day strip shows the same currency | A link to an empty list is noise; the totals deserve the same drill-down as the cells | built |
+| *(2026-11-25)* The default currency for a year is the one with the most entries in that year (`pickDefaultCurrencyBetween`, `pickDefaultCurrency`'s rule over a date range; `pickDefaultCurrency` now calls it) | The month rule applied to the year; a one-line refactor instead of a second copy | built |
+| *(2026-11-25)* `currencyConditions` and `converter` in `insights.ts` are exported (unchanged) for `reports.ts` | Reuse the month services' scoping and conversion instead of copying them | built |
+| *(2026-11-25)* Net's comparison has no percentage ("vs +€900.00 in 2025"); income and expenses show whole-percent change, "nothing in 2025" when the previous figure is 0 | A percentage of a net amount that can change sign reads badly | built |
+| *(2026-11-25)* The year stepper has no picker (the month switcher has one); years start at 1900 | Years are few and one step apart; plain links work without JavaScript | built |
+
 ### Process
 
 | Decision | Why | Decided by |
@@ -605,6 +630,13 @@ New features beyond these have not been chosen yet.
   leads to it needs scripts too: `/wallets/<id>?reconcile=1` works without them.
 - **The reconcile row lock covers two reconciliations only:** an ordinary new entry (`createTransaction`) does not lock
   the wallet row, so one saved in the same instant can land between the balance read and the adjustment.
+- **/reports below `sm`** shows the month-by-month net as bars only, without figures (see the Reports decisions), and
+  the chart's columns are about 28px wide: the month links are full-height columns, so they are wide enough to
+  tap but narrower than 44px. The category tables need sideways scrolling for most months.
+- **/reports has no yearly export or print view**, and no comparison beyond the previous year (no multi-year trend).
+- **A cell link on /reports with "All in" counts converted amounts, but the /transactions list it opens shows each
+  entry in its own currency**, so the list's sum can differ from the cell for a category with entries in several
+  currencies.
 
 ### Statement importer gaps
 
@@ -624,6 +656,14 @@ New features beyond these have not been chosen yet.
   when it does).
 
 ### Not verified
+
+- **/reports (2026-11-25).** Checked: service and render tests on PGlite, `e2e/reports.spec.ts` and
+  `e2e/layout.spec.ts` (headless Chromium, 375px and 1280px, both schemes, manual rates only), screenshots at 375px
+  and 1280px in light and dark of a full past year, the partial current year and an empty year, looked at by eye.
+  One live request to Frankfurter for a 23-month range came back with every business day. Not checked: the page
+  converting with the live provider in the browser (the e2e server runs with `EXCHANGE_RATES=false`), a screen
+  reader on the chart and the tables, Safari / Firefox (sticky table column), and the query time on a large real
+  account.
 
 - **End-to-end browser suite (2026-11-18, three engines since 2026-11-25): what it does and does not cover.** `e2e/`
   (Playwright, production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in
