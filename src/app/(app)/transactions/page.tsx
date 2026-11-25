@@ -29,7 +29,7 @@ import { Card, CurrencySwitch, EmptyState, LinkButton, PageHeader, buttonClasses
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
-import { currentMonth, formatMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { formatMonth, monthRange, shiftMonth, todayInZone } from "@/lib/dates";
 import { monthConversionNotes, ratesHref, ratesNeeded, resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
 import { toCategoryOptions, toWalletOptions } from "./form-options";
@@ -60,8 +60,8 @@ export default async function TransactionsPage({
   const params = parseListParams(sp);
   // A no-JS GET form leaves empty fields in the URL (`?q=`, `?wallet=`): show the same list under its clean URL.
   if (hasEmptyParams(sp)) redirect(listHref(params));
-  const thisMonth = currentMonth();
-  const today = todayISO();
+  const today = todayInZone(user.timeZone);
+  const thisMonth = today.slice(0, 7);
   const view = resolveView(params, thisMonth);
   const { selected, groups } = await getGroupScope();
   const groupId = selected?.id;

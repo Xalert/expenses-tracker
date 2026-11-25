@@ -95,7 +95,7 @@ export function ProfileForm({ timeZones, ...user }: ProfileFormProps) {
       <Field
         id="timeZone"
         label="Time zone"
-        hint="Used to date imported Spendee entries, whose times are in UTC, so every browser dates them alike."
+        hint="Sets your “today” (default dates, the current month; without one, the server’s date) and dates imported Spendee entries, whose times are in UTC."
         error={err.timeZone}
       >
         <Select

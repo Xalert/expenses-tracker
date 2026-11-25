@@ -5,7 +5,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { getDb, schema } from "@/db";
-import { currentMonth, todayISO } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { listCategories, type CategoryView } from "@/server/categories";
 import { setManualRate } from "@/server/manual-rates";
 import { createTransaction } from "@/server/transactions";
@@ -16,6 +16,19 @@ import { createWallet, type WalletView } from "@/server/wallets";
 
 export const PASSWORD = "e2e-password-1";
 export const SESSION_COOKIE = "et_session";
+
+/** Every seeded user's account time zone (and the browser's: `timezoneId` in playwright.config.ts). */
+export const E2E_TIME_ZONE = "Europe/Berlin";
+
+/** Today as the app sees it for a seeded user: in the account's zone, not this process's (CI runs in UTC). */
+export function todayISO(timeZone: string = E2E_TIME_ZONE): string {
+  return todayInZone(timeZone);
+}
+
+/** The current month for a seeded user (see `todayISO`). */
+export function currentMonth(timeZone: string = E2E_TIME_ZONE): string {
+  return todayISO(timeZone).slice(0, 7);
+}
 
 let counter = 0;
 /** A user ID nobody else in this run has (lowercase letters, digits and dashes). */
@@ -39,7 +52,7 @@ export async function seedUser(opts: { username?: string; firstName?: string; ti
     username,
     password: PASSWORD,
     firstName: opts.firstName,
-    timeZone: opts.timeZone ?? "Europe/Berlin",
+    timeZone: opts.timeZone ?? E2E_TIME_ZONE,
   });
   const token = await openSession(user.id, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/130.0 Safari/537.36");
   return { id: user.id, username, password: PASSWORD, token };
@@ -103,5 +116,3 @@ export async function seedManualRate(
 ) {
   return setManualRate(userId, { ...input, effectiveDate: input.effectiveDate ?? `${currentMonth()}-01` });
 }
-
-export { todayISO, currentMonth };

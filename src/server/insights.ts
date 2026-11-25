@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import { categories, transactions, wallets } from "@/db/schema";
 import { compareCategoryNames } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
-import { isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { isValidMonth, monthRange, shiftMonth } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { convertMinor, tableFor, type Conversion } from "@/lib/fx";
 import { assertDate, assertId, isPgId } from "./_validate";
@@ -14,7 +14,7 @@ import { signedAmountSql } from "./wallets";
 // and nothing is converted. "Expense" / "income" mean transactions of those kinds (transfers excluded) on every
 // wallet of that currency, archived included, unless a `walletId` narrows it — so the numbers match the
 // Transactions list. Day N is today's day of the month for the current month, the month's last day for a past
-// month, and 0 for a future month (server local time).
+// month, and 0 for a future month; "today" is the user's (`todayInZone`), passed in by the caller.
 //
 // The one exception is `convert` (view "All in <currency>" on Overview, the /transactions day strip and
 // /categories): the month figures then cover every wallet, each currency converted into `currency` at the rate of
@@ -96,8 +96,11 @@ function monthDates(month: string): string[] {
   return Array.from({ length: monthLength(month) }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`);
 }
 
-/** Day N: today's day for the current month, the last day for a past month, 0 for a future month. */
-export function monthDayN(month: string, today: string = todayISO()): number {
+/**
+ * Day N: today's day for the current month, the last day for a past month, 0 for a future month. `today` is the
+ * user's (`todayInZone`).
+ */
+export function monthDayN(month: string, today: string): number {
   const current = today.slice(0, 7);
   if (month === current) return Number(today.slice(8));
   return month < current ? monthLength(month) : 0;
@@ -349,10 +352,13 @@ export function pickTopCategory<T extends TopCategoryRow>(rows: T[]): T | undefi
   )[0];
 }
 
-/** The Overview insight cards for one month and currency (with `convert`: every currency, converted). */
+/**
+ * The Overview insight cards for one month and currency (with `convert`: every currency, converted). `today` (the
+ * user's, `todayInZone`) decides how far into the month the pace and no-spend days count.
+ */
 export async function getMonthInsights(
   userId: number,
-  opts: { month: string; currency: string; groupId?: number; convert?: ConvertOption },
+  opts: { month: string; currency: string; today: string; groupId?: number; convert?: ConvertOption },
 ): Promise<MonthInsights> {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
@@ -378,7 +384,7 @@ export async function getMonthInsights(
     expenseMinor += expenseOn(flows, date);
   }
 
-  const n = monthDayN(month);
+  const n = monthDayN(month, opts.today);
   const throughN = dates.slice(0, n);
   const previousThroughN = previousDates.slice(0, Math.min(n, previousDates.length));
   const sumExpenses = (ds: string[]) => ds.reduce((s, d) => s + expenseOn(flows, d), 0);
@@ -453,13 +459,13 @@ export async function getMonthInsights(
 
 /**
  * One wallet's month: opening balance, money in / out (transfers included), the balance after each day 1..N and,
- * for the days after today, the projected balance after each (`projectedDays`). `today` is for tests.
+ * for the days after today, the projected balance after each (`projectedDays`). `today` is the user's (`todayInZone`).
  */
 export async function getWalletMonth(
   userId: number,
   walletId: number,
   month: string,
-  { today = todayISO() }: { today?: string } = {},
+  { today }: { today: string },
 ): Promise<WalletMonth | null> {
   const { from, to } = monthRange(assertMonth(month));
   if (!isPgId(walletId)) return null;

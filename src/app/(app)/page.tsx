@@ -8,7 +8,7 @@ import { Card, CardHeader, CurrencySwitch, EmptyState, InsightCard, LinkButton, 
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
-import { currentMonth, formatMonth, isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { formatMonth, isValidMonth, monthRange, shiftMonth, todayInZone } from "@/lib/dates";
 import { convertedTotal, tableFor, tableOn } from "@/lib/fx";
 import { formatMoney } from "@/lib/money";
 import {
@@ -44,7 +44,8 @@ const LATEST_COUNT = 5;
 export default async function OverviewPage({ searchParams }: Props) {
   const user = await requireUser();
   const params = await searchParams;
-  const maxMonth = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const maxMonth = today.slice(0, 7);
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
   const { selected } = await getGroupScope();
@@ -98,14 +99,13 @@ export default async function OverviewPage({ searchParams }: Props) {
 
   const isCurrentMonth = month === maxMonth;
   const previousMonth = shiftMonth(month, -1);
-  const dayN = monthDayN(month);
+  const dayN = monthDayN(month, today);
   // One view for the whole page. "all" (default): the month figures cover every wallet, converted into `currency`
   // at each day's rate, and the Wallets card shows every active wallet with a converted total. "only": just
   // `currency`, nothing converted. When every wallet (archived included) is in `currency` there is nothing to choose.
   const canSwitchView = held.some((c) => c !== currency);
   const view = canSwitchView ? resolveOverviewView(params.view) : "all";
   const ratesOn = exchangeRatesEnabled();
-  const today = todayISO();
   // The day the figures run to: today for the current month, the month's last day for a past one. The Wallets card
   // shows the balances and converts at the rates of that day too.
   const lastDate = isCurrentMonth ? today : monthRange(month).to;
@@ -117,7 +117,7 @@ export default async function OverviewPage({ searchParams }: Props) {
     ? await getConversion(user.id, monthRange(previousMonth).from, monthRange(month).to)
     : undefined;
   const timeline = await getMonthTimeline(user.id, { month, currency, convert, groupId });
-  const insights = await getMonthInsights(user.id, { month, currency, convert, groupId });
+  const insights = await getMonthInsights(user.id, { month, currency, today, convert, groupId });
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
   const monthMissing = [
     ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
@@ -153,7 +153,7 @@ export default async function OverviewPage({ searchParams }: Props) {
 
   const changes = new Map<number, number>();
   for (const w of shownWallets) {
-    const m = await getWalletMonth(user.id, w.id, month);
+    const m = await getWalletMonth(user.id, w.id, month, { today });
     changes.set(w.id, m ? m.inMinor - m.outMinor : 0);
   }
 

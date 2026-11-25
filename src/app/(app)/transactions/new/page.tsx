@@ -14,7 +14,7 @@ export default async function NewTransactionPage({ searchParams }: { searchParam
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Add transaction" />
-      <NewEntry userId={user.id} searchParams={sp} returnTo={safeReturnTo(sp.returnTo)} />
+      <NewEntry user={user} searchParams={sp} returnTo={safeReturnTo(sp.returnTo)} />
     </div>
   );
 }

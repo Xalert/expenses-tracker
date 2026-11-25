@@ -236,7 +236,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     expect(await pickDefaultCurrency(alice.id, MONTH, { groupId: personal })).toBe("EUR");
     expect(await pickDefaultCurrency(alice.id, MONTH, { groupId: await getDefaultGroupId(bob.id) })).toBeNull();
 
-    const i = async (groupId?: number) => getMonthInsights(alice.id, { month: MONTH, currency: "EUR", groupId });
+    const i = async (groupId?: number) => getMonthInsights(alice.id, { today: "2026-11-25", month: MONTH, currency: "EUR", groupId });
     expect(await i()).toMatchObject({ expenseMinor: 4200, incomeMinor: 9000 });
     expect(await i(personal)).toMatchObject({ expenseMinor: 1200, incomeMinor: 0, topCategory: { categoryName: "Food" } });
     expect(await i(business)).toMatchObject({ expenseMinor: 3000, incomeMinor: 9000, topCategory: { categoryName: "Bills" } });
@@ -255,7 +255,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     const { personal, business } = await setup();
     const rates: DailyRates = { base: "EUR", days: [{ date: "2026-03-06", rates: { USD: 2 } }] };
     const convert = { rates };
-    const i = async (groupId?: number) => getMonthInsights(alice.id, { month: MONTH, currency: "EUR", groupId, convert });
+    const i = async (groupId?: number) => getMonthInsights(alice.id, { today: "2026-11-25", month: MONTH, currency: "EUR", groupId, convert });
     expect((await i(personal)).expenseMinor).toBe(1200);
     expect((await i(business)).expenseMinor).toBe(3000 + 350); // 700 USD at 2 USD per EUR
     expect((await i()).expenseMinor).toBe(1200 + 3350);

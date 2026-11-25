@@ -6,7 +6,7 @@ import { GroupDot } from "@/components/wallets/group-dot";
 import { GroupsCard } from "@/components/wallets/groups-card";
 import { ArchivedWallets, WalletGroup, type WalletCardMonth } from "@/components/wallets/wallet-cards";
 import { requireUser } from "@/lib/auth";
-import { currentMonth } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { getGroupScope } from "@/lib/group-scope";
 import { getWalletMonth, listUserCurrencies } from "@/server/insights";
 import type { WalletGroupView } from "@/server/wallet-groups";
@@ -24,11 +24,12 @@ export default async function WalletsPage() {
   const shown = all.filter((w) => !w.groupArchived);
   const active = shown.filter((w) => w.archivedAt === null);
   const archived = shown.filter((w) => w.archivedAt !== null);
-  const month = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const month = today.slice(0, 7);
 
   const months = new Map<number, WalletCardMonth>();
   for (const w of active) {
-    const m = await getWalletMonth(user.id, w.id, month);
+    const m = await getWalletMonth(user.id, w.id, month, { today });
     if (m) {
       months.set(w.id, {
         openingMinor: m.openingMinor,

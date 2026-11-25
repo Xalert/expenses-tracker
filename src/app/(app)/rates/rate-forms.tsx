@@ -45,6 +45,7 @@ export function RateForm({ currency, bases, today }: { currency: string; bases: 
           <DatePicker
             id={id("effectiveDate")}
             name="effectiveDate"
+            today={today}
             defaultValue={v.effectiveDate ?? today}
             error={err.effectiveDate}
             required

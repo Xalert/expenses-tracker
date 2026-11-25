@@ -5,14 +5,33 @@ const MONTH_RE = /^(\d{4})-(\d{2})$/;
 
 const pad = (n: number, len = 2) => String(n).padStart(len, "0");
 
-/** Today in the server's local time zone, as `YYYY-MM-DD`. */
+/**
+ * Today in the server's local time zone, as `YYYY-MM-DD`. Request paths use `todayInZone(user.timeZone)` instead;
+ * this is its fallback, and what the demo seed and tests use.
+ */
 export function todayISO(now: Date = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/** Current month in the server's local time zone, as `YYYY-MM`. */
+/** Current month in the server's local time zone, as `YYYY-MM` (see `todayISO`). */
 export function currentMonth(now: Date = new Date()): string {
   return todayISO(now).slice(0, 7);
+}
+
+/**
+ * Today (`YYYY-MM-DD`) in an IANA time zone: the account's (`CurrentUser.timeZone`), so "today" on a request is the
+ * signed-in user's date, not the server's. No zone, or one this runtime's `Intl` does not know, falls back to the
+ * server's local date (`todayISO`). The current month is `.slice(0, 7)` of it.
+ */
+export function todayInZone(timeZone: string | null | undefined, now: Date = new Date()): string {
+  if (timeZone) {
+    try {
+      return dateInTimeZone(now.getTime(), timeZone);
+    } catch {
+      // RangeError: a zone this runtime does not know (stored under another ICU version). Use the server's date.
+    }
+  }
+  return todayISO(now);
 }
 
 /** True for a real calendar date in `YYYY-MM-DD` form (rejects 2025-02-30). */
