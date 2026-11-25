@@ -1,0 +1,52 @@
+# Dependabot version updates: monthly and grouped, so a one-person project gets a handful of pull requests a month.
+# Each pull request runs the Docker image and E2E workflows. Security updates are separate (repository settings).
+# See docs/DECISIONS.md (2026-11-25).
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Skip releases younger than a week (a compromised package is usually pulled within days).
+    cooldown:
+      default-days: 7
+    groups:
+      # `next` and `eslint-config-next` are pinned to the same exact version and must move together, with React and
+      # its types. Listed first: a dependency joins the first group it matches. No update-types, so majors too.
+      next-react:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      # Everything else: one pull request for all minor and patch updates. Majors come one pull request each.
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # @types/node follows the Node major the app runs on (node:24 in the Dockerfile and the workflows); it moves
+      # with that, by hand.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  # The workflows pin actions to major tags (actions/checkout@v4): only new majors are proposed, all in one PR.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The Dockerfile's base stage (node:24-bookworm-slim). The floating tag already picks up Node and Debian patches on
+  # every rebuild, so this only proposes a new Node major; take an LTS one, close a PR for an odd (non-LTS) major.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"

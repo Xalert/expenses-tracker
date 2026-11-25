@@ -353,7 +353,8 @@ src/
   server/wallets.ts  server/wallet-groups.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
   server/users.ts  server/_validate.ts (internal helpers)
-scripts/seed.ts  tests/  drizzle/
+  app/manifest.ts                                   # web app manifest (/manifest.webmanifest); icons in public/
+scripts/seed.ts  scripts/generate-icons.mjs  tests/  drizzle/
 ```
 
 `src/db/index.ts`: `getDb(): Promise<DB>` (a memoized promise on `globalThis`, so it survives HMR: connects, applies
@@ -2123,7 +2124,8 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   (`retry()`) for any other error.
 - **Password reset script.** The image also holds `/app/scripts/reset-password.mjs` (see Auth → "Forgotten
   password"); the Dockerfile copies it and fails the build if `node_modules/pg` is missing from the standalone output.
-- `Dockerfile`: multi-stage on `node:24-bookworm-slim`, final stage runs the standalone server as a non-root user,
+- `Dockerfile`: multi-stage on `node:24-bookworm-slim` (a literal `FROM node:24-bookworm-slim AS base` that the
+  `deps`, `build` and `runner` stages start from, so Dependabot can read it), final stage runs the standalone server as a non-root user,
   `EXPOSE 3000`, `HEALTHCHECK` on `/api/health`. The image is pure JavaScript (`pg` has no native module), so it
   builds for `linux/amd64` and `linux/arm64` without per-platform steps. No `/data` volume and no `DATABASE_URL`
   default in the image (the app requires `DATABASE_URL` in production). As built: deps stage runs `npm ci`;
@@ -2163,6 +2165,25 @@ Vercel or any hosted platform; remove any create-next-app Vercel boilerplate (RE
   --exit-on-error`; compares the row counts and the server major; `docker compose up -d`. Any failure after the app
   stopped moves the override aside (`.failed-<time>`, restoring a previous one) and starts the old setup again. The
   old volume is never modified or removed; the script prints the `docker volume rm` to run later.
+- **Home-screen install.** `src/app/manifest.ts` is served at `/manifest.webmanifest` (a static route, built once)
+  and linked from every page by Next.js: `name` / `short_name` "Expenses", `id`, `start_url` and `scope` `/`,
+  `display: standalone`, `background_color` `#f4efe7` (Sand `--background`), `theme_color` `#fffcf7` (Sand
+  `--surface`), icons `/icons/icon-192.png` and `/icons/icon-512.png` (`purpose: any`) and
+  `/icons/maskable-512.png` (`purpose: maskable`). The root layout (`src/app/layout.tsx`) adds `icons.apple`
+  (`/apple-touch-icon.png`, 180×180) and `appleWebApp` (`capable`, title "Expenses", `statusBarStyle: "default"`,
+  which emits `mobile-web-app-capable`, `apple-mobile-web-app-title` and `apple-mobile-web-app-status-bar-style`);
+  its `viewport.themeColor` gives the Sand / Graphite `--surface` per `prefers-color-scheme`, and there is no
+  `viewport-fit=cover` (safe-area insets stay zero; see DECISIONS). The PNGs are committed in `public/`, rendered from
+  the brand mark by `node scripts/generate-icons.mjs` (Playwright's Chromium): "any" icons are the rounded accent
+  tile, maskable and apple-touch are full-bleed and opaque. They are plain static files, so the image needs no image
+  library; `public/` is copied into `.next/standalone/public` by the Dockerfile. All of them are public:
+  `src/proxy.ts` only acts on POSTs and the `(app)` layout does not cover them. **No service worker and no offline
+  mode.** `tests/web-app-manifest.test.ts` checks the manifest against `globals.css` and the files' sizes.
+- **Dependency updates.** `.github/dependabot.yml`: monthly. npm with a 7-day cooldown and two groups, `next-react`
+  (`next`, `eslint-config-next`, `react`, `react-dom`, `@types/react`, `@types/react-dom`, every update type;
+  listed first because a dependency joins the first group it matches) and `minor-and-patch` (everything else; other
+  majors are one PR each); `@types/node` majors are ignored. `github-actions` in one group (`actions`). `docker` for
+  the Dockerfile's base stage.
 - `.dockerignore` keeps `node_modules`, `.next`, `data`, `backups`, `.env*`, `.git`, `.github`, `deploy` out of the build context.
 - **Prebuilt image.** `.github/workflows/docker-image.yml`: job `test` (Node 24: `npm ci`, typecheck, lint,
   `npm test`), then job `image` builds `linux/amd64,linux/arm64` with Buildx (QEMU for arm64, GHA layer cache) and
