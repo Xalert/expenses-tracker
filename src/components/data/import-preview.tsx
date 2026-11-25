@@ -28,7 +28,12 @@ export function entriesToImport(p: ImportPreview): number {
 /** Whether confirming would change anything (entries, or only new wallets / categories / exchange rates). */
 export function hasSomethingToImport(p: ImportPreview): boolean {
   return (
-    entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length + p.manualRatesToAdd >
+    entriesToImport(p) +
+      p.walletsToCreate.length +
+      p.groupsToCreate.length +
+      p.categoriesToCreate.length +
+      p.manualRatesToAdd +
+      p.budgetsToAdd >
     0
   );
 }
@@ -58,6 +63,7 @@ export function previewDifferences(previewed: ImportPreview, result: ImportPrevi
     [result.groupsToCreate.length, previewed.groupsToCreate.length, "new group", "new groups"],
     [result.categoriesToCreate.length, previewed.categoriesToCreate.length, "new category", "new categories"],
     [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
+    [result.budgetsToAdd, previewed.budgetsToAdd, "budget", "budgets"],
   ];
   return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
 }
@@ -169,6 +175,13 @@ export function PreviewCard({
             Your own exchange rates:{" "}
             <strong className="font-semibold text-foreground">{p.manualRatesToAdd.toLocaleString("en-US")}</strong> to add
             to the Rates page.
+          </p>
+        )}
+        {p.budgetsToAdd > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            Budgets:{" "}
+            <strong className="font-semibold text-foreground">{p.budgetsToAdd.toLocaleString("en-US")}</strong> to add to
+            the Categories page.
           </p>
         )}
         {option}
@@ -386,6 +399,7 @@ export function ImportSuccess({ result: r, previewed }: { result: ImportPreview;
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
           {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
+          {r.budgetsToAdd > 0 && ` Added ${plural(r.budgetsToAdd, "budget", "budgets")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}
         </p>
       </div>

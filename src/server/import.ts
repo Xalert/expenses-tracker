@@ -1,7 +1,7 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, manualRates, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
+import { budgets, categories, manualRates, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
@@ -13,6 +13,7 @@ import { getDefaultGroupId, getOpenGroupRow, nextGroupPosition } from "./wallet-
 import { backupFormat } from "./import-formats/backup";
 import {
   addTally,
+  type BudgetSpec,
   categoryKey,
   type CategorySpec,
   emptyParsed,
@@ -106,6 +107,11 @@ export type ImportPreview = {
    * has is kept as it is, never replaced).
    */
   manualRatesToAdd: number;
+  /**
+   * Backup only: the file's budgets the account lacks (the overall one, or one for a category that has none, created
+   * or existing). A budget the account already has is kept as it is, never replaced.
+   */
+  budgetsToAdd: number;
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -422,6 +428,7 @@ type Plan = {
   categoryArchived: boolean[];
   categoriesToCreate: number[];
   manualRatesToAdd: ManualRateSpec[];
+  budgetsToAdd: BudgetSpec[];
   /** Non-blocking notes from planning (e.g. rates the account already had for a date). */
   notices: ImportNotice[];
   entriesToAdd: EntrySpec[];
@@ -564,6 +571,36 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     }
   }
 
+  // Budgets (backup): added for the overall budget and for categories (existing or created) that have none; an
+  // existing budget is kept, even when the file's differs (import adds, never changes; as the rates above).
+  const budgetsToAdd: BudgetSpec[] = [];
+  if (parsed.budgets?.length) {
+    const existingBudgets = new Map(
+      (
+        await tx
+          .select({ categoryId: budgets.categoryId, currency: budgets.currency, amountMinor: budgets.amountMinor })
+          .from(budgets)
+          .where(eq(budgets.userId, userId))
+      ).map((b) => [b.categoryId, b]),
+    );
+    let kept = 0;
+    for (const b of parsed.budgets) {
+      const target = b.category === null ? null : categoryTargets[b.category];
+      const existing = b.category !== null && target === null ? undefined : existingBudgets.get(target);
+      if (!existing) budgetsToAdd.push(b);
+      else if (existing.currency !== b.currency || existing.amountMinor !== b.amountMinor) kept++;
+    }
+    if (kept > 0) {
+      notices.push({
+        code: "budgets-kept",
+        count: kept,
+        message:
+          `${kept === 1 ? "1 budget" : `${fmtCount(kept)} budgets`} in the backup differ from the budget you already have ` +
+          `for that category; your own ${kept === 1 ? "is" : "are"} kept. Change ${kept === 1 ? "it" : "them"} on the Categories page if needed.`,
+      });
+    }
+  }
+
   // Existing entries as multisets (only needed when skipping duplicates) ------------------------------
   // In a CSV a wallet *is* its name + currency, so two same-named wallets of the account count as one for
   // duplicate detection (re-importing an export of such an account must still add nothing). A backup keeps
@@ -692,6 +729,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     categoryArchived,
     categoriesToCreate,
     manualRatesToAdd,
+    budgetsToAdd,
     notices,
     entriesToAdd,
     transfersToAdd,
@@ -738,6 +776,7 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
       ...(parsed.categories[i].archived ? { archived: true as const } : {}),
     })),
     manualRatesToAdd: plan?.manualRatesToAdd.length ?? 0,
+    budgetsToAdd: plan?.budgetsToAdd.length ?? 0,
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
     notices: [...parsed.notices, ...(plan?.notices ?? [])].map(publicLocation),
@@ -820,10 +859,28 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
         name: c.name,
         kind: c.kind,
         archivedAt: c.archived ? (c.archivedAt ? new Date(c.archivedAt) : now) : null,
+        // A backup's colour, only on the categories the import creates (existing ones keep theirs).
+        color: c.color ?? null,
         createdAt: now,
       })
       .returning({ id: categories.id });
     categoryIds[i] = created.id;
+  }
+
+  if (plan.budgetsToAdd.length > 0) {
+    await tx
+      .insert(budgets)
+      .values(
+        plan.budgetsToAdd.map((b) => ({
+          userId,
+          categoryId: b.category === null ? null : categoryIds[b.category]!,
+          currency: b.currency,
+          amountMinor: b.amountMinor,
+          createdAt: now,
+        })),
+      )
+      // Planned against this transaction's snapshot; a budget set meanwhile is kept.
+      .onConflictDoNothing();
   }
 
   for (const chunk of chunks(plan.manualRatesToAdd)) {

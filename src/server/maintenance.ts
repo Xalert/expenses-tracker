@@ -4,7 +4,8 @@ import { getDb, type DB } from "@/db";
 import { users } from "@/db/schema";
 import { currentMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { DEMO_USER } from "@/lib/demo";
-import { listCategories } from "@/server/categories";
+import { setBudget } from "@/server/budgets";
+import { listCategories, renameCategory } from "@/server/categories";
 import { createTransaction, type TransactionInput } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { registerUser } from "@/server/users";
@@ -161,6 +162,14 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
 
   // Between the two groups: the studio pays the owner.
   await createTransfer(user.id, { fromWalletId: studio.id, toWalletId: eurBank.id, amountMinor: 150000, date: day(thisMonth, 4), note: "Owner draw" });
+
+  // Two category colours and a few budgets (in EUR; Food and Transport also spend RON and USD, converted).
+  await renameCategory(user.id, cat("Food"), { name: "Food", color: "amber" });
+  await renameCategory(user.id, cat("Transport"), { name: "Transport", color: "teal" });
+  await setBudget(user.id, { categoryId: null, currency: "EUR", amountMinor: 250000 });
+  await setBudget(user.id, { categoryId: cat("Groceries"), currency: "EUR", amountMinor: 20000 });
+  await setBudget(user.id, { categoryId: cat("Food"), currency: "EUR", amountMinor: 4000 });
+  await setBudget(user.id, { categoryId: cat("Transport"), currency: "EUR", amountMinor: 6000 });
 
   return { userId: user.id, username: user.username, months: [lastMonth, thisMonth] };
 }

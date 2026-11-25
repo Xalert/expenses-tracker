@@ -68,7 +68,9 @@ describe("listCategoriesWithUsage", () => {
     await createCategory(alice.id, { name: "coffee", kind: "expense" });
 
     const list = await listCategoriesWithUsage(alice.id);
-    expect(list.map(({ id, name, kind, archivedAt }) => ({ id, name, kind, archivedAt }))).toEqual(await listCategories(alice.id));
+    expect(list.map(({ id, name, kind, archivedAt, color }) => ({ id, name, kind, archivedAt, color }))).toEqual(
+      await listCategories(alice.id),
+    );
     // case-insensitive name order: "coffee" sits between Bills and Food
     expect(list.filter((c) => c.kind === "expense").map((c) => c.name)).toEqual([
       "Bills", "coffee", "Food", "Groceries", "Housing", "Transport",
@@ -123,7 +125,7 @@ describe("listCategoriesWithUsage with a month and currency", () => {
 describe("createCategory", () => {
   it("creates a category, trimming and collapsing whitespace", async () => {
     const c = await createCategory(alice.id, { name: "  Eating   out\t ", kind: "expense" });
-    expect(c).toEqual({ id: expect.any(Number), name: "Eating out", kind: "expense", archivedAt: null });
+    expect(c).toEqual({ id: expect.any(Number), name: "Eating out", kind: "expense", archivedAt: null, color: null });
     expect(await getCategory(alice.id, c.id)).toEqual(c);
     expect(await listCategories(alice.id, "expense")).toContainEqual(c);
   });
@@ -176,7 +178,7 @@ describe("renameCategory", () => {
     const w = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
     const t = await createTransaction(alice.id, expense(w.id, alice.cat("Food"), 1500, "2026-03-02"));
     const r = await renameCategory(alice.id, alice.cat("Food"), { name: "  Eating  out " });
-    expect(r).toEqual({ id: alice.cat("Food"), name: "Eating out", kind: "expense", archivedAt: null });
+    expect(r).toEqual({ id: alice.cat("Food"), name: "Eating out", kind: "expense", archivedAt: null, color: null });
     expect((await getTransaction(alice.id, t.id))?.categoryName).toBe("Eating out");
     expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: alice.cat("Food"), categoryName: "Eating out", amountMinor: 1500 },

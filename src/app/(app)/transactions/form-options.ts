@@ -47,9 +47,10 @@ export async function walletOptions(userId: number, keepWalletIds: number[] = []
  * (history filters, an entry that already uses it) shows why it is there.
  */
 export function toCategoryOptions(categories: CategoryView[]): CategoryOption[] {
-  return categories.map(({ id, name, kind, archivedAt }) =>
-    archivedAt ? { id, name: `${name} (archived)`, kind, archived: true } : { id, name, kind },
-  );
+  return categories.map(({ id, name, kind, archivedAt, color }) => {
+    const option: CategoryOption = archivedAt ? { id, name: `${name} (archived)`, kind, archived: true } : { id, name, kind };
+    return color ? { ...option, color } : option;
+  });
 }
 
 /**

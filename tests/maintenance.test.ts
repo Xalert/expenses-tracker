@@ -25,7 +25,7 @@ const DEMO_COUNTS = {
   exchange_rates: 0,
   exchange_rate_days: 0,
   manual_exchange_rates: 0,
-  budgets: 0,
+  budgets: 4,
   recurring_transactions: 0,
   tags: 0,
   transaction_tags: 0,

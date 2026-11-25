@@ -142,11 +142,21 @@ function parseBackup(body: string): ParsedFile {
     const key = categoryKey(c.kind, name);
     let idx = categoryByKey.get(key);
     const archivedAt = c.archived && c.archivedAt ? new Date(c.archivedAt).toISOString() : undefined;
+    const color = isGroupColor(c.color) ? c.color : undefined;
     if (idx === undefined) {
       idx = out.categories.length;
       categoryByKey.set(key, idx);
-      out.categories.push({ name, kind: c.kind, key, archived: c.archived, ...(archivedAt ? { archivedAt } : {}) });
+      out.categories.push({
+        name,
+        kind: c.kind,
+        key,
+        archived: c.archived,
+        ...(archivedAt ? { archivedAt } : {}),
+        ...(color ? { color } : {}),
+      });
     } else {
+      // The first colour given wins.
+      if (color && !out.categories[idx].color) out.categories[idx].color = color;
       // Merged with an earlier one: archived only when every file category merged into it is (on the latest date).
       const merged = out.categories[idx];
       merged.archived = merged.archived && c.archived;
@@ -245,6 +255,50 @@ function parseBackup(body: string): ParsedFile {
       }
       seen.set(key, p);
       out.manualRates!.push({ currency, base, effectiveDate: r.effectiveDate, rate: rate!, loc: { path: p } });
+    });
+  }
+
+  // Budgets (optional list): one per expense category of the file (by name) and one overall (no `category`). The
+  // currency need not be held, as for the rates: a budget does not depend on a wallet.
+  if (data.budgets) {
+    const seen = new Map<string, string>();
+    out.budgets = [];
+    data.budgets.forEach((b, i) => {
+      const p = `budgets[${i}]`;
+      const before = out.problems.length;
+      const currency = b.currency.trim().toUpperCase();
+      const validCurrency = isValidCurrency(currency);
+      if (!validCurrency) problem(`${p}.currency`, `“${b.currency}” is not a supported ISO 4217 currency code.`);
+      checkDecimal(`${p}.amount`, b.amount, b.amountMinor, validCurrency ? currency : null);
+      let category: number | null = null;
+      if (b.category !== undefined && b.category !== null && b.category.trim() !== "") {
+        const name = check(() => normalizeCategoryName(b.category), (m) => problem(`${p}.category`, m));
+        if (name !== undefined) {
+          const idx = categoryByKey.get(categoryKey("expense", name));
+          if (idx === undefined) {
+            problem(
+              `${p}.category`,
+              categoryByKey.has(categoryKey("income", name))
+                ? `“${name}” is an income category; budgets are for expense categories.`
+                : `No expense category “${name}” in this file.`,
+            );
+          } else category = idx;
+        }
+      }
+      if (out.problems.length > before) return;
+      const key = category === null ? "overall" : String(category);
+      const earlier = seen.get(key);
+      if (earlier !== undefined) {
+        problem(
+          p,
+          category === null
+            ? `A second overall budget (the first is ${earlier}).`
+            : `A second budget for “${out.categories[category].name}” (the first is ${earlier}).`,
+        );
+        return;
+      }
+      seen.set(key, p);
+      out.budgets!.push({ category, currency, amountMinor: b.amountMinor, loc: { path: p } });
     });
   }
 

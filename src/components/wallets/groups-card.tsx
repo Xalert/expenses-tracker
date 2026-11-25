@@ -9,10 +9,10 @@ import {
   renameGroupAction,
 } from "@/app/(app)/wallets/actions";
 import { Button, FieldError, FormError, Input, Label, SubmitButton } from "@/components/ui";
+import { ColorChoice } from "@/components/ui/color-choice";
 import { ExpandableList, ExpandableRow, useExpandableRow } from "@/components/ui/expandable-row";
 import { cn } from "@/lib/cn";
 import { initialFormState, type FormState } from "@/lib/form";
-import { GROUP_COLORS, GROUP_COLOR_CLASS, GROUP_COLOR_LABELS } from "@/lib/group-colors";
 import { ActionButton } from "./action-button";
 import { GroupDot } from "./group-dot";
 
@@ -109,39 +109,6 @@ function MoveButtons({ group, first, last }: { group: GroupRowData; first: boole
         </button>
       </form>
     </div>
-  );
-}
-
-/**
- * The colour radios of the group forms (field `color`): None, then the palette as dots. `defaultValue` is the colour
- * to check ("" or null for None).
- */
-export function ColorChoice({ idPrefix, defaultValue }: { idPrefix: string; defaultValue?: string | null }) {
-  const checked = defaultValue ?? "";
-  const swatch =
-    "relative grid size-8 cursor-pointer place-items-center rounded-full border border-border " +
-    "has-checked:border-foreground has-checked:ring-2 has-checked:ring-foreground/20 " +
-    "has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring";
-  return (
-    <fieldset className="space-y-1.5">
-      <legend className="mb-1.5 text-sm font-semibold text-foreground">Colour</legend>
-      <div className="flex flex-wrap gap-2">
-        <label className={swatch} title="No colour">
-          <input type="radio" name="color" value="" defaultChecked={checked === ""} className="sr-only" id={`${idPrefix}-none`} />
-          <span aria-hidden="true" className="text-xs font-bold text-muted-foreground">
-            ∅
-          </span>
-          <span className="sr-only">No colour</span>
-        </label>
-        {GROUP_COLORS.map((c) => (
-          <label key={c} className={swatch} title={GROUP_COLOR_LABELS[c]}>
-            <input type="radio" name="color" value={c} defaultChecked={checked === c} className="sr-only" id={`${idPrefix}-${c}`} />
-            <span aria-hidden="true" className={cn("size-4 rounded-full", GROUP_COLOR_CLASS[c])} />
-            <span className="sr-only">{GROUP_COLOR_LABELS[c]}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
   );
 }
 

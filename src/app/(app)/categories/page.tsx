@@ -17,6 +17,7 @@ import {
   resolveOverviewCurrency,
   resolveOverviewView,
 } from "@/lib/overview";
+import { getMonthBudgets, listBudgets } from "@/server/budgets";
 import { listCategoriesWithUsage } from "@/server/categories";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import { getCategoryMonthAmounts, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
@@ -75,6 +76,20 @@ export default async function CategoriesPage({ searchParams }: Props) {
       : [];
   const viewParam: Record<string, string> = view === "only" ? { view } : {};
 
+  // Budgets are account-wide and measured in their own currency over every wallet, whatever the switches above say;
+  // in a group scope their progress is not shown.
+  const budgetList = await listBudgets(user.id);
+  const allHeld = [...new Set((await listWallets(user.id, { includeArchived: true })).map((w) => w.currency))].sort();
+  const budgetProgress =
+    budgetList.length > 0 && !selected
+      ? await getMonthBudgets(user.id, {
+          month,
+          today,
+          convert:
+            allHeld.length > 1 ? (convert ?? (await getConversion(user.id, monthRange(month).from, monthRange(month).to))) : undefined,
+        })
+      : null;
+
   return (
     <>
       <PageHeader
@@ -127,6 +142,12 @@ export default async function CategoriesPage({ searchParams }: Props) {
             categories={all.filter((c) => c.kind === "expense")}
             currency={currency}
             segments={split?.segments ?? []}
+            budgets={{
+              list: budgetList,
+              progress: budgetProgress && { budgets: budgetProgress.budgets, elapsed: budgetProgress.elapsed },
+              currencies: allHeld,
+              defaultCurrency: currency && allHeld.includes(currency) ? currency : (allHeld[0] ?? null),
+            }}
           />
           <CategorySection
             kind="income"

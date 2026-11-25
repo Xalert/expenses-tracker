@@ -26,7 +26,7 @@ const cat = (
   monthAmountMinor: number,
   monthCount: number,
   transactionCount: number,
-): CategoryWithMonthUsage => ({ id, name, kind, archivedAt: null, monthAmountMinor, monthCount, transactionCount });
+): CategoryWithMonthUsage => ({ id, name, kind, archivedAt: null, color: null, monthAmountMinor, monthCount, transactionCount });
 const archive = (c: CategoryWithMonthUsage): CategoryWithMonthUsage => ({ ...c, archivedAt: new Date("2026-10-01T00:00:00Z") });
 
 // Service order (by name); Housing spends the most, so it gets ramp 1 although it is not the first row.
@@ -42,7 +42,7 @@ const split = spendingSplit([...EXPENSE, ...INCOME]);
 /** The summary of each row: the classes of its swatch and its button text. */
 function rows(html: string) {
   return [...html.matchAll(/<button type="button" aria-expanded="false"[^>]*>(.*?)<\/button>/g)].map((m) => ({
-    swatch: /<span aria-hidden="true" class="size-2\.5 shrink-0 rounded-full ([^"]*)"/.exec(m[1])?.[1],
+    swatch: /<span aria-hidden="true" class="size-2\.5 shrink-0 (?:rounded-full|rounded-\[3px\]) ?([^"]*)"/.exec(m[1])?.[1],
     text: m[1].replace(/<[^>]+>/g, ""),
   }));
 }
@@ -167,11 +167,17 @@ function openPanel(category: CategoryWithMonthUsage, others: CategoryWithMonthUs
 }
 
 describe("CategoryPanel (the open row)", () => {
-  it("rename form: the name prefilled and a Rename button; an unused category gets a plain Remove button", () => {
+  it("rename form: the name prefilled, the colour radios and a Save button; an unused category gets a plain Remove button", () => {
     const html = openPanel(EXPENSE[3], EXPENSE.slice(0, 3));
     expect(html).toContain('<label class="block text-sm font-medium text-foreground" for="rename-category-4">New name for “Transport”</label>');
     expect(html).toMatch(/<input[^>]*id="rename-category-4"[^>]*name="name"[^>]*value="Transport"/);
-    expect(html).toContain(">Rename</button>");
+    // The colour radios: None (checked, no colour yet) and the palette, each 44px.
+    expect(html).toContain("<legend");
+    expect(html).toMatch(/<input type="radio" class="sr-only" id="rename-category-4-color-none" name="color" checked="" value=""\/>/);
+    expect(html.match(/name="color"/g)).toHaveLength(7);
+    expect(html).toContain("relative grid cursor-pointer place-items-center rounded-full border border-border");
+    expect(html).toMatch(/size-11/);
+    expect(html).toContain(">Save</button>");
     expect(html).toContain(">Cancel</button>");
     expect(html).toContain('<span class="truncate">Remove Transport</span>');
     expect(html).not.toContain("<select");

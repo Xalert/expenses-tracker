@@ -3,6 +3,7 @@ export { BigAmount, amountPlaceholder, type BigAmountProps } from "./big-amount"
 export { Badge, type BadgeTone } from "./badge";
 export { Button, LinkButton, Spinner, buttonClasses, type ButtonProps, type ButtonVariant, type ButtonSize } from "./button";
 export { Card, CardBody, CardHeader } from "./card";
+export { ColorChoice } from "./color-choice";
 export { CurrencySwitch } from "./currency-switch";
 export { DatePicker, type DatePickerProps } from "./date-picker";
 export { Dialog, type DialogProps } from "./dialog";
