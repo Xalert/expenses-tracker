@@ -2,15 +2,18 @@ import "server-only";
 import { and, desc, eq, gt, isNull, lte, ne, sql, type SQL } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
 import {
-  EMAIL_UNIQUE_INDEX,
+  budgets,
   categories,
+  EMAIL_UNIQUE_INDEX,
+  recurringTransactions,
   sessions,
+  tags,
   transactions,
   transfers,
+  type User,
   users,
   walletGroups,
   wallets,
-  type User,
 } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import { MIN_PASSWORD_LENGTH, getDummyPasswordHash, hashPassword, verifyPassword } from "@/lib/password";
@@ -397,8 +400,8 @@ export async function deleteExpiredSessions(userId?: number): Promise<number> {
 }
 
 /**
- * Delete the account and everything it owns in one DB transaction: entries, transfers, wallets, wallet groups,
- * categories, sessions, then the user row — explicitly and children first, so the `restrict` foreign keys
+ * Delete the account and everything it owns in one DB transaction: entries, transfers, tags, recurring rules,
+ * budgets, wallets, wallet groups, categories, sessions, then the user row — explicitly and children first, so the `restrict` foreign keys
  * (entries → wallets / categories, wallets → groups) never see a half-deleted account. The current password must
  * verify (VALIDATION on `currentPassword`; an unknown user looks the same), then `confirmUsername` must be the
  * user ID in any letter case (VALIDATION on `confirmUsername`).
@@ -412,8 +415,13 @@ export async function deleteAccount(
     throw new ServiceError("VALIDATION", `Type your user ID, ${row.username}, to confirm.`, "confirmUsername");
   }
   await (await getDb()).transaction(async (tx) => {
+    // Entries take their tag links with them (cascade); rules and budgets go before the wallets and categories
+    // they point at.
     await tx.delete(transactions).where(eq(transactions.userId, userId));
     await tx.delete(transfers).where(eq(transfers.userId, userId));
+    await tx.delete(tags).where(eq(tags.userId, userId));
+    await tx.delete(recurringTransactions).where(eq(recurringTransactions.userId, userId));
+    await tx.delete(budgets).where(eq(budgets.userId, userId));
     await tx.delete(wallets).where(eq(wallets.userId, userId));
     await tx.delete(walletGroups).where(eq(walletGroups.userId, userId));
     await tx.delete(categories).where(eq(categories.userId, userId));

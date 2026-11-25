@@ -5,15 +5,22 @@ import { users } from "@/db/schema";
 import { listCategories, seedDefaultCategories } from "@/server/categories";
 import { seedDefaultGroup } from "@/server/wallet-groups";
 
+/** A `balanceOn` (`listWallets` / `getWallet`) after every entry a test writes: the balance then counts them all. */
+export const EVERY_ENTRY = "2999-12-31";
+
 // One in-process Postgres (PGlite) per test file: created and migrated once, lazily, then emptied before each test.
 let shared: Promise<DB> | undefined;
 
 const APP_TABLES = [
+  "budgets",
   "categories",
   "exchange_rate_days",
   "exchange_rates",
   "manual_exchange_rates",
+  "recurring_transactions",
   "sessions",
+  "tags",
+  "transaction_tags",
   "transactions",
   "transfers",
   "users",

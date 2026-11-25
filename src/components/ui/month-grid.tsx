@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MONTH_LABELS, clampTo, moveMonth } from "@/lib/calendar";
 import { cn } from "@/lib/cn";
-import { currentMonth, formatMonth } from "@/lib/dates";
+import { formatMonth } from "@/lib/dates";
 import { ChevronIcon } from "./picker-icons";
 
 const MIN_MONTH = "1900-01";
@@ -21,6 +21,7 @@ export const pickerNavButton =
  */
 export function MonthGrid({
   value,
+  thisMonth,
   onSelect,
   minMonth = MIN_MONTH,
   maxMonth = MAX_MONTH,
@@ -30,6 +31,11 @@ export function MonthGrid({
 }: {
   /** The selected `YYYY-MM`, if any. */
   value: string | null;
+  /**
+   * The current `YYYY-MM` (marked `aria-current`), from the server: the user's today (`todayInZone`), never the
+   * browser's clock, so it is in the account's zone and SSR and hydration agree.
+   */
+  thisMonth: string;
   onSelect: (month: string) => void;
   /** Inclusive bounds (`YYYY-MM`); months outside them are shown disabled. */
   minMonth?: string;
@@ -40,7 +46,7 @@ export function MonthGrid({
   autoFocus?: boolean;
   className?: string;
 }) {
-  const [focus, setFocus] = useState(() => clampTo(focusMonth ?? value ?? currentMonth(), minMonth, maxMonth));
+  const [focus, setFocus] = useState(() => clampTo(focusMonth ?? value ?? thisMonth, minMonth, maxMonth));
   const shouldFocus = useRef(autoFocus);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -52,7 +58,6 @@ export function MonthGrid({
   }, [focus]);
 
   const year = Number(focus.slice(0, 4));
-  const today = currentMonth();
   const months = MONTH_LABELS.map((label, i) => ({ label, month: `${year}-${String(i + 1).padStart(2, "0")}` }));
   const canPrev = `${year - 1}-12` >= minMonth;
   const canNext = `${year + 1}-01` <= maxMonth;
@@ -101,7 +106,7 @@ export function MonthGrid({
       >
         {months.map(({ label, month }) => {
           const selected = month === value;
-          const current = month === today;
+          const current = month === thisMonth;
           const disabled = month < minMonth || month > maxMonth;
           return (
             <button

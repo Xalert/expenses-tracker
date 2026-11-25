@@ -17,6 +17,7 @@ const arrow =
  * "‹ November 2026 ›" — the month lives in the URL (`?month=YYYY-MM`); no navigating past `maxMonth`. The arrows are
  * plain links (they work without JS); the label opens a month picker to jump anywhere, and "This month" goes back.
  * `extraParams` are kept on every link (e.g. `{ currency: "EUR" }` → `/?month=2026-10&currency=EUR`).
+ * `maxMonth` is the current month (the user's today, `todayInZone`): "This month" goes there and the grid marks it.
  */
 export function MonthSwitcher({
   month,
@@ -108,6 +109,7 @@ function MonthPicker({
   return (
     <MonthGrid
       value={month}
+      thisMonth={maxMonth}
       maxMonth={maxMonth}
       autoFocus
       onSelect={(m) => {

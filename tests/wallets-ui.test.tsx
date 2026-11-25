@@ -290,12 +290,15 @@ describe("DayList on a wallet page", () => {
     currency: "EUR",
     categoryId: 10,
     categoryName: "Food",
+    categoryColor: null,
     amountMinor: 480,
     signedAmountMinor: -480,
     date,
     note,
     transferId: null,
     counterparty: null,
+    recurringId: null,
+    tags: [],
   });
 
   it("shows the aside (Balance after) instead of the net and leaves the wallet name out", () => {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isValidCurrency } from "@/lib/currencies";
 import type { FormState } from "@/lib/form";
 import { zodErrorState } from "@/lib/form";
+import { isValidDate } from "@/lib/dates";
 import { currencyDecimals, parseAmount } from "@/lib/money";
 
 // Pure form-data parsing for the wallet Server Actions (kept out of the "use server" file so it can be tested).
@@ -111,6 +112,30 @@ export function parseUpdateWallet(
     return { ok: false, state };
   }
   return { ok: true, data: { name: parsed.data.name, initialBalanceMinor, groupId: group.groupId } };
+}
+
+/**
+ * The "Reconcile balance" form: `actualBalance` (required, in the wallet's currency, may be negative) and `date`
+ * (`YYYY-MM-DD`; the service also refuses a date after today). Every field error at once.
+ */
+export function parseReconcile(
+  formData: FormData,
+  values: Record<string, string>,
+  currency: string,
+): Parsed<{ actualBalanceMinor: number; date: string }> {
+  const rawBalance = formData.get("actualBalance");
+  const rawDate = formData.get("date");
+  const balanceText = typeof rawBalance === "string" ? rawBalance.trim() : "";
+  const date = typeof rawDate === "string" ? rawDate.trim() : "";
+  const fieldErrors: Record<string, string> = {};
+  const actualBalanceMinor = balanceText === "" ? null : parseAmount(balanceText, currency, { allowNegative: true });
+  if (balanceText === "") fieldErrors.actualBalance = "Enter the wallet's actual balance.";
+  else if (actualBalanceMinor === null) fieldErrors.actualBalance = amountHint(currency);
+  if (!isValidDate(date)) fieldErrors.date = "Enter a valid date.";
+  if (actualBalanceMinor === null || fieldErrors.date) {
+    return { ok: false, state: { message: "Please fix the highlighted fields.", fieldErrors, values } };
+  }
+  return { ok: true, data: { actualBalanceMinor, date } };
 }
 
 /** Wallet id from a route segment or bound argument; null unless a positive safe integer. */

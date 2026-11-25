@@ -14,6 +14,7 @@ export const NAV_ITEMS = [
   { href: "/transactions", label: "Transactions", segment: "transactions" },
   { href: "/wallets", label: "Wallets", segment: "wallets" },
   { href: "/categories", label: "Categories", segment: "categories" },
+  { href: "/reports", label: "Reports", segment: "reports" },
   { href: "/data", label: "Import & export", segment: "data" },
 ] as const satisfies readonly { href: string; label: string; segment: string | null }[];
 

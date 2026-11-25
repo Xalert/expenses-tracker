@@ -1,3 +1,4 @@
+/** The app's mark. The home-screen icons in public/ are rendered from it: change scripts/generate-icons.mjs too. */
 export function BrandMark({ className = "size-7" }: { className?: string }) {
   return (
     <span

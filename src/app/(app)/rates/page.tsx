@@ -4,7 +4,7 @@ import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { currencyName } from "@/lib/currencies";
-import { formatDate, todayISO } from "@/lib/dates";
+import { formatDate, todayInZone } from "@/lib/dates";
 import { RATES_BASE, currenciesNeedingRates } from "@/lib/fx";
 import { safeReturnTo } from "@/lib/return-to";
 import { getProviderCurrencies, RATES_SOURCE } from "@/server/exchange-rates";
@@ -24,7 +24,7 @@ export default async function RatesPage({ searchParams }: Props) {
   const user = await requireUser();
   const params = await searchParams;
   const back = safeReturnTo(params.returnTo, "");
-  const today = todayISO();
+  const today = todayInZone(user.timeZone);
   const ratesOn = exchangeRatesEnabled();
   const provider = await getProviderCurrencies();
   const held = [...new Set((await listWallets(user.id, { includeArchived: true })).map((w) => w.currency))].sort();

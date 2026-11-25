@@ -1,11 +1,15 @@
 import Link from "next/link";
+import { RepeatIcon } from "@/components/shell/icons";
 import { transactionLabel } from "@/components/transaction-list";
 import { ExpandableList, ExpandableRow } from "@/components/ui/expandable-row";
+import { GroupDot } from "@/components/wallets/group-dot";
 import { cn } from "@/lib/cn";
 import { dayHeaderLabel, dayNetLabel, groupByDate } from "@/lib/day-labels";
 import { formatMoney, minorToInputValue } from "@/lib/money";
 import { withReturnTo } from "@/lib/return-to";
+import { joinTags } from "@/lib/tags";
 import type { DayTotal, TransactionView } from "@/server/transactions";
+import { RowCheckbox } from "./bulk-edit";
 import { InlineEditPanel, type InlineEntry } from "./inline-edit";
 
 const dotClass: Record<TransactionView["kind"], string> = {
@@ -33,6 +37,7 @@ export function inlineEntryOf(t: TransactionView): InlineEntry {
     return {
       type: "transfer",
       transferId: t.transferId,
+      entryId: t.id,
       fromWalletId: from.walletId,
       toWalletId: to.walletId,
       amount: minorToInputValue(from.amountMinor, from.currency),
@@ -50,11 +55,47 @@ export function inlineEntryOf(t: TransactionView): InlineEntry {
     amount: minorToInputValue(t.amountMinor, t.currency),
     date: t.date,
     note,
+    tags: joinTags(t.tags),
+    recurringId: t.recurringId,
   };
+}
+
+// No display class here: one of the pills is `hidden sm:inline-block` (`cn` does not merge classes).
+const tagPill =
+  "max-w-[7rem] shrink-0 truncate rounded-full bg-surface-muted px-1.5 py-px text-[11px] leading-4 font-semibold text-muted-foreground";
+
+/**
+ * An entry's tags after its note: the first one (two from `sm`) as small pills, the rest as "+2", so the row stays one
+ * line at 375px; the whole list is read out ("Tags: …") for screen readers.
+ */
+export function TagPills({ tags }: { tags: readonly string[] }) {
+  if (tags.length === 0) return null;
+  const more = (shown: number) => tags.length - shown;
+  return (
+    <>
+      <span className="sr-only">Tags: {tags.join(", ")}</span>
+      <span aria-hidden="true" className="flex min-w-0 shrink-0 items-center gap-1">
+        <span className={cn(tagPill, "inline-block")}>{tags[0]}</span>
+        {tags[1] !== undefined && <span className={cn(tagPill, "hidden sm:inline-block")}>{tags[1]}</span>}
+        {more(1) > 0 && <span className="text-[11px] font-semibold text-muted-foreground sm:hidden">+{more(1)}</span>}
+        {more(2) > 0 && <span className="hidden text-[11px] font-semibold text-muted-foreground sm:inline">+{more(2)}</span>}
+      </span>
+    </>
+  );
 }
 
 function editHref(t: TransactionView): string {
   return t.transferId !== null ? `/transactions/transfers/${t.transferId}/edit` : `/transactions/${t.id}/edit`;
+}
+
+/** After the label of an entry a repeating rule made (its open row links to /recurring). */
+function RepeatMarker() {
+  return (
+    <>
+      <RepeatIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="sr-only">(repeats)</span>
+    </>
+  );
 }
 
 /**
@@ -68,8 +109,20 @@ function RowSummary({ t, showWallet }: { t: TransactionView; showWallet: boolean
     <>
       <span className={cn("size-2 shrink-0 rounded-full", dotClass[t.kind])} aria-hidden="true" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-semibold text-foreground">{transactionLabel(t)}</span>
-        {meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>}
+        <span className="flex min-w-0 items-center gap-1.5">
+          {/* The category's colour, as on /categories and in the entry form's pills (decorative). */}
+          {t.categoryColor && <GroupDot color={t.categoryColor} className="size-2" />}
+          <span className="truncate font-semibold text-foreground">{transactionLabel(t)}</span>
+          {t.recurringId !== null && <RepeatMarker />}
+        </span>
+        {t.tags.length > 0 ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {meta && <span className="min-w-0 truncate">{meta}</span>}
+            <TagPills tags={t.tags} />
+          </span>
+        ) : (
+          meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>
+        )}
       </span>
       <span className="shrink-0 text-right tabular-nums">
         <span className={cn("block font-bold", amountClass[t.kind])}>
@@ -100,7 +153,13 @@ export function DayList({
   returnTo,
   aside,
   showWallet = true,
+  selectable = false,
 }: {
+  /**
+   * Selection mode (/transactions `?select=1`): each row is a checkbox labelled by its summary (joined to the bulk
+   * bar's form, `RowCheckbox`) instead of an expandable editor. Needs a `BulkEditProvider` around it.
+   */
+  selectable?: boolean;
   items: TransactionView[];
   totals?: DayTotal[];
   today: string;
@@ -141,6 +200,23 @@ export function DayList({
                 {group.items.map((t) => {
                   const label = transactionLabel(t);
                   const amount = formatMoney(t.signedAmountMinor, t.currency, { signed: true });
+                  if (selectable) {
+                    return (
+                      <li key={t.id} className="last:rounded-b-[18px]">
+                        <label
+                          className={cn(
+                            "flex min-h-11 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left text-sm transition-colors sm:px-[18px]",
+                            "hover:bg-surface-open has-[:checked]:bg-accent-soft/60",
+                            "has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-ring",
+                            "[li:last-child>&]:rounded-b-[18px]",
+                          )}
+                        >
+                          <RowCheckbox id={t.id} />
+                          <RowSummary t={t} showWallet={showWallet} />
+                        </label>
+                      </li>
+                    );
+                  }
                   return (
                     <ExpandableRow
                       key={t.id}

@@ -37,10 +37,25 @@ export const DownloadIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M12 3v12M7 10l5 5 5-5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
   </svg>
 );
+/** Three bars on a baseline (the empty year on /reports). */
+export const ChartIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <path d="M3 21h18M7 17v-5M12 17V7M17 17v-8" />
+  </svg>
+);
 /** Two overlapping sheets. */
 export const CopyIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base} {...p}>
     <rect x="9" y="9" width="12" height="12" rx="2" />
     <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+  </svg>
+);
+/** Two arrows in a loop: an entry made by a repeating rule (the day list's marker, /recurring). */
+export const RepeatIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <path d="M17 2l4 4-4 4" />
+    <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+    <path d="M7 22l-4-4 4-4" />
+    <path d="M21 13v1a4 4 0 0 1-4 4H3" />
   </svg>
 );

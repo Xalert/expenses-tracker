@@ -5,9 +5,10 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { getDb, schema } from "@/db";
-import { currentMonth, todayISO } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { listCategories, type CategoryView } from "@/server/categories";
 import { setManualRate } from "@/server/manual-rates";
+import { createRecurringEntry, type RepeatInput } from "@/server/recurring";
 import { createTransaction } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { registerUser } from "@/server/users";
@@ -16,6 +17,19 @@ import { createWallet, type WalletView } from "@/server/wallets";
 
 export const PASSWORD = "e2e-password-1";
 export const SESSION_COOKIE = "et_session";
+
+/** Every seeded user's account time zone (and the browser's: `timezoneId` in playwright.config.ts). */
+export const E2E_TIME_ZONE = "Europe/Berlin";
+
+/** Today as the app sees it for a seeded user: in the account's zone, not this process's (CI runs in UTC). */
+export function todayISO(timeZone: string = E2E_TIME_ZONE): string {
+  return todayInZone(timeZone);
+}
+
+/** The current month for a seeded user (see `todayISO`). */
+export function currentMonth(timeZone: string = E2E_TIME_ZONE): string {
+  return todayISO(timeZone).slice(0, 7);
+}
 
 let counter = 0;
 /** A user ID nobody else in this run has (lowercase letters, digits and dashes). */
@@ -39,7 +53,7 @@ export async function seedUser(opts: { username?: string; firstName?: string; ti
     username,
     password: PASSWORD,
     firstName: opts.firstName,
-    timeZone: opts.timeZone ?? "Europe/Berlin",
+    timeZone: opts.timeZone ?? E2E_TIME_ZONE,
   });
   const token = await openSession(user.id, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/130.0 Safari/537.36");
   return { id: user.id, username, password: PASSWORD, token };
@@ -77,7 +91,7 @@ export async function categoryByName(userId: number, name: string): Promise<Cate
 /** An expense / income on `date` (default today), `amountMinor` in the wallet's minor units. */
 export async function seedEntry(
   userId: number,
-  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string },
+  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string; tags?: string[] },
 ) {
   const category = await categoryByName(userId, input.category);
   return createTransaction(userId, {
@@ -87,7 +101,30 @@ export async function seedEntry(
     amountMinor: input.amountMinor,
     date: input.date ?? todayISO(),
     note: input.note ?? null,
+    tags: input.tags,
   });
+}
+
+/** An entry that repeats (`createRecurringEntry`); its catch-up runs up to the seeded user's today. */
+export async function seedRecurring(
+  userId: number,
+  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string },
+  repeat: RepeatInput,
+) {
+  const category = await categoryByName(userId, input.category);
+  return createRecurringEntry(
+    userId,
+    {
+      walletId: input.walletId,
+      kind: input.kind,
+      categoryId: category.id,
+      amountMinor: input.amountMinor,
+      date: input.date ?? todayISO(),
+      note: input.note ?? null,
+    },
+    repeat,
+    todayISO(),
+  );
 }
 
 export async function seedTransfer(
@@ -103,5 +140,3 @@ export async function seedManualRate(
 ) {
   return setManualRate(userId, { ...input, effectiveDate: input.effectiveDate ?? `${currentMonth()}-01` });
 }
-
-export { todayISO, currentMonth };

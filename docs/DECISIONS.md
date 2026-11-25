@@ -42,7 +42,7 @@ section holds what replaced it.
 | *(superseded 2026-11-18 by the row below)* No currency conversion, except the Overview "All in <currency>" view; other pages group totals per currency | The owner asked for one figure over all wallets, on the Overview; the other pages stay exact | owner |
 | The "All in <currency>" view (default, `?view=only` to turn it off) is on the Overview, the /transactions day strip and /categories, with the same switch, notes and mechanism (`convert` / `getConversion`); every other total stays per currency | One figure over all wallets was asked for on the Overview; the strip sits over a list that already mixes currencies and the category split is incomplete without the other wallets, so both read better converted. The same default everywhere means one rule to learn | planner (2026-11-18) |
 | **Deliberate:** wallet pages never convert | A wallet is one currency, so there is nothing to convert; its page's figures are exact | planner (2026-11-18) |
-| The month figures convert each day at that day's rate; the Overview Wallets total converts the balances of the day it shows — today for the current month at the latest rate, a past month's last day at that day's rate (`getWalletBalancesOn`) | A past expense is worth what it was worth that day; a balance is worth what it was worth on the day it is shown for. Before 2026-11-18 a past month showed today's balances at the latest rate, which mixed two dates | planner (2026-11-18) |
+| The month figures convert each day at that day's rate; the Overview Wallets total converts the balances of the day it shows — today for the current month at the latest rate, a past month's last day at that day's rate (`getWalletBalancesOn`; since 2026-11-25 `getDashboard`'s `balanceOn`) | A past expense is worth what it was worth that day; a balance is worth what it was worth on the day it is shown for. Before 2026-11-18 a past month showed today's balances at the latest rate, which mixed two dates | planner (2026-11-18) |
 | The past-month Wallets card lists the wallets that are active now (with their balance at that month's end), not the wallets that were active then | Wallets have no history of archiving; the card's rows stay the same when stepping through months | planner (2026-11-18) |
 | One `?view=` for the whole Overview, its switch next to the currency switch | The chart, the cards and the Wallets total then always agree on what they include | planner |
 | The converted figures use ECB reference rates from Frankfurter (`api.frankfurter.dev`), with `EXCHANGE_RATES=false` to turn it off | Free, no API key, no account for self-hosters; a self-hoster can keep the server offline | planner |
@@ -66,6 +66,19 @@ section holds what replaced it.
 | Archived wallets are hidden from pickers and dashboard totals; an existing entry may stay on one when edited, new entries are refused | History stays intact and editable without reviving the wallet | built |
 | Dates are `YYYY-MM-DD` strings with no time or time zone | An expense belongs to a calendar day; avoids day-shift bugs | planner |
 | Transfer legs carry a copy of the transfer's note | So the note search on the transactions list finds transfers | built |
+| (2026-11-25) "Reconcile balance" on the wallet page: the user types the wallet's actual balance (in its currency, through `parseAmount`, may be negative) and a date (default today, never later); the difference from the tracked balance at the end of that day is recorded as one entry dated that day: income when positive, an expense when negative, in a category "Balance adjustment" of that kind (created when missing), ~~note "Balance adjustment"~~ *(the note superseded 2026-11-25: the entry has none, see below)*. A zero difference records nothing and says the balance already matches | A tracked balance drifts from the real one (a forgotten coffee, a bank fee); hunting for the missing entry is slow | planner |
+| (2026-11-25) Reconciling records an entry rather than changing the initial balance | An entry is visible, dated, editable and deletable and does not rewrite history; it is an ordinary entry and counts in the month's figures like any other | planner |
+| (2026-11-25) Reconciling an archived wallet, or one in an archived group, is refused as for any new entry; one service (`reconcileWallet`, `userId` first) reads the balance and writes the entry in one DB transaction with the wallet row locked (`FOR UPDATE`), so two submissions cannot both add the difference | Same rule as every new entry; a double submit must not double the correction | planner |
+| (2026-11-25) The interface is a panel on the wallet page opened from the ⋯ menu, with no new route; it shows live what saving will record and, after saving, a confirmation of what was added | Reconciling is occasional and belongs to one wallet | planner |
+| (2026-11-25) The wallet page's big balance is now the balance at the end of today: entries dated later are left out, with a line "€… projected after the entries dated later" when they change it. It used to include every entry, under the label "Balance today" | The page already calls days after today "projected", and reconciling as of today compares with the balance at the end of today; with the old figure the page would not show the balance typed while a future-dated entry exists. *(Until the next row, /wallets and the Overview still counted every entry.)* | built |
+| (2026-11-25) One definition of a wallet's balance: wherever it is shown as its current balance it is the balance at the end of the user's today (`todayInZone`, passed in by the caller, never read from the clock in a service); future-dated entries are not in it. The wallet page, the /wallets cards and the Overview's Wallets card show the same number for the same wallet; the /wallets currency totals and the Overview's converted "Total in <currency>" are sums of those numbers. Where future-dated entries change it, /wallets shows a small "€… projected after later entries" like the wallet page; the Overview card does not. A past month's Wallets card keeps the balances at that month's end. Reports, budgets and month figures (sums of entries) are unaffected | The same wallet showed two balances (the known gap of the reconcile work); the wallet page's definition is the one reconciling compares with | planner |
+| (2026-11-25) The mechanism: `listWallets` / `getWallet` return a balance only when given `balanceOn` (the day to count through), as `WalletWithBalance` (`balanceMinor` through that day, `laterChangeMinor` = the net of later entries); without it the `WalletView` type has no balance field at all. `getDashboard` takes a required `balanceOn` (today, or a past month's last day), which replaced `getWalletBalancesOn`; the wallet page no longer calls `getWalletBalanceOn` (kept for the reconcile service) | A new page cannot show a balance without choosing its day: it does not compile. The later entries come as a net change, not a second balance, so the two cannot be confused or summed by mistake. The callers that only need names and currencies (pickers, the /transactions page, actions) are unchanged | built |
+| (2026-11-25) Every reader of the old `balanceMinor` sorted: balance today — the /wallets cards, their currency totals, the Archived rows and "Archived groups" rows, the wallet page, the Overview's Wallets card and converted total (`convertedTotal`), `getDashboard().totalsByCurrency`; every entry regardless of date — `transactionCount` (the "N entries" label and the rule that a wallet with entries cannot be deleted). No picker and nothing in the exports carries a balance | Displays are balances "now"; deletion is about entries existing, not the amount | built |
+| (2026-11-25) The "projected" hint also shows on the Archived rows of /wallets and in "Archived groups" (" · €… projected after later entries" in the row's muted line) | Those rows show a balance too; without the hint the difference from the wallet page would be unexplained there | built |
+| (2026-11-25) The reconcile adjustment entry has no note: the category "Balance adjustment" names it. It used to carry the note "Balance adjustment", so its row read "Balance adjustment · Balance adjustment" | The doubled text said nothing more; the confirmation names the category, not the note | planner |
+| (2026-11-25) An archived "Balance adjustment" category is used as it is and stays archived; the name is matched ignoring case, within the entry's kind only | Reconciling never fails on it and never changes the user's category settings; the entry keeps it when edited, as any entry with an archived category | built |
+| (2026-11-25) The reconcile panel is open while the URL has `?reconcile=1` (the ⋯ menu item links there; Close and Escape go back to the page and return focus to the ⋯ button); the action is bound on the server and passed down | A real URL works without JavaScript, and the preview's data (every day's closing balance up to today, `listWalletClosingBalances`) is only loaded while the panel is open. A Server Action bound inside the client component hung on a no-JavaScript post in the e2e test | built |
+| (2026-11-25) After saving, the panel stays open with the confirmation ("Added an expense of €12.40 on 25 Nov 2026 in “Balance adjustment”. The balance on that day is now €975.26.") and empty fields; for a date in another month than the one shown, it links to that month | The confirmation is what the brief asks for; the entry is otherwise not visible when it falls in another month | built |
 | Another user's row behaves exactly like a missing row | No information leak about what exists | built |
 
 ### Accounts and sign-in
@@ -121,8 +134,15 @@ section holds what replaced it.
 | The zone is set automatically: the register and login forms post a hidden `timeZone` (filled after hydration; absent without JavaScript). Registration stores it; a successful sign-in stores it only when the account has none; an invalid or absent value leaves it NULL, silently | Nobody has to find a setting for the common case, and a sign-in from a laptop abroad never overwrites a zone that was chosen or adopted earlier. A failed sign-in changes nothing | planner |
 | `/account`'s Profile card has a "Time zone" native select: "Not set (use this browser's)" first, then every zone in `<optgroup>`s by region ("UTC" under "Other", last); changing it needs no password; the list comes from the server as a prop | A native select is keyboard-, screen-reader- and mobile-friendly and type-to-search works in it; ~420 options grouped by region are manageable. Computed on the server because browsers' `Intl` zone lists differ, which would break hydration. A time zone is not an identity change, so no password | planner (select), built (server-side list) |
 | `updateProfile`'s `timeZone` is the one profile field where *omitted* means "unchanged" (`""` / null clear it) | Other callers and older forms that do not send it must not clear it | built |
-| "Today" stays the server's date everywhere; the account's time zone is used only by the Spendee import | Out of scope for this change. A per-account "today" (default dates, the current month) is a possible follow-up | planner |
+| *(superseded 2026-11-25 by the per-account "today" rows below)* "Today" stays the server's date everywhere; the account's time zone is used only by the Spendee import | Out of scope for this change. A per-account "today" (default dates, the current month) is a possible follow-up | planner |
 | **Fix (2026-11-18, found by the e2e suite): the hidden `timeZone` field on `/login` and `/register` keeps the browser's zone after a refused submit** | It was written into the DOM after hydration, and React writes an uncontrolled input's `defaultValue` again on every re-render, so a failed first attempt emptied it and the account was created (or signed in) without a zone. It is now state passed as `defaultValue` | built |
+| (2026-11-25) "Today" is the date in the account's time zone everywhere a signed-in user sees it (default dates, the current month, day N, Today / Yesterday labels, the picker's today, projected days, export file names); without a zone, or with one the runtime does not know, the server's local date as before | The Docker image runs in UTC, so east of UTC an entry added after local midnight defaulted to yesterday and the month flipped late (the reverse west of UTC). The account already has a zone | planner |
+| (2026-11-25) One pure function, `todayInZone(timeZone, now?)` in `src/lib/dates.ts` (`Intl`, no new dependency), with the server-local fallback; `CurrentUser` carries `timeZone` (read in the session query, no extra query) and request code calls `todayInZone(user.timeZone)` | One obvious way to get the user's today, testable without a clock or a database | planner |
+| (2026-11-25) Services take today from the caller on request paths; client components get it from the server, never from a clock during render | A service defaulting to the server's date would silently undo the zone; a client clock is in the browser's zone and breaks hydration | planner |
+| (2026-11-25) The service parameters are **required**, not defaulted: `getDashboard` needs `month`, `getMonthInsights` / `getWalletMonth` need `today`, `monthDayN(month, today)`, and the `list-params.ts` helpers need `thisMonth`; the tests pass a fixed date | A default only tests used would still let a new page call forget it, and the tests become independent of the day they run on | built |
+| (2026-11-25) Client components take today as a **prop** from the page that renders them (`DatePicker` / `CalendarPanel` `today`, `MonthGrid` `thisMonth`, which `MonthSwitcher` fills from its `maxMonth`), not from a context in the `(app)` layout | A layout is not re-rendered on soft navigation, so a tab left open over midnight would keep yesterday in a layout context while the pages moved on; every caller already had today or the current month at hand. `getCurrentUser` turns a stored zone the runtime does not know into null, so the fallback is decided in one place (`todayInZone` also catches an unknown zone) | built |
+| (2026-11-25) Left on the server's clock on purpose: the demo seed (`seedDemoData`, run from scripts, dates relative to the server's today) and the exchange-rate provider's day logic (`getDailyRates` caps the range at the server's `todayISO()`, `getProviderCurrencies`) | The seed has no user zone to use. Rate days are the provider's (business days, final once fetched after the day ended); a user ahead of the server just sees the latest stored rate for their today, as for any day not yet published | built |
+| (2026-11-25) The Time zone hint on `/account` now says what the zone does ("Sets your “today” … and dates imported Spendee entries …"); the e2e seed dates entries in the seeded account's zone (`todayISO()` in `e2e/support/seed.ts` is `todayInZone("Europe/Berlin")`), and an e2e test checks the Add form's default date for a UTC+14 and a UTC−11 account | The old hint named only the import. The seed used the Playwright process's date, which in CI (UTC) is not the app's date for a Berlin account for an hour or two each night | built |
 
 ### Categories
 
@@ -156,6 +176,27 @@ Added 2026-11-18 (closing the category gaps):
 | *(2026-11-18)* Every category list is ordered in one place, in JS: `sortCategories` / `compareCategoryNames` (`src/lib/category-order.ts`: expense first, active before archived, then the name lower-cased compared by code point, then id); the services sort after the query, and `pickTopCategory`, the spending split and the dashboard's per-category list break ties with the same name rule | Chosen over `COLLATE "C"` on `lower(name)`: Postgres' `lower()` itself depends on the database's ctype for non-ASCII letters, so only JS gives the same order on every instance (and PGlite); category lists are small. Not `localeCompare` either (runtime- and locale-dependent) | planner |
 | *(2026-11-18)* After a kind change the row's new card announces it and takes the focus (its heading at once, then the row's button once the refreshed list has it), told by the old card through a window event | The two cards are separate components; focus left on the old card's heading pointed at a list the row was no longer in | planner |
 
+### Budgets and category colours
+
+| Decision | Why | Decided by |
+|---|---|---|
+| (2026-11-25) A budget is one amount for every month, with no history; a past month is compared with the current amount | Simple to set and to read; a history of amounts is a feature nobody asked for yet | planner |
+| (2026-11-25) Budgets are for expense categories only, plus one optional overall budget; the currency is one the user holds a wallet in (archived wallets included); the typed amount goes through `parseAmount(value, currency)` | Income has no "limit"; a currency without a wallet would be a typo | planner |
+| (2026-11-25) Progress is always in the budget's own currency over every wallet, each day's spending converted at that day's rate as in the "All in" views (a currency without a rate left out and named); it ignores the page's currency and "All in / only" switches | A budget means one figure; it must not change when the user flips a view switch | planner |
+| (2026-11-25) Budgets are account-wide: with a wallet group selected their progress is not shown, one line says they cover all groups | Showing a group's spending against an account-wide limit would be wrong; a per-group budget is a known gap | planner |
+| (2026-11-25) Removing a category removes its budget (FK cascade, said in the removal confirmation); transfers never count | A budget of a category that no longer exists means nothing | planner |
+| (2026-11-25) Archiving a category keeps its budget, and its row still shows the meter; the budget can still be changed | Archiving is undone with one click and loses nothing elsewhere either; an archived category can still have entries that month | built |
+| (2026-11-25) Switching an expense category to income removes its budget in the same DB transaction (`budgetRemoved`), and the row says so before the click and in the success message | The kind change is only possible while nothing uses the category, so nothing worth keeping is lost; refusing the change instead would add a step for no gain | built |
+| (2026-11-25) The overall budget is the first row of the expense card ("Overall budget · all spending"), and a category's budget is set in the row's existing editor, under the rename / colour form | The brief asked for the existing inline editor; one place for everything about a category | built |
+| (2026-11-25) The meter: "€120.00 of €300.00", "€180.00 left" / "€20.00 over" (danger colour), a neutral fill (`--muted-foreground`, `--danger` once over) and, for the current month, a tick at day N ÷ days with "40% spent · day 10 of 30" under it. The bar is `aria-hidden`; the text says the same | The tick against the fill answers "am I ahead of the month?" without a second colour; a green "on track" fill would read as income | built |
+| (2026-11-25) Over means above the limit; reaching it exactly says "Limit reached"; the percentage is rounded down | "100% spent" should not show while there is still a cent left | built |
+| (2026-11-25) The Overview's Budgets card sits between the four insight cards and Wallets / Latest: the overall budget and the three category budgets with the largest share spent (ties in the category order), with a link to /categories ("All budgets (N more)" when some are not shown) | Leaves the existing four cards as they were; "closest to or over the limit" = largest share | built |
+| (2026-11-25) `getMonthBudgets` takes `convert` from the page: the page's own conversion when it has one (Overview, /categories in "All in"), else `getConversion` for the month when the user holds more than one currency | One conversion per request, no network call for a single-currency account; services never read the clock | built |
+| (2026-11-25) Backup: optional `budgets[]` (`category` by name, absent for overall) and an optional `color` per category, version 1. Import only adds: a missing budget is created, an existing one kept (notice `budgets-kept` when it differs); a colour only on categories the import creates. The budget currency need not be held | The contract of the manual rates and groups ("import adds, never changes"); a budget does not depend on a wallet | planner |
+| (2026-11-25) A category can have a colour from the wallet-group palette (`GROUP_COLORS`), picked in the row editor (the shared `ColorChoice`, now in `src/components/ui`, with 44px targets for categories; the group forms keep their 32px) and shown as a round dot before the name on /categories, in the entry form's category pills and in the Overview's Budgets card. Not on transaction rows | Another change was touching the transaction rows at the same time; the picker and the dots are where categories are chosen and managed | planner |
+| (2026-11-25) The spending split keeps its rank ramp; a category's own colour is never used in the split. The row's ramp swatch is now a small square (as in the split's legend) and the category colour a round dot, so the two never read as the same thing | The palette has a red and an amber that sit next to the ramp's terracotta and orange: used in the split they would be confused with another category's ramp step, and a split of six arbitrary colours would lose the "largest = strongest" reading | built |
+| (2026-11-25) The rename form became "name + colour + Save": the success message is "Renamed to …" when the name changed, else "Saved …" | One form per row keeps the editor short; the old "Rename" label no longer fit | built |
+
 ### Import and export
 
 | Decision | Why | Decided by |
@@ -180,7 +221,7 @@ Added 2026-11-18 (closing the category gaps):
 | An unpaired Spendee transfer row blocks the import by default, with an opt-in to import such rows as income / expense in a `Transfer` category | Usually it means a wallet's file was left out; the opt-in avoids a dead end when the other wallet no longer exists | planner |
 | Spendee timestamps that carry a UTC offset are converted to the importing browser's time zone to pick the date | Spendee exports UTC; taking the UTC date would put late-evening entries on the wrong day (and sometimes the wrong month) | planner |
 | (2026-11-18) The Spendee import dates timestamps in **the account's time zone** when it has one, else the browser's (as before), else UTC; the time-zone notice says which zone and where it came from ("your account's time zone, …" / "this browser's time zone, … (set one in Account settings …)" / "UTC (…)") | Closes the "re-import from another zone" gap: with an account zone the dates no longer depend on the browser, so the same files re-imported from anywhere are all duplicates. The account's zone is read by `previewImport` / `runImport` themselves, not passed by the action, so the preview and the write cannot disagree | planner |
-| Spendee labels are appended to the note | The app has no labels; this keeps the information and makes it searchable instead of dropping it silently | planner |
+| Spendee labels are appended to the note | The app has no labels; this keeps the information and makes it searchable instead of dropping it silently. *(2026-11-25: kept so after tags were added, deliberately; see "Tags")* | planner |
 | A backup cannot be combined with other files in one import | Its wallets are identified by position in the file, which cannot be merged with other sources | planner |
 | `previewImport` / `runImport` take either one file's text (as before) or a list of `{ name, text }`; the existing tests were left unchanged | No mechanical migration of ~60 call sites; one file and a one-element list behave the same | built |
 | Spendee transfers are paired on the `Note` cell without labels; the transfer gets the outgoing row's labels, or the incoming row's when the outgoing has none | Labels are per row in Spendee and may differ between the two sides; pairing should not fail over them | built |
@@ -293,6 +334,15 @@ Decided 2026-11-09.
 | **Releases: `make release VERSION=X.Y.Z`** runs `scripts/release.mjs`: on a clean `main` equal to `origin/main`, `X.Y.Z` newer than the last tag, checks passing; bumps `package.json`, moves `CHANGELOG.md`'s "Unreleased" into the release (or the commit subjects since the last tag when it is empty), commits, tags; pushes only with `PUSH=1` (atomic push of `main` and the tag); `DRY_RUN=1` changes nothing | A script so that the tag, the version and the changelog cannot drift apart; Node, so it also runs on Windows without `make`. Equal to `origin/main` (not just "not behind") so the tag always lands on a commit that is on `main` upstream. No pre-release versions: the semver image tags would make `X.Y` follow them | owner asked for a release process; planner (rules) (2026-11-18) |
 | `CHANGELOG.md` was seeded with one short "Unreleased" summary of everything built so far, not one entry per past commit | There were no releases to attach entries to; the first `make release` turns the summary into that release's section | planner (2026-11-18) |
 | In development, the machine's own LAN addresses (plus `ALLOWED_DEV_ORIGINS`) may load the dev server's scripts | Next.js allows only `localhost` by default; opened at a LAN address the app rendered but nothing client-side worked (the owner hit this: "Preview import" could not be pressed). Development only — production builds are unaffected | planner |
+| **Installable on a phone's home screen (2026-11-25)**: a web app manifest (`src/app/manifest.ts`, "Expenses", `display: standalone`, `start_url` `/`), 192 / 512 px icons plus a maskable 512, a 180 px `apple-touch-icon`, the Apple web-app meta tags; `themeColor` for light and dark was already there | The app is used on phones (the Add dialog is a bottom sheet) but opened from a home screen as a plain bookmark with a screenshot icon and browser chrome | planner |
+| **Deliberate: no service worker and no offline mode (2026-11-25)** | Every page is per-user data rendered on the server from the session cookie; a cached page would be another user's or a stale balance, and offline entry would need a sync and conflict story. A manifest alone is enough to install (Chromium no longer requires a service worker) | planner |
+| The icons are committed PNGs in `public/` (`public/icons/`, `public/apple-touch-icon.png`), rendered from the brand mark by `scripts/generate-icons.mjs` with Playwright's Chromium (already a devDependency); not `icon.tsx` / `ImageResponse` routes | Static files need nothing at runtime and cannot break in the image (no `sharp`, which the Dockerfile deletes, and no build-time rendering step). The manifest route is static (`○` in the build output). The cost: the PNGs must be regenerated by hand when the brand mark changes (`docs/DEVELOPMENT.md`) | built |
+| Icon design: "any" icons are the rounded accent tile with transparent corners, as in the app; the maskable and apple-touch icons are full-bleed accent (opaque) with the same glyph proportions as `BrandMark` (16/28 of the tile). Light-theme colours (`#BC522C`, white glyph) in both schemes | Launchers cut maskable icons to their own shape and iOS rounds the apple-touch icon and fills transparency with black, so those two must be square and opaque. At 57% of the tile the glyph's corners sit at ~29% from the centre, inside the maskable 40% safe circle. Home-screen icons cannot follow the colour scheme reliably | built |
+| iOS standalone: `apple-mobile-web-app-status-bar-style` is `default`, and the viewport has no `viewport-fit=cover`; the top bar was left as it is | With `default` the page starts below the status bar, and without `viewport-fit=cover` the safe-area insets are zero (iOS letterboxes landscape), so nothing sits under the notch or the home indicator; the Add button and the bottom sheet already use `max(…, env(safe-area-inset-bottom))`. `black-translucent` / `cover` would need `env(safe-area-inset-top)` padding on the sticky top bar; not worth it for a few pixels of colour | built |
+| The manifest's `theme_color` is Sand's `--surface` (`#FFFCF7`, the top bar) and `background_color` Sand's `--background` (`#F4EFE7`, the launch screen) | A manifest has one colour each; the per-scheme `<meta name="theme-color">` tags (Sand / Graphite surface) take over once a page loads. A dark-mode phone sees a light launch screen for a moment | built |
+| **Dependency updates: Dependabot (`.github/dependabot.yml`, 2026-11-25), monthly and grouped**: npm in two groups (`next-react`: `next`, `eslint-config-next`, `react`, `react-dom` and their types, majors included; `minor-and-patch`: everything else), other majors one PR each, a 7-day cooldown on npm; GitHub Actions in one group; the Dockerfile's base image | Quiet enough for a one-person project; `next` and `eslint-config-next` are pinned to the same exact version and must move in one PR. Each PR runs the Docker image and E2E workflows | planner |
+| `@types/node` majors are ignored by Dependabot | The types follow the Node major the app runs on (`node:24` in the Dockerfile and both workflows), which is changed by hand together | built |
+| The Dockerfile's `ARG NODE_IMAGE` + `FROM ${NODE_IMAGE}` became a literal `FROM node:24-bookworm-slim AS base` stage the other stages start from | Dependabot's Docker parser does not resolve build arguments, so it would never have seen the image. Nothing used the argument (no workflow or doc passed `--build-arg NODE_IMAGE`). The floating `24-bookworm-slim` tag stays: rebuilds pick up Node 24 and Debian patches, so Dependabot only proposes a new Node major; an odd (non-LTS) one is closed, which makes Dependabot skip that version. The workflows' `node-version: 24` is not bumped by Dependabot and moves with it by hand | built |
 
 ### Development tools and documentation
 
@@ -313,7 +363,8 @@ Added 2026-11-08.
 | The README has a short "Development" section with the everyday `make` commands (dev, check, test, test-e2e, watch, demo-reset, down), one-line blocks; everything else stays in `docs/DEVELOPMENT.md` | The owner wants them runnable straight from the README (2026-11-17); this relaxes the earlier "no dev commands in the README" rule for these only | owner |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
-| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433 | planner (ask), built |
+| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433. *(Extended 2026-11-25 to Firefox and WebKit, next row.)* | planner (ask), built |
+| **The e2e suite in Firefox and WebKit too (2026-11-25)**: projects `desktop-firefox` and `desktop-webkit` (the desktop tests at 1280px) and `phone-webkit` (the phone tests at 375px with touch, the nearest Playwright has to iOS Safari); `desktop` and `phone` stay Chromium under their old names. No Firefox phone project: Playwright's Firefox does not support `isMobile`. CI installs all three browsers (`--with-deps`) and runs every project | Headless Chromium alone had left Safari and Firefox unchecked. A test that has to tell the layouts apart reads the viewport width (the app's own `sm` breakpoint), not the project name. In WebKit the `consoleErrors` fixture ignores one message: "Fetch API cannot load …?_rsc=… due to access control checks.", WebKit's rejection of a Next.js link prefetch that a `page.goto` cancels while the old page is still alive (Chromium and Firefox stay silent; soft navigations between pages logged none, checked with a throwaway probe test). Only that same-origin `_rsc` form is ignored, and only in WebKit. `e2e/wallets.spec.ts` reads the group names through the region found by its heading: in Playwright 1.65's Firefox a multi-element query under a region located by its accessible name makes the next query crash the content process (SIGSEGV), also on a one-section static page, so it is the test tool, not the app | planner (ask), built |
 | README reduced to a landing page (2026-11-10): what the app is, the Docker quick start, a self-hosting pointer and links. "Run it", "Debugging", "Scripts" and "Layout" moved unchanged to `docs/DEVELOPMENT.md`; the import/export, statement importer and accounts paragraphs were dropped because `docs/SPEC.md`, `docs/STATEMENT-IMPORTER.md` and `docs/SELF-HOSTING.md` already hold them. Supersedes the "five-minute path" README above; the one-line `bash` block rule now applies to `docs/DEVELOPMENT.md` | The owner found the README had too many commands and wants only a quick Docker start, a short description and the self-hosting pointer there | owner |
 
 ### Interface
@@ -346,6 +397,8 @@ Added 2026-11-08.
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 | *(2026-11-18)* Without JavaScript the /transactions Month chip's popover button is hidden like the other popover chips and a `<noscript>` link with the same label jumps to the no-JS filter form's Month select (`#no-script-month`) | The label looked like a button that did nothing; the ‹ › links keep working, and the form below is where a month is chosen without scripts. With scripts nothing changes | planner |
 | **Fix (2026-11-18, found by the e2e suite): pickers focus their first item with `preventScroll`** (date picker days, month grid, the /transactions filter chips' options) | On open the focus ran before the Popover had re-placed itself above a trigger near the bottom, so the browser scrolled the page to the panel's first, below position and the panel never flipped | built |
+| **Fix (2026-11-25, found by the e2e suite in Firefox and WebKit): "+ New category" focuses the new pill from an effect, not a `requestAnimationFrame`** | The state updates that remount the category picker with the new pill checked run inside the action's transition; in Firefox (3 runs in 4) and WebKit (1 in 4) the frame callback often ran before that commit, found no pill, and the pill never got focus. An effect runs after the commit. Chromium had always passed. Covered by `e2e/entries.spec.ts` ("+ New category creates the category…") in all three engines | built |
+| **Fix (2026-11-25, found by `e2e/recurring.spec.ts` in WebKit): the date picker inside the Add dialog no longer closes when its month changes.** `Popover` treats focus landing on one of its own containers as staying, not leaving; the picker's month arrows take focus when clicked | WebKit does not focus a clicked button, so focus stayed on a day cell; changing month (or opening the month view) removed that cell, WebKit moved focus to the Dialog's panel, and the `focusin` outside handler closed the picker. Chromium focuses the arrow, so it never showed there; outside a dialog there is no focusable container to land on. A click outside still closes it (`pointerdown`). The Popover fix alone makes the regression test pass; the arrow focus keeps keyboard users on the arrow in Safari as in Chromium. Covered by `e2e/entries.spec.ts` ("inside the Add dialog, changing month…"), which fails in WebKit without the fix | built |
 | **Fix (2026-11-18, found by the e2e suite): the charts' screen-reader day tables are hidden by an `sr-only` wrapper, not by `sr-only` on the `<table>`** | A table does not shrink to the 1px width: on the wallet page with a long wallet name the hidden table was 470px wide and the page scrolled sideways at 375px | built |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -399,7 +452,7 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | Closing after a save is `router.back()` followed by `router.refresh()` on the next `popstate` | `back()` is asynchronous; refreshing straight away would refresh the dialog's URL. Seen working in the browser (the wallet list behind showed the new balance) | built (step 6) |
 | The dialog's footer is outside the keyed `<form>`, its submit attached with `form=`, pending state from `useActionState` | The form remounts after every result (the existing fix for React's form reset); the "Keep open" checkbox and the status line must survive that, and a live region that remounts with its text is not announced | built (step 6) |
 | Today / Yesterday are `aria-pressed` buttons, not radios; the calendar pill reads "Other date" unless a custom date is set | They are shortcuts that set the picker's value, not a choice that posts itself (MonthGrid uses the same pattern); a third radio could not represent "some other day" | built (step 6) |
-| "Today" is the server's date, passed to the form | The form renders on the server first; a browser in another time zone would otherwise disagree with the server's default date and cause a hydration mismatch | built (step 6) |
+| *(superseded 2026-11-25: it is now the user's today, `todayInZone(user.timeZone)`, still passed to the form)* "Today" is the server's date, passed to the form | The form renders on the server first; a browser in another time zone would otherwise disagree with the server's default date and cause a hydration mismatch | built (step 6) |
 | Sent and Received sit side by side from `sm` up and stack below it | Two 44px inputs with their currency codes do not fit side by side in a 375px sheet | built (step 6) |
 | "Manage categories" is a dashed pill after the category pills, not a link in the heading row | Keeps the Tab order amount → categories → wallet that the spec asks for | built (step 6) |
 | The entry form creates a category in place ("+ New category", a Server Action called from a transition, not a nested form) and "Manage categories" saves a sessionStorage draft that the next form with the same key restores once | Leaving the form to add a category lost what was typed. Forms cannot nest, so the creator's field has no `name` and posts nothing with the entry. The draft covers the remaining trip to /categories (rename, remove) | planner |
@@ -443,6 +496,100 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
 | `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
+### Filters and bulk edit
+
+Decided and built 2026-11-25 (SPEC /transactions: chip row, Selection mode; /transactions/new `?from=`).
+
+| Decision | Why | Decided by |
+|---|---|---|
+| Amount range `?min=` / `?max=` in major units (decimal comma accepted), inclusive, compared with each entry in its own currency (`amount_minor` against the bound scaled by that currency's decimals); no conversion; an invalid or negative bound is an error on its field | One number works across wallets without rates; silently ignoring a typo would show a wrong list | planner |
+| Several categories (`?category=1,2,3`, the old single value still works) and several tags (`?tag=1,2`): any of them matches; different filters combine with AND | The usual meaning of a multi-select filter | planner |
+| The search also matches the category name and tag names (transfers still on their note) | One box finds "groceries" whether it is a category, a tag or a note | planner |
+| Everything that followed the filters follows the new ones (day totals, strip, month links, Clear, CSV export and its link, the no-JS form); unknown ids match nothing and show as unknown | Same list everywhere | planner |
+| The chips stay one row: Category and Tag become multi-select panels, Amount is a new chip with two inputs; category colour dots on day-list rows (carried on `TransactionView`, same query) | Usable at 375px; the colour already identifies categories elsewhere | planner |
+| Bulk edit: "Select" switches to selection mode (a checkbox per row, "Select all shown", "Select all N matching" applying to the whole filtered result re-evaluated on the server); Delete, Set category (entries of its kind; the rest skipped and counted), Add / Remove tag (expenses and income; the 10-tag limit holds); a transfer leg means its transfer (Delete removes both legs, the others skip it); one DB transaction each; archived categories refused; Delete confirms with counts, says there is no undo and points to the backup; a result line afterwards and selection mode ends | After a large import many entries need the same fix | planner |
+| Duplicate in an open row's footer opens Add prefilled (kind, wallet, category, amount, note, tags; transfers both sides) with today's date via `?from=<id>`; another user's / a missing id shows the empty form; archived wallet or category not preselected; the repeating rule never copied | Re-entering a similar entry is common | planner |
+| An amount bound may have at most 3 decimals (the most any currency has); with more decimals than a currency has it rounds inwards for that currency (min 12.5 = ¥13 and up, max 12.5 = up to ¥12), which is exactly "≥ 12.5" / "≤ 12.5" | Integer amounts compare exactly against a decimal bound | built |
+| A maximum below the minimum is an error on `max`; the list then applies the minimum only. An invalid bound is left out of the list (and of the CSV link) and named in an alert line under the chip row; the export route answers 400 for one | Showing the rest of the list is more useful than an empty page, and the alert keeps it from being silent | built |
+| The per-currency scaling is a `CASE` over the ISO codes whose decimals are not 2 (from Intl, inlined) on a correlated lookup of the wallet's currency (`src/server/_filters.ts`), so it also works in queries that do not join `wallets` | No currency table in the database; the codes come from the same Intl data as `currencyDecimals` | built |
+| `TransactionFilters` keeps `categoryId` / `tagId` and adds `categoryIds` / `tagIds` (merged); `ListParams.category` / `tag` became `categories` / `tags` arrays; at most 100 ids per filter | Existing callers and tests keep working; a bound on the URL and the SQL list | built |
+| Multi-select chips: each option is a link that toggles its id and the panel stays open; "All …" clears and closes. The no-JS form uses native `<select multiple>` (its repeated keys are redirected to the comma form) | Keeps the URL as the state, the listbox keyboard model and the existing option selectors; a native multiple select is the accessible no-JS control | built |
+| Commas in `category=` / `tag=` stay unencoded in the links the app writes | Readable URLs, as the planner's `?category=1,2,3` | built |
+| Selection mode is a URL state (`?select=1`; `?select=page` ticks every shown row), kept while filtering and paging; rows become labelled checkboxes and do not open in this mode | Works without JavaScript; no nested forms (the row editors stay out of the way) | built |
+| The bar is one form (`id="bulk-edit"`) and the row checkboxes join it with `form=`; with JavaScript it posts through `startTransition` so React does not reset the ticked boxes after a refused action | The form-reset gotcha in CLAUDE.md would clear the selection on a tag typo | built |
+| Delete's confirmation is a server step (the action returns the counts it found; "Delete N entries" posts them back and the delete refuses if the target changed), not `confirm()` | It states the server's count for "all matching", works without JavaScript and in every engine, and cannot delete more than was confirmed | built |
+| Set category, Add tag and Remove tag do not ask first; a target with nothing they apply to (no entry of the category's kind, only transfers) is an error on the field instead of a "changed 0" result | They are reversible by another bulk edit; an error keeps the selection to try another category | built |
+| At most **2,000 rows** (entries and transfer legs) per call; beyond: "That is 2,345 entries; one change can touch at most 2,000. Narrow the filters (a month at a time, say) and repeat. Nothing was changed." | One transaction stays short; a month of a heavy import fits | built |
+| Add tag creates the tag only when at least one entry gets it, matching an existing one ignoring case | Like the entry form and the importer: no empty tags from a no-op | built |
+| The outcome travels in the redirect URL (`?done=c.4.42.0.0.3`: numbers and ids only); the page looks the names up | Shows with and without JavaScript after a redirect; a hand-made URL can only produce wrong counts, never arbitrary text. Reloading shows the line again | built |
+| The month / N shortcuts are allowed while a checkbox has focus (not inside a modal) | Ticking rows puts focus on a checkbox (in Chromium), and "the shortcuts keep working in selection mode" | built |
+| The "Select" / "Done selecting" button sits in the page header next to "Repeating"; the bar is sticky from `sm` only | At 375px a sticky bar would cover a third of the screen | built |
+| Duplicate is a link in the footer next to "Open as page"; `duplicateInitial` lives in `transactions/form-options.ts` | The intercepted route opens it as the dialog; the full page works without JavaScript | built |
+
+### Tags
+
+Decided and built 2026-11-25 (SPEC "Tags"). The tables came with migration `0007`, written beforehand by the planner.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| Tags go on expenses and income; transfers are not tagged in this version, and repeating rules carry no tags | Keeps the first version to one kind of row; see Known gaps | planner |
+| A tag name is trimmed, 1–40 characters, unique per user ignoring case, without commas; at most 10 tags per entry; a tag is created the first time it is used | Commas separate tags in the form field and the CSV cell; no separate "create tag" step to learn | planner |
+| `src/server/tags.ts` lists (with use counts), renames (onto an existing name = merge, one DB transaction) and deletes (the entries stay); entry create / update replace the entry's set in the entry's DB transaction; `TransactionView.tags` is loaded without a query per row | One place for the rules; a merge is what a user renaming "Work" to "work trips" (existing) means | planner |
+| The entry form's Tags field works without JavaScript (a comma-separated text input) and keeps the Add sheet one row taller | Every form in the app works without scripts; the Add sheet must stay short on phones | planner |
+| Day-list rows show tags as small pills after the note, the rest as "+N" | Readable at 375px | planner |
+| /transactions filters by one tag (`?tag=<id>`), as a chip and in the no-JS form; strip, totals, export and month links follow it *(superseded 2026-11-25 by "Filters and bulk edit": several tags)* | Several tags come with a later package that reworks the filters | planner |
+| Tag management is a "Tags" card on /categories (count linking to the entries, rename and delete inline); no new route | Tags sit next to categories in the user's mind; the menu stays short | planner |
+| **Deliberate:** Spendee labels stay appended to the note, they do not become tags | The note is part of an entry's duplicate identity: moving labels out of it would make files already imported import again | planner |
+| Native CSV: an optional `tags` column; tags are not part of the duplicate identity and a skipped duplicate gains no tags | "Import adds, never changes"; old files import as before | planner |
+| Backup: each entry's optional `tags` and an optional top-level list of the account's tags (unused ones survive); version stays 1; import only adds | Lossless round trip without a version bump | planner |
+| The demo seeds three tags on a few entries | Shows the feature on `dev:demo` | planner |
+| Merging keeps the **other** tag's spelling (renaming "work" to "OFFICE" when "Office" exists gives "Office") | The existing tag is the one the user already sees everywhere; the action says "Merged “work” into “Office”." | built |
+| The suggestions in the entry form are toggle pills under the text input (the user's tags, the chosen ones first, then by use, narrowed by the name typed after the last comma, at most 8), shown once the field is focused and then left visible | No combobox to make accessible in three engines; WebKit does not focus a clicked button, so hiding on blur would swallow the click | built |
+| Picking a suggestion replaces the half-typed name only when that name is part of the picked tag ("hol" → "holiday 2026"); a different new name typed before stays | Otherwise a deliberately new tag would be lost by clicking a suggestion | built |
+| "Keep open for another" keeps the tags for the next entry (amount and note are cleared, Repeat goes back to Never) | Tags are usually shared by a run of entries (a holiday's expenses) | built |
+| The first entry of an "Add with Repeat" gets the tags; the rule's later entries do not | The rule carries no tags (planner); the entry typed is still an ordinary entry | built |
+| A `tags` cell on a CSV transfer row is a problem, not ignored; also on wallet and category rows | Same as a category on a transfer row; silently dropping data is worse than asking | built |
+| The CSV `tags` column is the last one; the export writes the names sorted, joined by ", "; the formula guard covers the whole cell | Keeps the header order the Statement Importer's writer follows (a prefix); one cell is one spreadsheet value | built |
+| A tag only skipped (duplicate) rows name is not created by an import; a backup's top-level list is created even when unused | "Import adds, never changes": a re-import adds nothing, not even a tag; the list exists so unused tags survive | built |
+| The backup's top-level list is `tags: [{ name }]` (objects, not strings) | Room for a later field (a colour) without another shape | built |
+| The Tags card counts all time and every wallet group; "Show its N entries" opens `/transactions?month=all&tag=<id>` | The count is about the tag, not the month on /categories | built |
+| The open tag row puts the name first and the entries link next to Delete | Opening a row focuses its first control, which must be the name (as the category rows) | built |
+| An unknown `?tag=` (deleted, or another user's) reads "Unknown tag" in the chip and matches nothing | The URL stays honest about what is filtered; Clear removes it | built |
+
+### Recurring entries
+
+Decided and built 2026-11-25 (SPEC "Recurring entries"). The table and `transactions.recurring_id` came with migration
+`0007`, written beforehand by the planner.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| No scheduler: due occurrences become entries lazily, when the user next uses the app (every page, export download and Server Action sees the entries up to the user's today) | A self-hosted single container has no reliable background job, and nobody looks at the data while not using the app | planner |
+| Occurrences are counted from `startDate`: a rule from the 31st lands on shorter months' last day and returns to the 31st; 29 Feb yearly lands on 28 Feb in other years; the date maths is a pure module (`src/lib/recurrence.ts`) | Counting from the previous occurrence would drift to the 28th for good after February | planner |
+| Catching up after an absence creates every missed occurrence on its own day, at most 300 per rule per run (`MAX_OCCURRENCES_PER_RUN`); the rest follow on the next request | The history should be what it would have been; the bound keeps one request short after years away | planner |
+| Created entries are ordinary entries carrying `recurringId`; editing or deleting one does not touch the rule; deleting the rule keeps its entries (`set null`) | A rule is a convenience for typing, not a second source of truth | planner |
+| Editing a rule changes future entries only | Past entries are history the user may already have corrected by hand | planner |
+| Paused rules create nothing and do not backfill; resuming continues from the first occurrence on or after the day of resuming. A rule whose wallet, wallet group or category is archived when an occurrence falls due is paused then (and shown with the reason); the user resumes it by hand | A pause means "not while I'm away"; silently filling an archived wallet would break the archive rule | planner |
+| Expenses and income only; recurring transfers are a known gap | Keeps the first version to one kind of row per occurrence | planner |
+| Removing a category "moving its entries" moves its rules too, in the same DB transaction; a rule counts as use for the kind change; deleting a wallet without entries deletes its rules (FK cascade) and its confirmation says so | A rule must never point at a category of the other kind or at nothing | planner |
+| Creation lives in the Add form (expense / income being created): a "Repeat" select (Never … Yearly), "every N" and an optional end date; the entry is the rule's first occurrence; a past start says before saving how many more entries saving adds | One place to add things; the rule starts from a real entry | planner |
+| `/recurring` lists the rules with pause / resume, edit and delete; not in the top menu (linked from the /transactions header and from the marker on rule-made entries); "New" opens the Add form with Repeat preselected | Rules are set up rarely; the menu stays short | planner |
+| The backup carries an optional `recurring` list (wallet by the file's id, category by kind + name) and each entry's optional `recurringId`; version stays 1; import adds a rule the account lacks and skips an identical one; not in the CSV | Lossless round trip without a version bump; a CSV moves entries, not rules | planner |
+| The demo seeds two rules (monthly salary and rent on the 1st, from last month) with their entries linked | Shows the feature on `dev:demo`; the 1st keeps the seed's counts the same on every day of the month | planner / built |
+| The hook is `getCurrentUser` (`src/lib/auth.ts`), right after the session is resolved: it is React-`cache`d per request, already knows the time zone, and every page (via `requireUser`), every Server Action and the export route handlers go through it before reading anything; the layout and the page of one render await the same promise, so neither can read before the entries exist | A layout-only hook would race the page (they render concurrently); a page-by-page call would be forgotten somewhere | built |
+| The hook's cost when nothing is due is one indexed query (`user_id = ? and paused_at is null and next_date <= today`); each due rule is caught up in its own DB transaction: `SELECT … FOR UPDATE` on the rule row, re-check paused / `next_date` under the lock, insert its entries, move `next_date`, commit | Two requests at once: the second waits on the lock, then sees the new `next_date` and does nothing (checked with 8 concurrent runs on a real Postgres: 401 entries, none twice) | built |
+| A failure inside the hook is logged (`console.error`) and does not fail the request | A broken rule must not lock the user out of every page; the next request retries | built |
+| The mutations that change when a rule runs (create, edit, resume) catch the rule up inside their own DB transaction, with the caller's today | A Server Action's redirect renders in the same request, after `getCurrentUser` already ran: without this, today's entry would only appear on the next page load | built |
+| The pause reason is not stored: `RecurringView.blockedBy` is worked out from the wallet / group / category at read time ("The wallet “Cash” is archived.") | No schema change; the reason shown is the one that blocks resuming now (after unarchiving, the rule shows plain "Paused" and Resume) | built |
+| Resume uses the later of today and the stored next date, so pausing and resuming on the same day never makes a second entry for today | `firstOccurrenceOnOrAfter(today)` alone would repeat today's occurrence when it was already made | built |
+| The rule's kind cannot be changed by editing; the category picker offers the kind's categories (plus its own archived one) | Same as editing an entry's category; switching expense ↔ income is a new rule | built |
+| Editing keeps the schedule's anchor (`startDate`) when the frequency, interval and next date are unchanged; changing any of them restarts the schedule at the new next date, which must then be today or later. An end date before the next date ends the rule; one before the anchor is refused. An ended rule continues when given a next date | "Future entries only", with a predictable way to move the day of month; the 31st survives an amount-only edit | built |
+| "Every N" is 1–99 | Enough for any real schedule; keeps the input two characters wide | built |
+| The Repeat state (frequency, every, until) is React state in `EntryForm`, reset to Never after a "Keep open for another" save | It survives the remount after a refused save like the kind does; resetting it stops a second save from creating a second rule by accident | built |
+| The marker is a small loop icon after the category with "(repeats)" for screen readers; the link to /recurring is in the open row's footer ("Repeating entry"), not on the marker | The marker sits inside the row's button, where a link cannot go | built |
+| An imported rule keeps the file's next date and paused state (paused as of the import); its due entries are made by the next request like any rule's. A rule matches an existing one on wallet, category, kind, amount, note, frequency, interval, start and end date; next date and paused are not compared | Re-importing one's own backup must add nothing, even after the rule moved on | built |
+| A category named only by a backup rule (not in the file's `categories`) is created like any other category the import needs | The rule names its category by kind + name, so the file may not list it | built |
+| *(merge with budgets)* Removing a category moves its rules to the replacement but not its budget (the budget goes with the category, as the budgets work decided); a rule blocks the kind change before the budget removal that an allowed change makes. An import writes categories, then budgets, then rules, then entries | Each feature keeps its own rule; the order lets budgets and rules point at created categories and entries at created rules | built |
+
 ### Wallet groups
 
 Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, data model and services, and 2, the interface, are built).
@@ -474,6 +621,31 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 | *(2026-11-18)* An archived group can be renamed and recoloured without unarchiving it: an Edit toggle in its row of the "Archived groups" section opens the Groups card's form (the service always allowed it) | Unarchiving just to rename showed it in the switcher meanwhile; one form for both lists | planner |
 | *(2026-11-18)* The entry services refuse new entries (and moving an entry) onto a wallet whose group is archived, exactly as onto an archived wallet; an entry already on it keeps it when edited | Before, only the pickers hid such wallets; the rule now holds for every caller | planner |
 
+### Reports
+
+Built 2026-11-25 (SPEC "Reports").
+
+| Decision | Why | Decided by |
+|---|---|---|
+| *(2026-11-25)* A yearly view at `/reports`, a new top-menu entry "Reports" between Categories and Import & export, with its null page under `@modal/` | Every other view is one month | planner |
+| *(2026-11-25)* `?year=YYYY`, default the current year in the account's time zone, a year stepper like the month switcher, no stepping into the future | The same URL-state pattern as `?month=` | planner |
+| *(2026-11-25)* The Overview's currency switch, "All in <currency> / <currency> only" switch, conversion (each day at that day's rate, a currency without a rate left out and named, the same notes and Rates link) and wallet-group scope, reusing its pieces | One rule for every converted view | planner |
+| *(2026-11-25)* Transfers never count; archived wallets and categories do | It is history | planner |
+| *(2026-11-25)* Contents: the year's income / expenses / net against the previous year (the current year against the same period of the previous one), a month-by-month chart linking each month to the Overview, category-by-month tables for expenses and income linking each cell to the filtered /transactions; an empty state for a year with no entries | The planner's brief | planner |
+| *(2026-11-25)* A year is one `getConversion` over the previous and the shown year (one provider range request at most, none once stored) and one SQL query grouped by date, kind, currency and category; nothing per month | Up to 731 days of rates and a year of entries must not mean 12 round trips | planner |
+| *(2026-11-25)* "Same period" for the current year is 1 Jan – today against 1 Jan – the same date a year earlier (`addMonths(today, -12)`: 29 Feb → 28 Feb) | The day-precise version of the Overview's "through day N" pace | built |
+| *(2026-11-25)* The year's totals, chart and tables include entries dated after today (like the Overview's month figures); only the compared figure stops at today, and the card says "€X by 25 Nov vs …" when the two differ | The totals then match the chart and the tables, and the comparison stays like-for-like | built |
+| *(2026-11-25)* Income and expenses are two bars per month on one scale; net is a separate small row of up / down bars on its own scale (labelled "Net (own scale)"), with the compact net written under each month from `sm` up; no cap rule | Net can be negative and is much smaller than either flow, so drawing it on the bars' scale (or as a second axis) would make it unreadable; months rarely have one outlier the way days do | built |
+| *(2026-11-25)* The net row has no figures below `sm` (twelve 28px columns cannot hold "+€1.2K"); the figures are in each month's link name, its `title`, the hidden table and the Net card | Text that would truncate or overlap reads worse than none | built |
+| *(2026-11-25)* Future months are not links (the Overview would clamp them to the current month) and are drawn as `--chart-future` stubs | A link that lands somewhere else is a trap | built |
+| *(2026-11-25)* The category tables use whole units without a symbol ("1,235"), the currency named once above the table, the exact amount in each link's accessible name and `title` | Thirteen money columns with cents and symbols do not fit even at 1280px | built |
+| *(2026-11-25)* On phones the tables scroll sideways inside their card with a sticky category column; the scroller is `relative` | The page must not scroll sideways; the `sr-only` caption (absolutely positioned) otherwise escaped the scroller and widened the page by the table's width — the e2e layout check caught it | built |
+| *(2026-11-25)* Only non-zero cells are links; zero cells are a muted dash. A row total links to the category over the year (`from` / `to`), a month total to that month and kind. Links carry `currency` (and `view=only`) so the day strip shows the same currency | A link to an empty list is noise; the totals deserve the same drill-down as the cells | built |
+| *(2026-11-25)* The default currency for a year is the one with the most entries in that year (`pickDefaultCurrencyBetween`, `pickDefaultCurrency`'s rule over a date range; `pickDefaultCurrency` now calls it) | The month rule applied to the year; a one-line refactor instead of a second copy | built |
+| *(2026-11-25)* `currencyConditions` and `converter` in `insights.ts` are exported (unchanged) for `reports.ts` | Reuse the month services' scoping and conversion instead of copying them | built |
+| *(2026-11-25)* Net's comparison has no percentage ("vs +€900.00 in 2025"); income and expenses show whole-percent change, "nothing in 2025" when the previous figure is 0 | A percentage of a net amount that can change sign reads badly | built |
+| *(2026-11-25)* The year stepper has no picker (the month switcher has one); years start at 1900 | Years are few and one step apart; plain links work without JavaScript | built |
+
 ### Process
 
 | Decision | Why | Decided by |
@@ -485,35 +657,58 @@ Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, 
 
 ## Next steps
 
-The to-do list, in the order worth doing (written 2026-11-18, after v0.1.0 was tagged). Tick or remove an item when
-it is done; the details of each gap are under "Known gaps" below.
+The to-do list, in the order worth doing (rewritten 2026-11-25, after the round of features that followed v0.1.0:
+the account's "today", budgets, repeating entries, reports, tags, reconciliation, filters and bulk edit, the
+home-screen install, Firefox / WebKit in the browser suite). Tick or remove an item when it is done; the details of
+each gap are under "Known gaps" below.
 
-**Finishing the v0.1.0 release**
+**Releasing this round** (it is on the branch `next-features`, not on `main`, and nothing is pushed)
+
+- [ ] The owner reads the branch (and tries it on the demo database, `make dev`), then merges it into `main`.
+- [ ] Cut the release (`make release VERSION=0.2.0`; `CHANGELOG.md` "Unreleased" is written). The pushed workflows
+  are the first run of the Firefox / WebKit projects on Linux and of the Dependabot config.
+- [ ] Upgrade the owner's own instance: `pg_dump` of `expenses` first, then the new image, then check that the
+  migrations up to `0007_budgets-recurring-tags` applied.
+- [ ] Set the account's time zone under Account settings if it is empty: "today" follows it since this round.
+
+**Left from the v0.1.0 release**
 
 - [x] The `v0.1.0` workflow run is green and `ghcr.io/xalert/expenses-tracker` carries `0.1.0`, `0.1` and `0`
   (one digest, amd64 and arm64), with an SBOM, provenance and a cosign signature object in the registry (checked
   2026-11-18).
 - [ ] Run `cosign verify` on the `0.1.0` image once (`docs/SELF-HOSTING.md`, "Verifying the image"): the signing
   step passed in CI and the signature is in the registry, but it has not been verified from a machine with cosign.
-- [ ] Upgrade the owner's own instance: `pg_dump` of `expenses` first, then the new image, then check that the six
-  migrations (`0001` to `0006`) applied.
 
-**Before the instance is reachable from the internet**
+**Before the instance is reachable from the internet** (the owner said on 2026-11-25 that the app is personal-only
+for now, so none of this is queued)
 
 - [ ] HTTPS behind a reverse proxy, with `COOKIE_SECURE` and `TRUST_PROXY=1`.
 - [ ] `ALLOW_REGISTRATION=false` once the accounts exist.
 - [ ] Backups from host cron (the `BACKUP_INTERVAL_HOURS` loop does not survive a reboot), and `backups/` copied
   off the machine.
+- [ ] Security headers (Content-Security-Policy, `frame-ancestors`, Referrer-Policy, HSTS): the app sets none.
+- [ ] A second sign-in factor (TOTP or passkeys).
 
 **Checks that need a person or a real device** (see "Not verified")
 
-- [ ] On a real iPhone: the Add sheet's drag-to-close, and the "±" toggle keeping the keyboard open.
-- [ ] Safari and Firefox; the browser suite runs in headless Chromium only.
-- [ ] Dark mode and the 375px layouts by eye; a screen-reader pass.
+- [ ] On a real iPhone: the Add sheet's drag-to-close, the "±" toggle keeping the keyboard open, and the app added
+  to the home screen (icon, title, status bar, the top bar and Add button in standalone mode). The same install on
+  an Android phone.
+- [ ] Real Safari and a released Firefox: the suite now runs in Playwright's WebKit and Firefox builds, which found
+  two real bugs, but those are not the released browsers.
+- [ ] Dark mode and the 375px layouts by eye on the new screens; a screen-reader pass (budget meters, the report
+  chart and tables, the tags field, selection mode).
+- [ ] The converted views of budgets and reports with live provider rates (every check ran with rates off or with
+  manual rates).
 - [ ] Weekend-only and holiday-only date ranges against the live Frankfurter API.
 
 **Optional work** (gaps left on purpose; none is queued)
 
+- [ ] Repeating transfers; a rule's upcoming occurrences as "projected" days on the wallet page; tags on rules.
+- [ ] Budgets per wallet group, and a history of past budget amounts (a past month is compared with today's).
+- [ ] Tags on transfers.
+- [ ] A wallet card's "this month" change stopping at today, like the balance next to it.
+- [ ] Reports: a yearly export or print view; more than one year back.
 - [ ] Statement Importer: pair cross-currency transfers between two statements.
 - [ ] Statement Importer: virtualise the review table (slow with a few thousand rows).
 - [ ] Statement Importer: a merge option when loading a context file (it replaces the lists today).
@@ -522,7 +717,14 @@ it is done; the details of each gap are under "Known gaps" below.
 - [ ] Typing a date into the date picker.
 - [ ] Importing a context file into the app itself.
 
-New features beyond these have not been chosen yet.
+**Considered on 2026-11-25 and not built** (each needs a decision by the owner first)
+
+- Wallets shared between accounts: the owner said not to build it.
+- Splitting one entry across categories: it breaks the rule that an entry has one category, which every report,
+  import and export relies on.
+- Receipt attachments: needs a decision on where files live (the image holds no data; Postgres or a new volume).
+- Category icons (colours were added), and an administrator page (listing users, resetting passwords in the app
+  instead of `scripts/reset-password.mjs`).
 
 ## Known gaps
 
@@ -546,14 +748,45 @@ New features beyond these have not been chosen yet.
   registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
+- **Tags (2026-11-25): transfers cannot be tagged, repeating rules carry no tags** (only the first entry of an "Add
+  with Repeat" gets them). /transactions filters by several tags (any of them; 2026-11-25), but not by "all of them".
+  Tags have no colour and no page of their own; the Overview and /reports have no per-tag figures; the old
+  `TransactionList` (not the day lists) shows no tags. The Statement Importer does not write the CSV `tags` column.
+- **Recurring transfers** *(2026-11-25)*: repeating entries are expenses and income only; a monthly move to savings
+  is still entered by hand.
+- **A rule's upcoming occurrences are not shown ahead of time** *(2026-11-25)*: the wallet page's "projected" days
+  only show entries that exist (future-dated ones); next month's rent from a rule appears only on its date. The
+  /recurring list shows each rule's next date.
+- **Repeating entries are not in the CSV** *(2026-11-25)*, only in the JSON backup: a CSV moves entries, not rules
+  (an exported entry made by a rule imports as a plain entry).
+- **No list of a rule's entries** *(2026-11-25)*: /recurring shows how many entries a rule made, but /transactions
+  has no filter by rule.
 - **Manual exchange rates are not in the CSV** (only in the JSON backup since 2026-11-18): a CSV moves entries, not
-  rates.
+  rates. The same holds for budgets and category colours (2026-11-25).
+- **Budgets (2026-11-25): no per-group budget, no history, no rollover.** A budget covers every wallet group, so in a
+  group scope its progress is hidden rather than shown for that group; changing the amount rewrites past months'
+  comparison too; unspent money does not carry over. No notification when a budget is exceeded (the app has no
+  notifications), and no budget for income.
+- **A budget whose currency's last wallet was deleted** keeps working (its progress converts as usual), but saving it
+  again is refused until a wallet in that currency exists or another currency is chosen; the form still shows its
+  currency so the user sees why.
+- **Category colours are not on transaction rows** (`day-list`, `transaction-list`), nor in the /transactions
+  category filter or the dashboard's per-category lists; the dot is on /categories, the entry form's pills and the
+  Overview's Budgets card only.
 - **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
   refusal ("The upload failed…" in the panel); browsers always send the header for a `FormData` body.
 - *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
   real `data/app.db`.
 
 ### Rough edges
+
+- **Filters and bulk edit (2026-11-25).** Bulk edit has no undo (the confirmation points to the backup) and changes
+  only the category and tags: not the wallet, date or note. Tags match "any of", never "all of". Selection is per page:
+  ticks are lost when moving to another page or filter (only "Select all N matching" spans pages). The result line
+  comes back on a reload of its URL (it lives in `?done=`). Without JavaScript, "Select all shown" / "Clear" are links
+  that reload the page (ticks made before are replaced), and all three action fields show at once. Below `sm` the bar
+  is not sticky: after ticking rows far down the list one scrolls back up to Apply. The amount range cannot say "in
+  EUR only" (combine it with the Wallet filter).
 
 - Without JavaScript the no-JS month select covers 24 months back and one ahead (plus the month in view); older
   months are reached with ‹.
@@ -571,6 +804,30 @@ New features beyond these have not been chosen yet.
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
+- *(2026-11-25)* **A rule paused by hand keeps showing the archive reason** once its wallet or category is archived
+  later (the reason is worked out at read time, not stored), and a rule paused because of an archive shows plain
+  "Paused" after unarchiving.
+- *(2026-11-25)* On the repeating-entry edit page at 375px a large amount is cut off in the amount box (the
+  `BigAmount` box shares the row with "EUR · into ING Current"); the value is intact and scrolls in the input. Same
+  component as the Add form.
+- *(2026-11-25)* A rule whose wallet is created archived by a backup import is created as given; it pauses itself at
+  its next due date rather than being refused at import.
+- **A wallet's "this month" change counts this month's future-dated entries (2026-11-25).** On a /wallets card and
+  in the Overview's Wallets card the change is `getWalletMonth().inMinor − outMinor` for the whole month (a month
+  figure), while the balance beside it stops at today; with an entry dated later this month, the opening balance
+  plus the change is not the balance shown (the sparkline stops at today). Left as it is: the brief kept month
+  figures unchanged.
+- **Reconcile without JavaScript** can only use today's date (the date picker needs scripts), and the ⋯ menu that
+  leads to it needs scripts too: `/wallets/<id>?reconcile=1` works without them.
+- **The reconcile row lock covers two reconciliations only:** an ordinary new entry (`createTransaction`) does not lock
+  the wallet row, so one saved in the same instant can land between the balance read and the adjustment.
+- **/reports below `sm`** shows the month-by-month net as bars only, without figures (see the Reports decisions), and
+  the chart's columns are about 28px wide: the month links are full-height columns, so they are wide enough to
+  tap but narrower than 44px. The category tables need sideways scrolling for most months.
+- **/reports has no yearly export or print view**, and no comparison beyond the previous year (no multi-year trend).
+- **A cell link on /reports with "All in" counts converted amounts, but the /transactions list it opens shows each
+  entry in its own currency**, so the list's sum can differ from the cell for a category with entries in several
+  currencies.
 
 ### Statement importer gaps
 
@@ -591,10 +848,42 @@ New features beyond these have not been chosen yet.
 
 ### Not verified
 
-- **End-to-end browser suite (2026-11-18): what it does and does not cover.** `e2e/` (Playwright, Chromium,
-  production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in a real
-  browser what the entries below list as covered. It runs in headless Chromium only: no Safari / Firefox, no real
-  touch device (the phone project emulates a 375px touch viewport), no screen reader (announcements and labels are
+- **Filters and bulk edit (2026-11-25).** Checked: service tests on PGlite (`tests/transaction-filters.test.ts`,
+  `tests/bulk.test.ts`: each filter alone and combined, EUR / JPY / KWD, the search over category and tag names, day
+  totals, strip, CSV export; every bulk action by ids and by filters, transfers, the tag limit, archived category,
+  another user's ids, the 2,000 bound, a forced mid-way failure rolled back), the action (`tests/bulk-actions.test.ts`)
+  and render / helper tests (`tests/bulk-ui.test.tsx`); `e2e/bulk.spec.ts` in all five projects (two categories +
+  amount, select and set category with the result line, "Select all N matching" + delete with the confirmation, the
+  no-JavaScript tick-and-delete, Duplicate); screenshots of the category and amount panels, the amount error, selection
+  mode, the delete confirmation and the result line at 375px and 1280px in light and dark, looked at by eye. Not
+  checked: a screen reader on the multi-select listbox (`aria-multiselectable` with link options) and the live count in
+  the bar; the query time of the amount `CASE` and the search's `exists` subqueries on a large account (no index added);
+  a no-JS "Select all N matching"; bulk edits racing an edit of the same rows in another tab beyond the row locks.
+- **Tags (2026-11-25).** Checked: service, import / export, action and render tests on PGlite; `e2e/tags.spec.ts` in
+  all five projects (Chromium, Firefox, WebKit desktop; Chromium and WebKit phone), including the no-JS form;
+  screenshots of the Add dialog with the Tags field, the day list with pills, the Tag chip, a filtered list and the
+  Tags card at 375px and 1280px in light and dark, looked at by eye. Not checked: a screen reader on the suggestion
+  pills and the row names ("Tags: …"), a real phone keyboard over the Add sheet while the suggestions open, case
+  folding of non-ASCII names where JavaScript's `toLowerCase` and Postgres `lower()` disagree (the database's index
+  decides; the importer maps names back with SQL `lower()`), and the query time of the tag filter on a large account.
+
+- **/reports (2026-11-25).** Checked: service and render tests on PGlite, `e2e/reports.spec.ts` and
+  `e2e/layout.spec.ts` (headless Chromium, 375px and 1280px, both schemes, manual rates only), screenshots at 375px
+  and 1280px in light and dark of a full past year, the partial current year and an empty year, looked at by eye.
+  One live request to Frankfurter for a 23-month range came back with every business day. Not checked: the page
+  converting with the live provider in the browser (the e2e server runs with `EXCHANGE_RATES=false`), a screen
+  reader on the chart and the tables, Safari / Firefox (sticky table column), and the query time on a large real
+  account.
+
+- **End-to-end browser suite (2026-11-18, three engines since 2026-11-25): what it does and does not cover.** `e2e/`
+  (Playwright, production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in
+  a real browser what the entries below list as covered. Since 2026-11-25 every desktop test also runs in
+  Playwright's Firefox and WebKit, and every phone test in WebKit (all passing in two full runs in a row and one with
+  CI's settings, on macOS arm64; the Linux builds CI uses have not been run here). These are Playwright's headless
+  builds of the engines, not a released Firefox or Safari: no Safari on a Mac or iPhone, no iOS (the
+  `phone-webkit` project is desktop WebKit with a 375px touch viewport, not Mobile Safari's keyboard, gestures or
+  viewport behaviour), no Firefox on Android, no real
+  touch device (the phone projects emulate a 375px touch viewport), no screen reader (announcements and labels are
   checked through the accessibility tree, not heard), no real clipboard, file picker (files are set on the input) or
   password manager, and the 375px / dark-mode checks are for sideways overflow and the scheme's background, not a
   visual review.
@@ -660,7 +949,7 @@ New features beyond these have not been chosen yet.
 - **Password change (2026-11-17).** The account menu's "Account settings" link closing the popover, the form
   clearing after success, another signed-in browser being sent to `/login` while this one stays, and the new
   password signing in: covered by `e2e/account.spec.ts`. Not checked: a password manager picking up the new
-  password (Playwright's Chromium has none).
+  password (Playwright's browsers have none).
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
@@ -770,7 +1059,8 @@ New features beyond these have not been chosen yet.
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
   headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not
-  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox.
+  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox (the e2e suite's picker tests run
+  in Playwright's Firefox and WebKit since 2026-11-25; see the suite entry above).
 - **Native dialogs were not exercised**: the confirmation dialog was stubbed, and test files were injected by
   script rather than chosen in a real file picker; downloads were fetched by script.
 - **No real spreadsheet application** was used to open or re-save an exported CSV.
@@ -821,3 +1111,36 @@ New features beyond these have not been chosen yet.
   `https://github.com/xalert/expenses-tracker/blob/main/docs/IMPORTING.md` resolves (it assumes that repository name).
 - **Multi-file selection was exercised with files injected by script** (`DataTransfer`), not picked in a real
   file dialog; the 6 MB request limit with many small files (multipart overhead per file) was not measured.
+- **Home-screen install (2026-11-25).** Checked on the standalone build (sharp removed, throwaway Postgres): the
+  manifest (`application/manifest+json`), the three icons and `/apple-touch-icon.png` (`image/png`) answer 200
+  without a session, and `/login`'s head links the manifest, the apple-touch icon, the favicon and the Apple meta
+  tags; headless Chromium (DevTools `Page.getInstallabilityErrors`) reports no installability errors. Not checked:
+  installing on a real iPhone (Safari "Add to Home Screen": icon, title, status bar, the top bar and Add button in
+  standalone mode, sign-in surviving a relaunch) or a real Android phone (Chrome's install prompt, the maskable icon
+  under the launcher's mask), and the icons by eye on a dark home screen.
+- **Dependabot (2026-11-25) has not run.** `.github/dependabot.yml` was checked only against the documented options
+  (and parsed as YAML): not whether the groups come out as intended (`next` and `eslint-config-next` in one PR), the
+  cooldown, or the Docker entry finding `FROM node:24-bookworm-slim` and which tag it proposes.
+- **Repeating entries (2026-11-25).** Covered: the date maths (`tests/recurrence.test.ts`), the services on PGlite
+  (`tests/recurring.test.ts`: catch-up, the per-run bound, pause / resume, archive pausing, editing, deletion,
+  categories, another user's rule), the hook through `getCurrentUser` (`tests/current-user.test.ts`), the actions,
+  the backup round trip, render tests, and `e2e/recurring.spec.ts` (desktop and 375px). Two requests at once were
+  checked once by hand against a real Postgres 17 (8 concurrent `materializeDueRecurring` runs on a pool: 401
+  entries, none twice); there is no automated test of that on Postgres (PGlite has one connection, so its test only
+  shows that repeated and overlapping calls create nothing twice). Not tried: time zones where today differs
+  between server and account around midnight (the hook uses `todayInZone(user.timeZone)`, as every page does), a
+  rule caught up across a daylight-saving change (dates are plain strings, so none is expected), and the hook's
+  failure path (logged, request continues) other than by reading the code.
+- **Reconcile balance (2026-11-25).** The wallet row lock (`FOR UPDATE OF wallets`) was checked once by hand on
+  Postgres 17 (eight reconciliations of one wallet at once: one recorded the difference, seven found it matched; a
+  ninth on another wallet at the same time shared the newly created category), not by a test: the service test runs
+  on PGlite, which has one connection and so runs them one after the other. Checked in Chromium only (desktop and the 375px phone project, light and dark by screenshot);
+  the live preview's announcement (`aria-live`) was not heard with a screen reader.
+- **Budgets and category colours (2026-11-25)** were checked with unit / render / action tests, the backup round
+  trip, two e2e tests (setting a budget and seeing it on /categories and the Overview, a refused amount kept; picking
+  a colour with the keyboard and seeing the dot in the entry form) and by eye: screenshots of /categories (closed and
+  with a row open) and the Overview on the demo data at 375px and 1280px in both schemes. Not checked: the meter
+  with live provider rates (the screenshots ran with `EXCHANGE_RATES=false`, so RON and USD showed as "not counted"),
+  a screen reader reading the meter inside a row button (its text is long: the counts, the amount and the budget
+  lines are all part of the button's name), and two people setting the same category's first budget at the same
+  moment (the unique-violation retry is not exercised by a test).

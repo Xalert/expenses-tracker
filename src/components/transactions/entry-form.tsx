@@ -21,11 +21,14 @@ import {
 } from "@/components/ui";
 import { BigAmount } from "@/components/ui/big-amount";
 import { CalendarIcon } from "@/components/ui/picker-icons";
+import { GroupDot } from "@/components/wallets/group-dot";
 import { cn } from "@/lib/cn";
 import { addDays, formatDate } from "@/lib/dates";
 import { initialFormState, type FormState } from "@/lib/form";
+import { countOccurrencesAfter, isFrequency, unitLabel, type Frequency } from "@/lib/recurrence";
 import { sanitizeDraft, saveEntryDraft, takeEntryDraft, type DraftField } from "./entry-draft";
 import { NewCategoryInline } from "./new-category-inline";
+import { TagsField, type TagOption } from "./tags-field";
 
 export type EntryKind = "expense" | "income" | "transfer";
 
@@ -38,7 +41,8 @@ export type WalletOption = {
   groupName?: string;
 };
 /** `archived`: only offered where an entry already uses it (the name then carries "(archived)"). */
-export type CategoryOption = { id: number; name: string; kind: "expense" | "income"; archived?: boolean };
+/** `color`: the category's colour (a `GROUP_COLORS` key), shown as a dot in its pill. */
+export type CategoryOption = { id: number; name: string; kind: "expense" | "income"; archived?: boolean; color?: string | null };
 
 export type EntryInitialValues = {
   kind: EntryKind;
@@ -50,6 +54,8 @@ export type EntryInitialValues = {
   fromWalletId?: number;
   toWalletId?: number;
   receivedAmount?: string;
+  /** Expense / income: the entry's tags as the field shows them ("holiday 2026, reimbursable"). */
+  tags?: string;
 };
 
 type Action = (prev: FormState, formData: FormData) => Promise<FormState>;
@@ -144,11 +150,16 @@ export function EntryForm({
   footerStart,
   categoryAction = createCategoryFromEntryAction,
   draftKey,
+  repeat,
+  tags = [],
 }: {
   wallets: WalletOption[];
   categories: CategoryOption[];
   initial: EntryInitialValues;
-  /** The server's today (`todayISO()`), for the Today / Yesterday pills; passed in so SSR and the browser agree. */
+  /**
+   * The user's today (`todayInZone(user.timeZone)` on the server), for the Today / Yesterday pills and the date
+   * picker; passed in so it is in the account's zone and SSR and the browser agree.
+   */
   today: string;
   transactionAction?: Action;
   transferAction?: Action;
@@ -174,6 +185,13 @@ export function EntryForm({
    * for the inline editor and to no draft otherwise.
    */
   draftKey?: string;
+  /**
+   * The Add form only: offer "Repeat" for an expense / income (posts `frequency`, `interval`, `endDate`; see
+   * `createTransactionAction`). `frequency` preselects it (the "New" button of /recurring); default Never.
+   */
+  repeat?: { frequency?: Frequency | "never" };
+  /** The user's tags, offered by the Tags field (expense / income). Empty: the field still takes typed names. */
+  tags?: readonly TagOption[];
 }) {
   const router = useRouter();
   const formId = useId();
@@ -202,11 +220,31 @@ export function EntryForm({
     String(initial.toWalletId ?? activeWallets.find((w) => w.id !== initialFrom)?.id ?? ""),
   );
   const [date, setDate] = useState(initial.date);
+  // Repeat (Add form only): React state, so the choice survives the remount after a refused save, as the kind does.
+  // A first render that already carries a result (a refused save without JavaScript) starts from its echoed values.
+  const echoed = txState.values ?? {};
+  const [frequency, setFrequency] = useState<Frequency | "never">(() =>
+    isFrequency(echoed.frequency) ? echoed.frequency : (repeat?.frequency ?? "never"),
+  );
+  const [every, setEvery] = useState(() => echoed.interval ?? "1");
+  const [endDate, setEndDate] = useState(() => echoed.endDate ?? "");
   const [keepOpen, setKeepOpen] = useState(false);
   const draft = draftKey ?? (isInline ? idPrefix : undefined);
   // Categories made with "+ New category" since the page was rendered; the refreshed props bring them too (deduped).
   const [created, setCreated] = useState<CategoryOption[]>([]);
   const allCategories = [...categories, ...created.filter((c) => !categories.some((p) => p.id === c.id))];
+  // The pill of a category just created, focused once the picker has remounted with it checked. An effect, not a
+  // requestAnimationFrame: the update runs inside the action's transition, which need not have committed by the next
+  // frame (in Firefox and WebKit it often had not), so the callback found no pill and focus was lost.
+  const focusCreated = useRef<number | null>(null);
+  useEffect(() => {
+    const id = focusCreated.current;
+    if (id === null) return;
+    const pill = formRef.current?.querySelector<HTMLInputElement>(`input[name="categoryId"][value="${id}"]`);
+    if (!pill) return;
+    focusCreated.current = null;
+    pill.focus();
+  });
   // Bumped to remount the form with a restored draft.
   const [remount, setRemount] = useState(0);
   // Defaults for the uncontrolled fields (amount, note…) that win over the echoed / initial values, for one form
@@ -221,7 +259,7 @@ export function EntryForm({
   const pending = isTransfer ? trPending : txPending;
   const err = state.fieldErrors ?? {};
   const v = state.values ?? {};
-  const fieldDefault = (field: "amount" | "receivedAmount" | "note") => carry[field] ?? v[field] ?? initial[field];
+  const fieldDefault = (field: "amount" | "receivedAmount" | "note" | "tags") => carry[field] ?? v[field] ?? initial[field];
 
   // A draft saved by "Manage categories" comes back once, on the next mount with the same key (then it is gone).
   // Read after mount: sessionStorage does not exist on the server.
@@ -257,6 +295,16 @@ export function EntryForm({
   // remounted, so focus would otherwise be lost to <body>, outside the dialog).
   // Each result is handled once, also when switching kinds brings an older result back into `state`.
   const handled = useRef(new WeakSet<FormState>([initialFormState]));
+  /** The tags of the last submitted expense / income, kept for the next entry after a "Keep open" save. */
+  const submittedTags = useRef("");
+  // Set when a "Keep open" save remounts the form with the kept tags: the amount of the remounted form takes the focus.
+  // Declared before the result effect below, so it only acts on the render after the one that set it.
+  const focusAmountNext = useRef(false);
+  useEffect(() => {
+    if (!focusAmountNext.current) return;
+    focusAmountNext.current = false;
+    (formRef.current?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+  });
   useEffect(() => {
     if (handled.current.has(state)) return;
     handled.current.add(state);
@@ -265,7 +313,19 @@ export function EntryForm({
       if (isInline) {
         onSaved?.(state.message);
       } else if (keepOpen) {
-        (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+        // The next entry starts without Repeat, so a second save cannot make a second rule by accident.
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- reacting to the action's result, once
+        setFrequency("never");
+        // Its tags stay (a run of holiday expenses shares them); the amount and note are cleared.
+        // The form has already remounted empty; remount it once more with the tags as the field's default.
+        if (submittedTags.current.trim()) {
+          const next = remount + 1;
+          setCarried({ key: `${stateId(txState)}-${stateId(trState)}-${next}`, values: { tags: submittedTags.current } });
+          setRemount(next);
+          focusAmountNext.current = true;
+        } else {
+          (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+        }
       } else {
         // Refresh once the page behind is back, so it shows the new entry (back() is asynchronous).
         window.addEventListener("popstate", () => router.refresh(), { once: true });
@@ -279,7 +339,7 @@ export function EntryForm({
         ? (invalid.querySelector<HTMLElement>("input:checked") ?? invalid.querySelector<HTMLElement>("input"))
         : invalid;
     target?.focus();
-  }, [state, keepOpen, router, isInline, onSaved]);
+  }, [state, keepOpen, router, isInline, onSaved, remount, txState, trState]);
 
   const byId = (id: string) => wallets.find((w) => String(w.id) === id);
   const wallet = byId(walletId);
@@ -306,13 +366,14 @@ export function EntryForm({
       const el = formRef.current?.elements.namedItem(name);
       return el instanceof HTMLInputElement ? el.value : undefined;
     };
-    const typed = { amount: field("amount"), note: field("note") };
+    const typed = { amount: field("amount"), note: field("note"), tags: field("tags") };
     setCarried({
       key: formKey,
       values: {
         ...carry,
         ...(typed.amount !== undefined && { amount: typed.amount }),
         ...(typed.note !== undefined && { note: typed.note }),
+        ...(typed.tags !== undefined && { tags: typed.tags }),
       },
     });
     // Categories belong to one kind; keep the choice only if it still fits.
@@ -332,6 +393,10 @@ export function EntryForm({
       ref={formRef}
       key={formKey}
       action={isTransfer ? trFormAction : txFormAction}
+      onSubmit={(e) => {
+        const tagsInput = e.currentTarget.elements.namedItem("tags");
+        submittedTags.current = tagsInput instanceof HTMLInputElement ? tagsInput.value : "";
+      }}
       className={isInline ? "space-y-4" : "space-y-6"}
       noValidate
     >
@@ -462,7 +527,17 @@ export function EntryForm({
                   name="categoryId"
                   aria-labelledby={pid("categoryId-label")}
                   required
-                  options={kindCategories.map((c) => ({ value: String(c.id), label: c.name }))}
+                  options={kindCategories.map((c) => ({
+                    value: String(c.id),
+                    label: c.color ? (
+                      <>
+                        <GroupDot color={c.color} className="mr-1.5" />
+                        {c.name}
+                      </>
+                    ) : (
+                      c.name
+                    ),
+                  }))}
                   defaultValue={categoryId}
                   onChange={setCategoryId}
                   error={err.categoryId}
@@ -475,14 +550,9 @@ export function EntryForm({
                 idPrefix={idPrefix}
                 pillClassName={cn(dashedPill, focusRing)}
                 onCreated={(c) => {
+                  focusCreated.current = c.id;
                   setCreated((list) => [...list, c]);
                   setCategoryId(String(c.id));
-                  // After the picker has remounted with the new pill checked.
-                  requestAnimationFrame(() =>
-                    formRef.current
-                      ?.querySelector<HTMLInputElement>(`input[name="categoryId"][value="${c.id}"]`)
-                      ?.focus(),
-                  );
                 }}
               />
               {/* Leaves the form: what was typed is kept as a draft and comes back when this form opens again. */}
@@ -543,6 +613,7 @@ export function EntryForm({
               <DatePicker
                 id={pid("date")}
                 name="date"
+                today={today}
                 required
                 value={date}
                 onChange={setDate}
@@ -560,6 +631,21 @@ export function EntryForm({
             <FieldError id={pid("date")}>{err.date}</FieldError>
           </div>
 
+          {repeat && !isTransfer && (
+            <RepeatFields
+              pid={pid}
+              frequency={frequency}
+              onFrequency={setFrequency}
+              every={every}
+              onEvery={setEvery}
+              endDate={endDate}
+              onEndDate={setEndDate}
+              startDate={date}
+              today={today}
+              errors={err}
+            />
+          )}
+
           <div className="space-y-1.5">
             <label htmlFor={pid("note")} className="sr-only">
               Note
@@ -575,6 +661,10 @@ export function EntryForm({
             />
             <FieldError id={pid("note")}>{err.note}</FieldError>
           </div>
+
+          {!isTransfer && (
+            <TagsField id={pid("tags")} defaultValue={fieldDefault("tags") ?? ""} options={tags} error={err.tags} />
+          )}
         </>
       )}
 
@@ -650,6 +740,118 @@ export function EntryForm({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+const FREQUENCY_LABEL: Record<Frequency | "never", string> = {
+  never: "Never",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
+/**
+ * The Add form's "Repeat": one row (label + select) while it is Never; any other choice adds "Every N <unit>", an
+ * optional end date and, when the entry's date is in the past, how many more entries saving will add up to today.
+ * Posts `frequency`, `interval` and `endDate` (no end date posts nothing). Without JavaScript only the select is there
+ * (every 1, no end), unless the page preselected a frequency.
+ */
+function RepeatFields({
+  pid,
+  frequency,
+  onFrequency,
+  every,
+  onEvery,
+  endDate,
+  onEndDate,
+  startDate,
+  today,
+  errors,
+}: {
+  pid: (name: string) => string;
+  frequency: Frequency | "never";
+  onFrequency: (value: Frequency | "never") => void;
+  every: string;
+  onEvery: (value: string) => void;
+  endDate: string;
+  onEndDate: (value: string) => void;
+  startDate: string;
+  today: string;
+  errors: Partial<Record<string, string>>;
+}) {
+  const on = frequency !== "never";
+  const n = /^\d{1,2}$/.test(every.trim()) && Number(every) >= 1 ? Number(every) : null;
+  const more =
+    on && n !== null
+      ? countOccurrencesAfter({ frequency, interval: n, startDate, endDate: endDate || null }, startDate, today)
+      : 0;
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label htmlFor={pid("frequency")} className={sectionLabel}>
+          Repeat
+        </label>
+        <Select
+          id={pid("frequency")}
+          name="frequency"
+          value={frequency}
+          onChange={(e) => onFrequency(e.target.value as Frequency | "never")}
+          error={errors.frequency}
+          className="w-auto! min-w-32"
+        >
+          {(Object.keys(FREQUENCY_LABEL) as (Frequency | "never")[]).map((f) => (
+            <option key={f} value={f}>
+              {FREQUENCY_LABEL[f]}
+            </option>
+          ))}
+        </Select>
+        {on && (
+          <>
+            <span className="inline-flex items-center gap-2 text-sm text-foreground">
+              <label htmlFor={pid("interval")}>Every</label>
+              <Input
+                id={pid("interval")}
+                name="interval"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={2}
+                value={every}
+                onChange={(e) => onEvery(e.target.value)}
+                error={errors.interval}
+                className="w-14! text-center tabular-nums"
+                aria-describedby={pid("interval-unit")}
+              />
+              <span id={pid("interval-unit")}>{unitLabel(frequency, n ?? 2)}</span>
+            </span>
+            <span className="inline-flex items-center gap-2 text-sm text-foreground">
+              <span id={pid("endDate-label")}>Until</span>
+              <DatePicker
+                id={pid("endDate")}
+                name="endDate"
+                today={today}
+                allowEmpty
+                value={endDate}
+                onChange={onEndDate}
+                error={errors.endDate}
+                placeholder="No end date"
+                aria-label={endDate ? `Until ${formatDate(endDate)}. Choose another end date` : "End date (optional)"}
+                className="w-40"
+              />
+            </span>
+          </>
+        )}
+      </div>
+      <FieldError id={pid("frequency")}>{errors.frequency}</FieldError>
+      <FieldError id={pid("interval")}>{errors.interval}</FieldError>
+      <FieldError id={pid("endDate")}>{errors.endDate}</FieldError>
+      {more > 0 && (
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          The date is in the past: saving also adds {more === 1 ? "1 more entry" : `${more} more entries`} for the
+          dates up to today.
+        </p>
+      )}
     </div>
   );
 }

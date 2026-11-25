@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { CategorySection } from "@/components/categories/category-section";
 import { SpendingSplitCard } from "@/components/categories/spending-split";
+import { TagSection } from "@/components/categories/tag-section";
+import { listTags } from "@/server/tags";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { CurrencySwitch, PageHeader } from "@/components/ui";
@@ -8,7 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
 import { spendingSplit } from "@/lib/category-split";
-import { currentMonth, isValidMonth, monthRange, todayISO } from "@/lib/dates";
+import { isValidMonth, monthRange, todayInZone } from "@/lib/dates";
 import {
   monthConversionNotes,
   overviewHref,
@@ -17,6 +19,7 @@ import {
   resolveOverviewCurrency,
   resolveOverviewView,
 } from "@/lib/overview";
+import { getMonthBudgets, listBudgets } from "@/server/budgets";
 import { listCategoriesWithUsage } from "@/server/categories";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import { getCategoryMonthAmounts, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
@@ -31,7 +34,8 @@ export default async function CategoriesPage({ searchParams }: Props) {
   const params = await searchParams;
   const { selected } = await getGroupScope();
   const groupId = selected?.id;
-  const maxMonth = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const maxMonth = today.slice(0, 7);
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
 
@@ -57,7 +61,7 @@ export default async function CategoriesPage({ searchParams }: Props) {
   const split = currency ? spendingSplit(all) : null;
   const activeCurrencies = await listUserCurrencies(user.id, { groupId });
   const showSwitch = currency !== null && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
-  const lastDate = month === maxMonth ? todayISO() : monthRange(month).to;
+  const lastDate = month === maxMonth ? today : monthRange(month).to;
   const missing = converted?.missingCurrencies ?? [];
   const toRates = ratesHref(overviewHref(month, explicit ? currency : null, maxMonth, "/categories", view));
   const notes =
@@ -73,6 +77,20 @@ export default async function CategoriesPage({ searchParams }: Props) {
         })
       : [];
   const viewParam: Record<string, string> = view === "only" ? { view } : {};
+
+  // Budgets are account-wide and measured in their own currency over every wallet, whatever the switches above say;
+  // in a group scope their progress is not shown.
+  const budgetList = await listBudgets(user.id);
+  const allHeld = [...new Set((await listWallets(user.id, { includeArchived: true })).map((w) => w.currency))].sort();
+  const budgetProgress =
+    budgetList.length > 0 && !selected
+      ? await getMonthBudgets(user.id, {
+          month,
+          today,
+          convert:
+            allHeld.length > 1 ? (convert ?? (await getConversion(user.id, monthRange(month).from, monthRange(month).to))) : undefined,
+        })
+      : null;
 
   return (
     <>
@@ -126,6 +144,12 @@ export default async function CategoriesPage({ searchParams }: Props) {
             categories={all.filter((c) => c.kind === "expense")}
             currency={currency}
             segments={split?.segments ?? []}
+            budgets={{
+              list: budgetList,
+              progress: budgetProgress && { budgets: budgetProgress.budgets, elapsed: budgetProgress.elapsed },
+              currencies: allHeld,
+              defaultCurrency: currency && allHeld.includes(currency) ? currency : (allHeld[0] ?? null),
+            }}
           />
           <CategorySection
             kind="income"
@@ -134,6 +158,8 @@ export default async function CategoriesPage({ searchParams }: Props) {
             segments={[]}
           />
         </div>
+        {/* Tags cut across categories and are managed here too (no route of their own); counts are all time. */}
+        <TagSection tags={await listTags(user.id)} />
       </div>
     </>
   );

@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
-import { expect, hydrated, test } from "./support/fixtures";
-import { seedWallet } from "./support/seed";
+import { expect, hydrated, signInContext, test } from "./support/fixtures";
+import { seedUser, seedWallet, todayISO } from "./support/seed";
 
 /** Two EUR wallets and a USD one for `userId`. */
 async function wallets(userId: number) {
@@ -28,7 +28,7 @@ test.describe("the Add dialog (N shortcut)", () => {
 
     let dialog = await openAddDialogWithN(page);
     // From `sm` up the amount has focus on open; on a phone the sheet itself (no keyboard popping up).
-    if (test.info().project.name === "desktop") {
+    if ((page.viewportSize()?.width ?? 0) >= 640) {
       await expect(dialog.getByRole("textbox", { name: "Amount" })).toBeFocused();
     } else {
       await expect(dialog.getByRole("textbox", { name: "Amount" })).not.toBeFocused();
@@ -192,6 +192,23 @@ test.describe("the Add dialog (N shortcut)", () => {
 });
 
 test.describe("date picker", () => {
+  // WebKit does not focus a clicked button, so focus stayed on a day cell that the month change removed; it then moved
+  // to the Add dialog's panel and the picker closed itself.
+  test("inside the Add dialog, changing month or opening the month view keeps the picker open", async ({ signedIn: page, user }) => {
+    await wallets(user.id);
+    await page.goto("/transactions");
+    const dialog = await openAddDialogWithN(page);
+    const picker = page.getByRole("dialog", { name: "Choose a date" });
+    await dialog.getByRole("combobox", { name: "Choose another date" }).click();
+    await picker.getByRole("button", { name: /^Previous month, / }).click();
+    await picker.getByRole("button", { name: /^Previous month, / }).click();
+    await expect(picker).toBeVisible();
+    await picker.getByRole("button", { name: /, choose a month$/ }).click();
+    await expect(picker.getByRole("group", { name: /^Months of / })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(picker.getByRole("grid")).toBeVisible();
+  });
+
   test("Other date: the month view's Back to days returns focus to a day, Escape steps back first", async ({ signedIn: page, user }) => {
     await wallets(user.id);
     await page.goto("/transactions/new");
@@ -272,4 +289,21 @@ test.describe("date picker", () => {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
   });
+});
+
+test.describe("today in the account's time zone", () => {
+  // UTC+14 and UTC−11 are 25 hours apart, so at any moment their dates differ: each account must get its own.
+  for (const timeZone of ["Pacific/Kiritimati", "Pacific/Pago_Pago"]) {
+    test(`the Add form defaults to today in ${timeZone}`, async ({ page, context, baseURL }) => {
+      const user = await seedUser({ timeZone });
+      await seedWallet(user.id, { name: "Bank", currency: "EUR" });
+      await signInContext(context, user.token, baseURL!);
+      const before = todayISO(timeZone);
+      await page.goto("/transactions/new");
+      const posted = await page.locator('form input[type="hidden"][name="date"]').inputValue();
+      // Either side of a midnight that passed while the page loaded.
+      expect([before, todayISO(timeZone)]).toContain(posted);
+      await expect(page.getByRole("button", { name: "Today", exact: true })).toHaveAttribute("aria-pressed", "true");
+    });
+  }
 });

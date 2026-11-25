@@ -1,3 +1,4 @@
+import { BudgetsCard } from "@/components/dashboard/budgets-card";
 import { MonthChart } from "@/components/dashboard/month-chart";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
@@ -8,7 +9,7 @@ import { Card, CardHeader, CurrencySwitch, EmptyState, InsightCard, LinkButton, 
 import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
-import { currentMonth, formatMonth, isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { formatMonth, isValidMonth, monthRange, shiftMonth, todayInZone } from "@/lib/dates";
 import { convertedTotal, tableFor, tableOn } from "@/lib/fx";
 import { formatMoney } from "@/lib/money";
 import {
@@ -24,12 +25,12 @@ import {
   toneOf,
   walletsTotalNotes,
 } from "@/lib/overview";
+import { getMonthBudgets, listBudgets } from "@/server/budgets";
 import { getDashboard } from "@/server/dashboard";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import {
   getMonthInsights,
   getMonthTimeline,
-  getWalletBalancesOn,
   getWalletMonth,
   listUserCurrencies,
   monthDayN,
@@ -44,12 +45,18 @@ const LATEST_COUNT = 5;
 export default async function OverviewPage({ searchParams }: Props) {
   const user = await requireUser();
   const params = await searchParams;
-  const maxMonth = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const maxMonth = today.slice(0, 7);
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
   const { selected } = await getGroupScope();
   const groupId = selected?.id;
-  const data = await getDashboard(user.id, { month, groupId });
+  const isCurrentMonth = month === maxMonth;
+  // The day the figures run to: today for the current month, the month's last day for a past one. The Wallets card
+  // shows the balances at the end of that day (today's balance, as on /wallets and the wallet page; future-dated
+  // entries are not in it) and converts at the rates of that day too.
+  const lastDate = isCurrentMonth ? today : monthRange(month).to;
+  const data = await getDashboard(user.id, { month, balanceOn: lastDate, groupId });
 
   const held = [...new Set((await listWallets(user.id, { includeArchived: true, groupId })).map((w) => w.currency))];
   const { currency, explicit } =
@@ -96,19 +103,14 @@ export default async function OverviewPage({ searchParams }: Props) {
     );
   }
 
-  const isCurrentMonth = month === maxMonth;
   const previousMonth = shiftMonth(month, -1);
-  const dayN = monthDayN(month);
+  const dayN = monthDayN(month, today);
   // One view for the whole page. "all" (default): the month figures cover every wallet, converted into `currency`
   // at each day's rate, and the Wallets card shows every active wallet with a converted total. "only": just
   // `currency`, nothing converted. When every wallet (archived included) is in `currency` there is nothing to choose.
   const canSwitchView = held.some((c) => c !== currency);
   const view = canSwitchView ? resolveOverviewView(params.view) : "all";
   const ratesOn = exchangeRatesEnabled();
-  const today = todayISO();
-  // The day the figures run to: today for the current month, the month's last day for a past one. The Wallets card
-  // shows the balances and converts at the rates of that day too.
-  const lastDate = isCurrentMonth ? today : monthRange(month).to;
 
   const convertMonth = view === "all" && canSwitchView;
   // One conversion (the provider's days from a week before the previous month to `lastDate`, plus the user's own
@@ -117,7 +119,7 @@ export default async function OverviewPage({ searchParams }: Props) {
     ? await getConversion(user.id, monthRange(previousMonth).from, monthRange(month).to)
     : undefined;
   const timeline = await getMonthTimeline(user.id, { month, currency, convert, groupId });
-  const insights = await getMonthInsights(user.id, { month, currency, convert, groupId });
+  const insights = await getMonthInsights(user.id, { month, currency, today, convert, groupId });
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, currency, opts);
   const monthMissing = [
     ...new Set([...(timeline.missingCurrencies ?? []), ...(insights.missingCurrencies ?? [])]),
@@ -129,12 +131,8 @@ export default async function OverviewPage({ searchParams }: Props) {
     : [];
   const monthNeed = convert ? ratesNeeded(currency, monthMissing, convert, lastDate) : [];
 
-  // The Wallets card follows the same view; for a past month, with the balances at the end of that month.
-  const viewWallets = view === "all" ? data.wallets : data.wallets.filter((w) => w.currency === currency);
-  const balancesThen = isCurrentMonth ? null : await getWalletBalancesOn(user.id, lastDate, { groupId });
-  const shownWallets = balancesThen
-    ? viewWallets.map((w) => ({ ...w, balanceMinor: balancesThen.get(w.id) ?? w.balanceMinor }))
-    : viewWallets;
+  // The Wallets card follows the same view (its balances are at the end of `lastDate`, see above).
+  const shownWallets = view === "all" ? data.wallets : data.wallets.filter((w) => w.currency === currency);
   const needsRates = shownWallets.some((w) => w.currency !== currency);
   const providerTable = needsRates ? tableOn(convert?.rates ?? null, lastDate) : null;
   const rates = needsRates ? tableFor(convert, lastDate) : null;
@@ -153,7 +151,7 @@ export default async function OverviewPage({ searchParams }: Props) {
 
   const changes = new Map<number, number>();
   for (const w of shownWallets) {
-    const m = await getWalletMonth(user.id, w.id, month);
+    const m = await getWalletMonth(user.id, w.id, month, { today });
     changes.set(w.id, m ? m.inMinor - m.outMinor : 0);
   }
 
@@ -161,6 +159,22 @@ export default async function OverviewPage({ searchParams }: Props) {
   const pace = paceSummary({ ...insights.pace, previousMonth, isCurrentMonth });
   const previousName = monthName(previousMonth);
   const { noSpendDays: noSpend, topCategory } = insights;
+
+  // Budgets: account-wide, in each budget's own currency over every wallet (not this page's switches); in a group
+  // scope only a line says so. The conversion for the month figures serves them when there is one.
+  const hasBudgets = (await listBudgets(user.id)).length > 0;
+  const allHeld = hasBudgets && !selected ? new Set((await listWallets(user.id, { includeArchived: true })).map((w) => w.currency)) : null;
+  const budgets =
+    hasBudgets && !selected
+      ? await getMonthBudgets(user.id, {
+          month,
+          today,
+          convert:
+            allHeld && allHeld.size > 1
+              ? (convert ?? (await getConversion(user.id, monthRange(month).from, monthRange(month).to)))
+              : undefined,
+        })
+      : null;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
@@ -246,6 +260,8 @@ export default async function OverviewPage({ searchParams }: Props) {
         />
       </div>
 
+      {hasBudgets && <BudgetsCard budgets={budgets} href={overviewHref(month, null, maxMonth, "/categories")} />}
+
       <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
         <WalletsCard
           wallets={shownWallets}
@@ -258,7 +274,7 @@ export default async function OverviewPage({ searchParams }: Props) {
             need: ratesNeeded(currency, total.missing, convert ?? null, lastDate),
             ratesHref: toRates,
           }}
-          asOf={balancesThen ? lastDate : undefined}
+          asOf={isCurrentMonth ? undefined : lastDate}
           converted={total.converted}
           changeLabel={isCurrentMonth ? "this month" : `in ${monthName(month)}`}
           hrefFor={(id) => (isCurrentMonth ? `/wallets/${id}` : `/wallets/${id}?month=${month}`)}

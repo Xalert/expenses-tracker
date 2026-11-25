@@ -9,12 +9,19 @@ import {
 } from "@/app/(app)/categories/actions";
 import { NEW_CATEGORY_VALUE } from "@/app/(app)/categories/form-input";
 import { Button, FieldError, FormError, Input, Label, Select, SubmitButton } from "@/components/ui";
+import { ColorChoice } from "@/components/ui/color-choice";
 import { useExpandableRow } from "@/components/ui/expandable-row";
+import { GroupDot } from "@/components/wallets/group-dot";
+import type { Elapsed } from "@/lib/budgets";
 import type { RowShare } from "@/lib/category-split";
 import { cn } from "@/lib/cn";
 import { initialFormState, type FormState } from "@/lib/form";
 import { formatMoney } from "@/lib/money";
+import { usageText } from "@/lib/usage-text";
+import type { BudgetProgress, BudgetView } from "@/server/budgets";
 import type { CategoryWithMonthUsage, CategoryWithUsage } from "@/server/categories";
+import { BudgetForm } from "./budget-form";
+import { BudgetMeter } from "./budget-meter";
 
 export const MAX_CATEGORY_NAME = 40;
 
@@ -28,24 +35,29 @@ export type Announce = (
 ) => void;
 
 
-const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
-
 /** The danger text button of the open row ("Remove Food"): `--danger` text, no fill, 44px tall. */
 const removeButtonClass = "-ml-3 max-w-full min-w-0 text-danger! hover:bg-danger-soft!";
 
 /**
- * The row's content inside its `ExpandableRow` button (phrasing content only): swatch, **name** · "N this month · M in
- * all", the share bar (expense rows) and the month's amount in `currency` ("—" when 0). Without a currency (no wallets)
- * the amount and the bar are left out.
+ * The row's content inside its `ExpandableRow` button (phrasing content only): swatch, the category's colour dot and
+ * **name** · "N this month · M in all", the share bar (expense rows) and the month's amount in `currency` ("—" when 0).
+ * Without a currency (no wallets) the amount and the bar are left out. With `budget` (an expense category's month
+ * against its budget), the budget meter follows on a line of its own (the button wraps). The swatch is a small square
+ * in the split's ramp colour (as in the split's legend), the category's own colour a round dot, so the two never read
+ * as the same thing.
  */
 export function CategorySummary({
   category,
   currency,
   share,
+  budget,
+  elapsed = null,
 }: {
   category: CategoryWithMonthUsage;
   currency: string | null;
   share: RowShare;
+  budget?: BudgetProgress;
+  elapsed?: Elapsed;
 }) {
   const income = category.kind === "income";
   const amount = category.monthAmountMinor;
@@ -54,12 +66,19 @@ export function CategorySummary({
       <span
         aria-hidden="true"
         className={cn(
-          "size-2.5 shrink-0 rounded-full",
-          income ? "bg-income" : share && share.fraction > 0 ? share.swatchClass : "border border-border-strong",
+          "size-2.5 shrink-0",
+          income
+            ? "rounded-full bg-income"
+            : share && share.fraction > 0
+              ? cn("rounded-[3px]", share.swatchClass)
+              : "rounded-[3px] border border-border-strong",
         )}
       />
       <span className="min-w-0 flex-1 sm:truncate">
-        <span className="block truncate font-bold text-foreground sm:inline">{category.name}</span>
+        <span className="block truncate font-bold text-foreground sm:inline">
+          {category.color && <GroupDot color={category.color} className="mr-1.5 align-[-1px]" />}
+          {category.name}
+        </span>
         <span className="block truncate text-xs text-muted-foreground sm:inline sm:text-[13px]">
           <span className="hidden sm:inline"> · </span>
           {category.monthCount} this month · {category.transactionCount} in all
@@ -88,9 +107,18 @@ export function CategorySummary({
           {share && amount > 0 && <span className="sr-only">, {share.percentLabel} of the month&apos;s spending</span>}
         </span>
       )}
+      {budget && (
+        <span className="basis-full pl-[22px]">
+          <span className="sr-only">Budget: </span>
+          <BudgetMeter budget={budget} elapsed={elapsed} />
+        </span>
+      )}
     </>
   );
 }
+
+/** The budget editor's context for a row: the currencies a budget can be in and the one offered first. */
+export type BudgetChoices = { currencies: readonly string[]; defaultCurrency: string | null };
 
 /**
  * The open row: the rename form; then (under a divider) the kind and archive controls; then the remove flow — an
@@ -103,11 +131,17 @@ export function CategoryPanel({
   category,
   others,
   announce,
+  budget,
+  budgetChoices,
 }: {
   category: CategoryWithUsage;
   /** The other active categories of the same kind (possible replacements). */
   others: CategoryWithUsage[];
   announce: Announce;
+  /** The category's budget, if it has one (expense categories only). */
+  budget?: BudgetView;
+  /** Given for expense categories: the budget form is shown. */
+  budgetChoices?: BudgetChoices;
 }) {
   const row = useExpandableRow();
   // The row is about to move or disappear: no focus back to its button; the heading takes it.
@@ -115,19 +149,29 @@ export function CategoryPanel({
     row.close({ restoreFocus: false });
     announce(message, { focusHeading: true });
   };
+  const saved = (message?: string) => {
+    row.close();
+    announce(message);
+  };
   return (
     <div className="px-4 pt-1 pb-4 sm:px-[18px]">
-      <RenameForm
-        category={category}
-        onCancel={() => row.close()}
-        onRenamed={(message) => {
-          row.close();
-          announce(message);
-        }}
-      />
+      <RenameForm category={category} onCancel={() => row.close()} onRenamed={saved} />
+      {category.kind === "expense" && budgetChoices && (
+        <div className="mt-4 border-t border-border pt-3">
+          <BudgetForm
+            target={category.id}
+            subject={category.name}
+            budget={budget}
+            currencies={budgetChoices.currencies}
+            defaultCurrency={budgetChoices.defaultCurrency}
+            onDone={saved}
+          />
+        </div>
+      )}
       <div className="mt-4 space-y-3 border-t border-border pt-3">
         <KindControls
           category={category}
+          hasBudget={budget !== undefined}
           onChanged={(message) => {
             row.close({ restoreFocus: false });
             announce(message, { movedTo: { kind: OTHER_KIND[category.kind], id: category.id } });
@@ -136,7 +180,7 @@ export function CategoryPanel({
         <ArchiveControls category={category} onChanged={leave} />
       </div>
       <div className="mt-4 border-t border-border pt-3">
-        <RemoveControls category={category} others={others} onRemoved={leave} />
+        <RemoveControls category={category} others={others} hasBudget={budget !== undefined} onRemoved={leave} />
       </div>
     </div>
   );
@@ -148,21 +192,32 @@ const OTHER_KIND = { expense: "income", income: "expense" } as const;
  * Switch expense ↔ income: offered only while nothing uses the category; with transactions a line says why it stays
  * (the service refuses too, e.g. when an entry was added meanwhile — the error shows here).
  */
-function KindControls({ category, onChanged }: { category: CategoryWithUsage; onChanged: (message?: string) => void }) {
+function KindControls({
+  category,
+  hasBudget,
+  onChanged,
+}: {
+  category: CategoryWithUsage;
+  hasBudget: boolean;
+  onChanged: (message?: string) => void;
+}) {
   const [state, formAction] = useActionState(async (prev: FormState, formData: FormData) => {
     const next = await changeCategoryKindAction(category.id, prev, formData);
     if (next.ok) onChanged(next.message);
     return next;
   }, initialFormState);
   const target = OTHER_KIND[category.kind];
-  const count = category.transactionCount;
+  // Repeating entries count as use too (src/server/recurring.ts).
+  const count = category.transactionCount + category.recurringCount;
   const error = state.fieldErrors?.kind ?? (state.ok ? undefined : state.message);
   const errorId = `category-${category.id}-kind-error`;
+  const budgetNoteId = `category-${category.id}-kind-budget-note`;
+  const budgetNote = hasBudget && category.kind === "expense" && count === 0;
 
   if (count > 0 && !error) {
     return (
       <p className="text-sm text-muted-foreground">
-        Used by {plural(count)}, so it stays an {category.kind} category: changing it would turn{" "}
+        Used by {usageText(category.transactionCount, category.recurringCount)}, so it stays an {category.kind} category: changing it would turn{" "}
         {count === 1 ? "that entry" : "those entries"} into {target}.
       </p>
     );
@@ -171,9 +226,18 @@ function KindControls({ category, onChanged }: { category: CategoryWithUsage; on
     <form action={formAction} className="space-y-1.5">
       <input type="hidden" name="kind" value={target} />
       {count === 0 && (
-        <SubmitButton variant="secondary" pendingLabel="Changing…" aria-describedby={error ? errorId : undefined}>
+        <SubmitButton
+          variant="secondary"
+          pendingLabel="Changing…"
+          aria-describedby={cn(error && errorId, budgetNote && budgetNoteId) || undefined}
+        >
           Make it an {target} category
         </SubmitButton>
+      )}
+      {budgetNote && (
+        <p id={budgetNoteId} className="text-sm text-muted-foreground">
+          Budgets are for expenses only, so its budget is removed with the change.
+        </p>
       )}
       {error && (
         <p id={errorId} role="alert" className="text-sm text-danger">
@@ -240,10 +304,13 @@ function RenameForm({
     if (!state.fieldErrors?.name) inputRef.current?.select();
   }, [state]);
 
+  const colorErrorId = `${id}-color-error`;
+  const colorError = state.fieldErrors?.color;
+
   return (
-    <form action={formAction} noValidate className="space-y-1.5">
-      <Label htmlFor={id}>New name for “{category.name}”</Label>
-      <div className="flex flex-wrap gap-2">
+    <form action={formAction} noValidate className="space-y-3">
+      <div className="space-y-1.5">
+        <Label htmlFor={id}>New name for “{category.name}”</Label>
         <Input
           ref={inputRef}
           id={id}
@@ -253,16 +320,31 @@ function RenameForm({
           autoComplete="off"
           defaultValue={state.values?.name ?? category.name}
           error={error}
-          className="min-w-0 flex-1 basis-40 not-aria-[invalid=true]:border-accent"
+          className="w-full not-aria-[invalid=true]:border-accent"
         />
-        <div className="flex gap-2">
-          <SubmitButton pendingLabel="Renaming…">Rename</SubmitButton>
-          <Button variant="secondary" onClick={onCancel}>
-            Cancel
-          </Button>
-        </div>
+        <FieldError id={id}>{error}</FieldError>
       </div>
-      <FieldError id={id}>{error}</FieldError>
+      <div className="space-y-1.5">
+        <ColorChoice
+          // Remounted per result, so the checked radio follows the echoed choice after React resets the form.
+          key={state.values?.color ?? category.color ?? ""}
+          idPrefix={`${id}-color`}
+          defaultValue={state.values?.color ?? category.color}
+          large
+          describedBy={colorError ? colorErrorId : undefined}
+        />
+        {colorError && (
+          <p id={colorErrorId} role="alert" className="text-sm text-danger">
+            {colorError}
+          </p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <SubmitButton pendingLabel="Saving…">Save</SubmitButton>
+        <Button variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
       <FormError message={state.message} />
     </form>
   );
@@ -278,15 +360,17 @@ function RenameForm({
 function RemoveControls({
   category,
   others,
+  hasBudget,
   onRemoved,
 }: {
   category: CategoryWithUsage;
   others: CategoryWithUsage[];
+  hasBudget: boolean;
   onRemoved: (message?: string) => void;
 }) {
   const [error, setError] = useState<string | undefined>();
   const errorId = `category-${category.id}-remove-error`;
-  const count = category.transactionCount;
+  const count = category.transactionCount + category.recurringCount;
 
   return (
     <div className="space-y-2">
@@ -298,6 +382,7 @@ function RemoveControls({
       {count === 0 ? (
         <RemoveUnusedButton
           category={category}
+          hasBudget={hasBudget}
           errorId={error ? errorId : undefined}
           onError={setError}
           onRemoved={onRemoved}
@@ -306,6 +391,7 @@ function RemoveControls({
         <MoveAndRemoveForm
           category={category}
           others={others}
+          hasBudget={hasBudget}
           focusOnMount={Boolean(error)}
           onRemoved={onRemoved}
           onStart={() => setError(undefined)}
@@ -315,14 +401,18 @@ function RemoveControls({
   );
 }
 
+const BUDGET_GOES = "Its budget is removed with it.";
+
 /** Remove an unused category after a confirm(). If it turns out to be in use, the error shows above. */
 function RemoveUnusedButton({
   category,
+  hasBudget,
   errorId,
   onError,
   onRemoved,
 }: {
   category: CategoryWithUsage;
+  hasBudget: boolean;
   errorId?: string;
   onError: (message: string | undefined) => void;
   onRemoved: (message?: string) => void;
@@ -338,7 +428,8 @@ function RemoveUnusedButton({
     <form
       action={formAction}
       onSubmit={(e) => {
-        if (!window.confirm(`Remove the category “${category.name}”? It has no transactions.`)) e.preventDefault();
+        const question = `Remove the category “${category.name}”? It has no transactions.${hasBudget ? ` ${BUDGET_GOES}` : ""}`;
+        if (!window.confirm(question)) e.preventDefault();
         else onError(undefined);
       }}
     >
@@ -374,12 +465,14 @@ function resultId(state: object): number {
 function MoveAndRemoveForm({
   category,
   others,
+  hasBudget,
   focusOnMount,
   onRemoved,
   onStart,
 }: {
   category: CategoryWithUsage;
   others: CategoryWithUsage[];
+  hasBudget: boolean;
   focusOnMount: boolean;
   onRemoved: (message?: string) => void;
   onStart: () => void;
@@ -438,7 +531,7 @@ function MoveAndRemoveForm({
     >
       {hasSelect ? (
         <>
-          <Label htmlFor={selectId}>Remove, moving its {plural(category.transactionCount)} to</Label>
+          <Label htmlFor={selectId}>Remove, moving its {usageText(category.transactionCount, category.recurringCount)} to</Label>
           <Select
             ref={selectRef}
             id={selectId}
@@ -469,13 +562,23 @@ function MoveAndRemoveForm({
       ) : (
         <>
           <Label htmlFor={nameId}>
-            Remove, moving its {plural(category.transactionCount)} to a new {kind} category named
+            Remove, moving its {usageText(category.transactionCount, category.recurringCount)} to a new {kind} category named
           </Label>
           {nameField}
         </>
       )}
       {naming && <FieldError id={nameId}>{nameError}</FieldError>}
-      <SubmitButton variant="ghost" className={removeButtonClass} pendingLabel="Removing…">
+      {hasBudget && (
+        <p id={`${selectId}-budget-note`} className="text-sm text-muted-foreground">
+          {BUDGET_GOES} Its entries keep counting under the category they move to.
+        </p>
+      )}
+      <SubmitButton
+        variant="ghost"
+        className={removeButtonClass}
+        pendingLabel="Removing…"
+        aria-describedby={hasBudget ? `${selectId}-budget-note` : undefined}
+      >
         <span className="truncate">Remove {category.name}</span>
       </SubmitButton>
       {!archived && (

@@ -28,7 +28,14 @@ export function entriesToImport(p: ImportPreview): number {
 /** Whether confirming would change anything (entries, or only new wallets / categories / exchange rates). */
 export function hasSomethingToImport(p: ImportPreview): boolean {
   return (
-    entriesToImport(p) + p.walletsToCreate.length + p.groupsToCreate.length + p.categoriesToCreate.length + p.manualRatesToAdd >
+    entriesToImport(p) +
+      p.walletsToCreate.length +
+      p.groupsToCreate.length +
+      p.categoriesToCreate.length +
+      p.manualRatesToAdd +
+      p.recurringToAdd +
+      p.budgetsToAdd +
+      p.tagsToCreate.length >
     0
   );
 }
@@ -58,6 +65,9 @@ export function previewDifferences(previewed: ImportPreview, result: ImportPrevi
     [result.groupsToCreate.length, previewed.groupsToCreate.length, "new group", "new groups"],
     [result.categoriesToCreate.length, previewed.categoriesToCreate.length, "new category", "new categories"],
     [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
+    [result.recurringToAdd, previewed.recurringToAdd, "repeating entry", "repeating entries"],
+    [result.budgetsToAdd, previewed.budgetsToAdd, "budget", "budgets"],
+    [result.tagsToCreate.length, previewed.tagsToCreate.length, "new tag", "new tags"],
   ];
   return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
 }
@@ -164,11 +174,37 @@ export function PreviewCard({
             ))}
           </p>
         )}
+        {p.tagsToCreate.length > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            New tags:{" "}
+            {p.tagsToCreate.map((t, i) => (
+              <span key={i}>
+                {i > 0 && ", "}
+                <strong className="font-semibold text-foreground">{t}</strong>
+              </span>
+            ))}
+          </p>
+        )}
         {p.manualRatesToAdd > 0 && (
           <p className="text-sm break-words text-muted-foreground">
             Your own exchange rates:{" "}
             <strong className="font-semibold text-foreground">{p.manualRatesToAdd.toLocaleString("en-US")}</strong> to add
             to the Rates page.
+          </p>
+        )}
+        {(p.recurringToAdd > 0 || p.duplicateRecurring > 0) && (
+          <p className="text-sm break-words text-muted-foreground">
+            Repeating entries:{" "}
+            <strong className="font-semibold text-foreground">{p.recurringToAdd.toLocaleString("en-US")}</strong> to add
+            {p.duplicateRecurring > 0 && `, ${p.duplicateRecurring.toLocaleString("en-US")} you already have`}. Their
+            entries due by today are added the next time a page opens.
+          </p>
+        )}
+        {p.budgetsToAdd > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            Budgets:{" "}
+            <strong className="font-semibold text-foreground">{p.budgetsToAdd.toLocaleString("en-US")}</strong> to add to
+            the Categories page.
           </p>
         )}
         {option}
@@ -385,7 +421,10 @@ export function ImportSuccess({ result: r, previewed }: { result: ImportPreview;
           {r.groupsToCreate.length > 0 && ` Created ${plural(r.groupsToCreate.length, "group", "groups")}.`}
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
+          {r.tagsToCreate.length > 0 && ` Created ${plural(r.tagsToCreate.length, "tag", "tags")}.`}
           {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
+          {r.recurringToAdd > 0 && ` Added ${plural(r.recurringToAdd, "repeating entry", "repeating entries")}.`}
+          {r.budgetsToAdd > 0 && ` Added ${plural(r.budgetsToAdd, "budget", "budgets")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}
         </p>
       </div>

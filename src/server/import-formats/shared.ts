@@ -5,7 +5,9 @@ import { isValidCurrency } from "@/lib/currencies";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { isServiceError } from "@/lib/errors";
 import type { GroupColor } from "@/lib/group-colors";
+import type { Frequency } from "@/lib/recurrence";
 import { currencyDecimals } from "@/lib/money";
+import { dedupeTagNames, tagKey, tagListProblem } from "@/lib/tags";
 import { MAX_CATEGORY_NAME_LENGTH } from "../categories";
 import { normalizeName } from "../_validate";
 
@@ -76,7 +78,14 @@ export type CategorySpec = {
   archivedAt?: string;
   /** CSV: the `category` row that describes it, to report a second one. */
   detailsLoc?: Loc;
+  /** Backup: the category's colour (a `GROUP_COLORS` key); set on a category the import creates. */
+  color?: GroupColor;
 };
+/**
+ * Backup only: a monthly budget. `category`: index into `categories` (an expense category of the file), or null for
+ * the overall budget.
+ */
+export type BudgetSpec = { category: number | null; currency: string; amountMinor: number; loc: Loc };
 /** Backup only: one of the user's own exchange rates (validated; `rate` normalised as `parseRateInput` gives it). */
 export type ManualRateSpec = { currency: string; base: string; effectiveDate: string; rate: string; loc: Loc };
 export type EntrySpec = {
@@ -86,6 +95,33 @@ export type EntrySpec = {
   amountMinor: number;
   date: string;
   note: string | null;
+  loc: Loc;
+  /** Backup only: index into `ParsedFile.recurring` of the repeating entry that made it. */
+  recurring?: number;
+  /** The entry's tags: indexes into `ParsedFile.tags` (CSV `tags` cell, backup `tags`). Absent / empty: none. */
+  tags?: number[];
+};
+/** A tag the file names (on an entry, or in a backup's `tags` list); matched ignoring case, created when missing. */
+export type TagSpec = {
+  name: string;
+  /** `tagKey(name)`. */
+  key: string;
+  /** Backup: listed in the file's `tags` (created even when no added entry uses it, so unused tags survive). */
+  listed?: boolean;
+};
+/** Backup only: a repeating expense / income (validated; dates checked, `nextDate` null = ended). */
+export type RecurringSpec = {
+  kind: CategoryKind;
+  wallet: number; // index into wallets
+  category: number; // index into categories
+  amountMinor: number;
+  note: string | null;
+  frequency: Frequency;
+  interval: number;
+  startDate: string;
+  endDate: string | null;
+  nextDate: string | null;
+  paused: boolean;
   loc: Loc;
 };
 export type TransferSpec = {
@@ -147,8 +183,14 @@ export type ParsedFile = {
   /** Backup only: the file's `groups` list (normalized, one per name ignoring case); absent in older backups. */
   groups?: GroupSpec[];
   categories: CategorySpec[];
+  /** The tags the file names, one per name ignoring case (the first spelling wins). */
+  tags: TagSpec[];
   /** Backup only: the file's `manualRates` (absent in older backups); imported additively. */
   manualRates?: ManualRateSpec[];
+  /** Backup only: the file's `recurring` list (absent in older backups); imported additively. */
+  recurring?: RecurringSpec[];
+  /** Backup only: the file's `budgets` (absent in older backups); imported additively. */
+  budgets?: BudgetSpec[];
   entries: EntrySpec[];
   transfers: TransferSpec[];
   /** Unpaired transfer halves; a format's `finalize` turns them into `transfers` (or entries / problems). */
@@ -198,6 +240,7 @@ export function emptyParsed(format: ParsedFile["format"], problems: ImportProble
     walletMatching: "merge",
     wallets: [],
     categories: [],
+    tags: [],
     entries: [],
     transfers: [],
     transferLegs: [],
@@ -227,6 +270,16 @@ export function check<T>(fn: () => T, onError: (message: string) => void): T | u
 
 export const normalizeWalletName = (v: unknown) => normalizeName(v, "name");
 export const normalizeCategoryName = (v: unknown) => normalizeName(v, "name", MAX_CATEGORY_NAME_LENGTH);
+
+/**
+ * An entry's tag names from a file (split, cleaned, repeats ignoring case dropped), or the problem with them (a name
+ * over 40 characters, more than 10 tags). The same rules as the entry services.
+ */
+export function readTagNames(names: readonly string[]): { names: string[] } | { problem: string } {
+  const list = dedupeTagNames(names);
+  const problem = tagListProblem(list);
+  return problem ? { problem } : { names: list };
+}
 
 export function amountHint(currency: string): string {
   const d = currencyDecimals(currency);
@@ -259,7 +312,19 @@ export function specBuilder(out: ParsedFile) {
   // Seeded from what `out` already has, so it can also extend a merged selection.
   const walletByKey = new Map(out.wallets.map((w, i) => [w.key, i] as const));
   const categoryByKey = new Map(out.categories.map((c, i) => [c.key, i] as const));
+  const tagByKey = new Map(out.tags.map((t, i) => [t.key, i] as const));
   return {
+    /** The index of the tag `name` (already normalised), added on first use. */
+    tagFor(name: string): number {
+      const key = tagKey(name);
+      let idx = tagByKey.get(key);
+      if (idx === undefined) {
+        idx = out.tags.length;
+        tagByKey.set(key, idx);
+        out.tags.push({ name, key });
+      }
+      return idx;
+    },
     walletFor(name: string, currency: string): number {
       const key = walletKey(name, currency);
       let idx = walletByKey.get(key);

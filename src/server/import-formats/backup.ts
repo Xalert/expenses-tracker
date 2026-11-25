@@ -6,8 +6,10 @@ import { RATES_BASE, parseRateInput } from "@/lib/fx";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { isGroupColor } from "@/lib/group-colors";
 import { currencyDecimals, parseAmount } from "@/lib/money";
+import { MAX_RECURRING_INTERVAL } from "@/lib/recurrence";
 import { normalizeName, normalizeNote } from "../_validate";
 import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
+import { normalizeTagName } from "../tags";
 import {
   categoryKey,
   check,
@@ -15,6 +17,8 @@ import {
   fmtCount,
   normalizeCategoryName,
   normalizeWalletName,
+  readTagNames,
+  specBuilder,
   walletKey,
   type ImportFormat,
   type ParsedFile,
@@ -142,11 +146,21 @@ function parseBackup(body: string): ParsedFile {
     const key = categoryKey(c.kind, name);
     let idx = categoryByKey.get(key);
     const archivedAt = c.archived && c.archivedAt ? new Date(c.archivedAt).toISOString() : undefined;
+    const color = isGroupColor(c.color) ? c.color : undefined;
     if (idx === undefined) {
       idx = out.categories.length;
       categoryByKey.set(key, idx);
-      out.categories.push({ name, kind: c.kind, key, archived: c.archived, ...(archivedAt ? { archivedAt } : {}) });
+      out.categories.push({
+        name,
+        kind: c.kind,
+        key,
+        archived: c.archived,
+        ...(archivedAt ? { archivedAt } : {}),
+        ...(color ? { color } : {}),
+      });
     } else {
+      // The first colour given wins.
+      if (color && !out.categories[idx].color) out.categories[idx].color = color;
       // Merged with an earlier one: archived only when every file category merged into it is (on the latest date).
       const merged = out.categories[idx];
       merged.archived = merged.archived && c.archived;
@@ -167,8 +181,74 @@ function parseBackup(body: string): ParsedFile {
     return value;
   };
 
+  // Repeating entries (optional list): the wallet by the file's id, the category by kind + name (one the file does not
+  // list is created like any other category the import needs). The rules of `createRecurringEntry`.
+  const recurringIndex = new Map<number, number>();
+  if (data.recurring) {
+    out.recurring = [];
+    data.recurring.forEach((r, i) => {
+      const p = `recurring[${i}]`;
+      const before = out.problems.length;
+      if (recurringIndex.has(r.id)) problem(`${p}.id`, `Duplicate repeating entry id ${r.id}.`);
+      const wallet = walletRef(`${p}.walletId`, r.walletId);
+      const name = check(() => normalizeCategoryName(r.category), (m) => problem(`${p}.category`, m));
+      const note = check(() => normalizeNote(r.note), (m) => problem(`${p}.note`, m));
+      if (r.interval < 1 || r.interval > MAX_RECURRING_INTERVAL) {
+        problem(`${p}.interval`, `Expected a whole number from 1 to ${MAX_RECURRING_INTERVAL}.`);
+      }
+      const start = date(`${p}.startDate`, r.startDate);
+      const end = r.endDate ?? null;
+      const next = r.nextDate ?? null;
+      if (end !== null && date(`${p}.endDate`, end) && isValidDate(start) && end < start) {
+        problem(`${p}.endDate`, "The end date is before the start date.");
+      }
+      if (next !== null && date(`${p}.nextDate`, next) && isValidDate(start) && next < start) {
+        problem(`${p}.nextDate`, "The next date is before the start date.");
+      }
+      if (wallet !== undefined) checkDecimal(`${p}.amount`, r.amount, r.amountMinor, walletCurrency[wallet]);
+      if (out.problems.length > before || wallet === undefined || name === undefined || note === undefined) return;
+      const key = categoryKey(r.kind, name);
+      let category = categoryByKey.get(key);
+      if (category === undefined) {
+        category = out.categories.length;
+        categoryByKey.set(key, category);
+        out.categories.push({ name, kind: r.kind, key });
+      }
+      recurringIndex.set(r.id, out.recurring!.length);
+      out.recurring!.push({
+        kind: r.kind,
+        wallet,
+        category,
+        amountMinor: r.amountMinor,
+        note,
+        frequency: r.frequency,
+        interval: r.interval,
+        startDate: start,
+        // A next date past the end means the rule has ended.
+        endDate: end,
+        nextDate: next !== null && end !== null && next > end ? null : next,
+        paused: r.paused,
+        loc: { path: p },
+      });
+    });
+  }
+
+  // Tags: the account's list (optional; kept so unused tags survive), then each entry's names. One tag per name
+  // ignoring case, the first spelling wins.
+  const { tagFor } = specBuilder(out);
+  data.tags?.forEach((t, i) => {
+    const name = check(() => normalizeTagName(t.name), (m) => problem(`tags[${i}].name`, m));
+    if (name !== undefined) out.tags[tagFor(name)].listed = true;
+  });
+
   data.transactions.forEach((t, i) => {
     const p = `transactions[${i}]`;
+    let tagIdx: number[] | undefined;
+    if (t.tags?.length) {
+      const read = readTagNames(t.tags);
+      if ("problem" in read) problem(`${p}.tags`, read.problem);
+      else tagIdx = read.names.map(tagFor);
+    }
     const wallet = walletRef(`${p}.walletId`, t.walletId);
     let category = categoryIndex.get(t.categoryId);
     if (category === undefined) problem(`${p}.categoryId`, `No category with id ${t.categoryId} in this file.`);
@@ -180,8 +260,23 @@ function parseBackup(body: string): ParsedFile {
     const d = date(`${p}.date`, t.date);
     const note = check(() => normalizeNote(t.note), (m) => problem(`${p}.note`, m));
     if (wallet !== undefined) checkDecimal(`${p}.amount`, t.amount, t.amountMinor, walletCurrency[wallet]);
+    let recurring: number | undefined;
+    if (t.recurringId !== undefined) {
+      recurring = recurringIndex.get(t.recurringId);
+      if (recurring === undefined) problem(`${p}.recurringId`, `No repeating entry with id ${t.recurringId} in this file.`);
+    }
     if (wallet === undefined || category === undefined || category < 0 || note === undefined) return;
-    out.entries.push({ kind: t.kind, wallet, category, amountMinor: t.amountMinor, date: d, note, loc: { path: p } });
+    out.entries.push({
+      kind: t.kind,
+      wallet,
+      category,
+      amountMinor: t.amountMinor,
+      date: d,
+      note,
+      loc: { path: p },
+      ...(recurring === undefined ? {} : { recurring }),
+      ...(tagIdx?.length ? { tags: tagIdx } : {}),
+    });
   });
 
   data.transfers.forEach((t, i) => {
@@ -245,6 +340,50 @@ function parseBackup(body: string): ParsedFile {
       }
       seen.set(key, p);
       out.manualRates!.push({ currency, base, effectiveDate: r.effectiveDate, rate: rate!, loc: { path: p } });
+    });
+  }
+
+  // Budgets (optional list): one per expense category of the file (by name) and one overall (no `category`). The
+  // currency need not be held, as for the rates: a budget does not depend on a wallet.
+  if (data.budgets) {
+    const seen = new Map<string, string>();
+    out.budgets = [];
+    data.budgets.forEach((b, i) => {
+      const p = `budgets[${i}]`;
+      const before = out.problems.length;
+      const currency = b.currency.trim().toUpperCase();
+      const validCurrency = isValidCurrency(currency);
+      if (!validCurrency) problem(`${p}.currency`, `“${b.currency}” is not a supported ISO 4217 currency code.`);
+      checkDecimal(`${p}.amount`, b.amount, b.amountMinor, validCurrency ? currency : null);
+      let category: number | null = null;
+      if (b.category !== undefined && b.category !== null && b.category.trim() !== "") {
+        const name = check(() => normalizeCategoryName(b.category), (m) => problem(`${p}.category`, m));
+        if (name !== undefined) {
+          const idx = categoryByKey.get(categoryKey("expense", name));
+          if (idx === undefined) {
+            problem(
+              `${p}.category`,
+              categoryByKey.has(categoryKey("income", name))
+                ? `“${name}” is an income category; budgets are for expense categories.`
+                : `No expense category “${name}” in this file.`,
+            );
+          } else category = idx;
+        }
+      }
+      if (out.problems.length > before) return;
+      const key = category === null ? "overall" : String(category);
+      const earlier = seen.get(key);
+      if (earlier !== undefined) {
+        problem(
+          p,
+          category === null
+            ? `A second overall budget (the first is ${earlier}).`
+            : `A second budget for “${out.categories[category].name}” (the first is ${earlier}).`,
+        );
+        return;
+      }
+      seen.set(key, p);
+      out.budgets!.push({ category, currency, amountMinor: b.amountMinor, loc: { path: p } });
     });
   }
 

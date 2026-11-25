@@ -21,7 +21,7 @@ import { previewImport, runImport } from "@/server/import";
 import { pickTopCategory } from "@/server/insights";
 import { createTransaction, getTransaction, listTransactions, updateTransaction } from "@/server/transactions";
 import { createWallet } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -120,7 +120,7 @@ describe("archiving categories", () => {
     const t = await spend(alice.cat("Bills"), 700, "2026-03-04");
     await archiveCategory(alice.id, alice.cat("Bills"));
     expect((await listTransactions(alice.id, { categoryId: alice.cat("Bills") })).items.map((x) => x.id)).toEqual([t.id]);
-    expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
+    expect((await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: alice.cat("Bills"), categoryName: "Bills", amountMinor: 700 },
     ]);
     expect(await buildTransactionsCsv(alice.id)).toContain(",Bills,");
@@ -254,6 +254,7 @@ describe("deleteCategory into a new category", () => {
     const count = (await listCategories(alice.id)).length;
     expect(await deleteCategory(alice.id, alice.cat("Housing"), { moveToNewCategoryName: "Rent" })).toEqual({
       movedTransactions: 0,
+      movedRecurring: 0,
       movedTo: null,
     });
     expect((await listCategories(alice.id)).map((c) => c.name)).not.toContain("Rent");

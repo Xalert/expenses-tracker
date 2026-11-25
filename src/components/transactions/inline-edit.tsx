@@ -9,10 +9,12 @@ import {
   updateTransactionInlineAction,
   updateTransferInlineAction,
 } from "@/app/(app)/transactions/actions";
+import { RepeatIcon } from "@/components/shell/icons";
 import { useExpandableRow } from "@/components/ui/expandable-row";
 import { withReturnTo } from "@/lib/return-to";
 import { ConfirmDeleteForm } from "./confirm-delete-form";
 import { EntryForm, type CategoryOption, type WalletOption } from "./entry-form";
+import type { TagOption } from "./tags-field";
 
 /** What a row's editor starts from; built on the server from the row's `TransactionView` (`inlineEntryOf`). */
 export type InlineEntry =
@@ -25,10 +27,16 @@ export type InlineEntry =
       amount: string;
       date: string;
       note: string;
+      /** Its tags as the field shows them ("holiday 2026, reimbursable"). */
+      tags?: string;
+      /** The repeating rule that made the entry: the footer links to it on /recurring. */
+      recurringId?: number | null;
     }
   | {
       type: "transfer";
       transferId: number;
+      /** The row's own leg (what "Duplicate" passes as `?from=`). */
+      entryId: number;
       fromWalletId: number;
       toWalletId: number;
       amount: string;
@@ -44,15 +52,17 @@ type InlineEditContext = {
   today: string;
   /** The list URL: where Delete returns to and the "Open as page" link's `returnTo`. */
   returnTo: string;
+  /** The user's tags, offered by the editors' Tags field (none given: the field still takes typed names). */
+  tags?: readonly TagOption[];
 };
 
 const Context = createContext<InlineEditContext | null>(null);
 
-/** Hands the wallets, categories and today to every row editor once, instead of once per row. */
+/** Hands the wallets, categories, tags and today to every row editor once, instead of once per row. */
 export function InlineEditProvider({ children, ...value }: InlineEditContext & { children: ReactNode }) {
   const memo = useMemo(
-    () => ({ wallets: value.wallets, categories: value.categories, today: value.today, returnTo: value.returnTo }),
-    [value.wallets, value.categories, value.today, value.returnTo],
+    () => ({ wallets: value.wallets, categories: value.categories, today: value.today, returnTo: value.returnTo, tags: value.tags }),
+    [value.wallets, value.categories, value.today, value.returnTo, value.tags],
   );
   return <Context.Provider value={memo}>{children}</Context.Provider>;
 }
@@ -108,8 +118,10 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
                 amount: entry.amount,
                 date: entry.date,
                 note: entry.note,
+                tags: entry.tags,
               }
         }
+        tags={ctx.tags}
         today={ctx.today}
         transactionAction={isTransfer ? undefined : action}
         transferAction={isTransfer ? action : undefined}
@@ -145,6 +157,22 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
             >
               Open as page
             </Link>
+            {/* The Add form prefilled from this entry, dated today (opens as the dialog from inside the app). */}
+            <Link
+              href={withReturnTo(`/transactions/new?from=${isTransfer ? entry.entryId : entry.id}`, ctx.returnTo)}
+              className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Duplicate
+            </Link>
+            {!isTransfer && entry.recurringId != null && (
+              <Link
+                href={`/recurring#rule-${entry.recurringId}`}
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+              >
+                <RepeatIcon className="size-4" />
+                Repeating entry
+              </Link>
+            )}
           </>
         }
       />

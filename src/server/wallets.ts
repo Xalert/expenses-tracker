@@ -4,7 +4,7 @@ import { getDb, type DBOrTx } from "@/db";
 import { transactions, walletGroups, wallets, type Wallet } from "@/db/schema";
 import { isValidCurrency } from "@/lib/currencies";
 import { ServiceError } from "@/lib/errors";
-import { assertId, isPgId, normalizeName } from "./_validate";
+import { assertDate, assertId, isPgId, normalizeName } from "./_validate";
 import { getDefaultGroupId, getOpenGroupRow } from "./wallet-groups";
 
 export type WalletView = {
@@ -18,10 +18,27 @@ export type WalletView = {
   name: string;
   currency: string;
   initialBalanceMinor: number;
-  balanceMinor: number;
+  /** Every entry on the wallet, future-dated ones included (a wallet with entries cannot be deleted). */
   transactionCount: number;
   archivedAt: Date | null;
   createdAt: Date;
+};
+
+/**
+ * A wallet with its balance, from `listWallets` / `getWallet` given `balanceOn` (the caller's today, `todayInZone`,
+ * wherever the balance is shown as the current one). There is no balance without that day, so a page cannot show
+ * one that counts the future-dated entries by mistake.
+ */
+export type WalletWithBalance = WalletView & {
+  /** The day the balance is at the end of (`YYYY-MM-DD`). */
+  balanceOn: string;
+  /** Initial balance + every entry dated on or before `balanceOn` (transfers included). */
+  balanceMinor: number;
+  /**
+   * The net of the entries dated after `balanceOn` (0 when there are none): `balanceMinor + laterChangeMinor` is the
+   * "projected" balance the wallet page and /wallets mention. Not a balance; never sum it into one.
+   */
+  laterChangeMinor: number;
 };
 
 /** SQL expression: signed effect of a transaction row on its wallet balance. */
@@ -29,22 +46,31 @@ export const signedAmountSql = sql<number>`case
   when ${transactions.kind} in ('income', 'transfer_in') then ${transactions.amountMinor}
   else -${transactions.amountMinor} end`;
 
-function selectWalletViews(db: DBOrTx, userId: number, extra?: SQL) {
+const walletViewColumns = {
+  id: wallets.id,
+  groupId: wallets.groupId,
+  groupName: walletGroups.name,
+  groupPosition: walletGroups.position,
+  groupArchived: sql<boolean>`${walletGroups.archivedAt} is not null`.mapWith(Boolean),
+  name: wallets.name,
+  currency: wallets.currency,
+  initialBalanceMinor: wallets.initialBalanceMinor,
+  transactionCount: sql<number>`count(${transactions.id})`.mapWith(Number),
+  archivedAt: wallets.archivedAt,
+  createdAt: wallets.createdAt,
+};
+
+/** The balance columns of a `WalletWithBalance` at the end of `day` (already validated). */
+const balanceColumns = (day: string) => ({
+  balanceOn: sql<string>`${day}::text`,
+  balanceMinor: sql<number>`${wallets.initialBalanceMinor} + coalesce(sum(${signedAmountSql}) filter (where ${transactions.date} <= ${day}), 0)`.mapWith(Number),
+  laterChangeMinor: sql<number>`coalesce(sum(${signedAmountSql}) filter (where ${transactions.date} > ${day}), 0)`.mapWith(Number),
+});
+
+function selectWalletViews(db: DBOrTx, userId: number, extra: SQL | undefined, balanceOn: string | undefined) {
+  const columns = balanceOn === undefined ? walletViewColumns : { ...walletViewColumns, ...balanceColumns(balanceOn) };
   return db
-    .select({
-      id: wallets.id,
-      groupId: wallets.groupId,
-      groupName: walletGroups.name,
-      groupPosition: walletGroups.position,
-      groupArchived: sql<boolean>`${walletGroups.archivedAt} is not null`.mapWith(Boolean),
-      name: wallets.name,
-      currency: wallets.currency,
-      initialBalanceMinor: wallets.initialBalanceMinor,
-      balanceMinor: sql<number>`${wallets.initialBalanceMinor} + coalesce(sum(${signedAmountSql}), 0)`.mapWith(Number),
-      transactionCount: sql<number>`count(${transactions.id})`.mapWith(Number),
-      archivedAt: wallets.archivedAt,
-      createdAt: wallets.createdAt,
-    })
+    .select(columns)
     .from(wallets)
     .innerJoin(walletGroups, eq(walletGroups.id, wallets.groupId))
     .leftJoin(transactions, eq(transactions.walletId, wallets.id))
@@ -52,26 +78,45 @@ function selectWalletViews(db: DBOrTx, userId: number, extra?: SQL) {
     .groupBy(wallets.id, walletGroups.id);
 }
 
+type ListWalletsOptions = { includeArchived?: boolean; groupId?: number };
+
 /**
- * The user's wallets with balances: active first, then archived, each by name. Archived excluded unless asked — and
- * so are the wallets of an archived group (they count as archived wherever archived wallets are hidden).
+ * The user's wallets: active first, then archived, each by name. Archived excluded unless asked — and so are the
+ * wallets of an archived group (they count as archived wherever archived wallets are hidden). With `balanceOn`
+ * (`YYYY-MM-DD`, the user's today for a current balance) each comes with its balance at the end of that day.
  */
 export async function listWallets(
   userId: number,
-  opts: { includeArchived?: boolean; groupId?: number } = {},
-): Promise<WalletView[]> {
+  opts: ListWalletsOptions & { balanceOn: string },
+): Promise<WalletWithBalance[]>;
+export async function listWallets(
+  userId: number,
+  opts?: ListWalletsOptions & { balanceOn?: undefined },
+): Promise<WalletView[]>;
+export async function listWallets(
+  userId: number,
+  opts: ListWalletsOptions & { balanceOn?: string } = {},
+): Promise<WalletView[] | WalletWithBalance[]> {
+  const balanceOn = opts.balanceOn === undefined ? undefined : assertDate(opts.balanceOn, "balanceOn");
   const db = await getDb();
   const conds: SQL[] = [];
   if (!opts.includeArchived) conds.push(sql`${wallets.archivedAt} is null and ${walletGroups.archivedAt} is null`);
   if (opts.groupId !== undefined) conds.push(eq(wallets.groupId, opts.groupId));
-  const q = selectWalletViews(db, userId, conds.length ? and(...conds) : undefined);
+  const q = selectWalletViews(db, userId, conds.length ? and(...conds) : undefined, balanceOn);
   return q.orderBy(sql`${wallets.archivedAt} is not null`, sql`lower(${wallets.name})`, asc(wallets.id));
 }
 
-/** One owned wallet (archived or not) with its balance, or null. */
-export async function getWallet(userId: number, walletId: number, db?: DBOrTx): Promise<WalletView | null> {
+/** One owned wallet (archived or not), or null; with `balanceOn`, with its balance at the end of that day. */
+export async function getWallet(userId: number, walletId: number, opts: { balanceOn: string }): Promise<WalletWithBalance | null>;
+export async function getWallet(userId: number, walletId: number, opts?: { balanceOn?: undefined }): Promise<WalletView | null>;
+export async function getWallet(
+  userId: number,
+  walletId: number,
+  opts: { balanceOn?: string } = {},
+): Promise<WalletView | WalletWithBalance | null> {
+  const balanceOn = opts.balanceOn === undefined ? undefined : assertDate(opts.balanceOn, "balanceOn");
   if (!isPgId(walletId)) return null;
-  const [row] = await selectWalletViews(db ?? (await getDb()), userId, eq(wallets.id, walletId));
+  const [row] = await selectWalletViews(await getDb(), userId, eq(wallets.id, walletId), balanceOn);
   return row ?? null;
 }
 

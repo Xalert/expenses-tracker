@@ -25,6 +25,10 @@ const DEMO_COUNTS = {
   exchange_rates: 0,
   exchange_rate_days: 0,
   manual_exchange_rates: 0,
+  budgets: 4,
+  recurring_transactions: 2,
+  tags: 3,
+  transaction_tags: 10,
 };
 
 async function counts(db: DB) {
@@ -39,11 +43,21 @@ describe("maintenance", () => {
 
   it("lists the app tables but not the migrations table", async () => {
     expect(await appTables(db)).toEqual([
+      "budgets",
       "categories",
       "exchange_rate_days",
       "exchange_rates",
       "manual_exchange_rates",
-      "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"]);
+      "recurring_transactions",
+      "sessions",
+      "tags",
+      "transaction_tags",
+      "transactions",
+      "transfers",
+      "users",
+      "wallet_groups",
+      "wallets",
+    ]);
   });
 
   it("wipes every row in one truncate and restarts the identity counters", async () => {
@@ -77,6 +91,14 @@ describe("maintenance", () => {
     expect(await counts(db)).toEqual(DEMO_COUNTS);
     const walletIds = (await db.execute(sql`select id from wallets order by id`)) as unknown as { rows: { id: number }[] };
     expect(walletIds.rows.map((r) => r.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    // The salary and rent rules: last month's entry and this month's each, linked to their rule.
+    const linked = (await db.execute(
+      sql`select recurring_id, count(*)::int as n from transactions where recurring_id is not null group by recurring_id order by recurring_id`,
+    )) as unknown as { rows: { recurring_id: number; n: number }[] };
+    expect(linked.rows).toEqual([
+      { recurring_id: 1, n: 2 },
+      { recurring_id: 2, n: 2 },
+    ]);
   });
 
   it("refuses under NODE_ENV=production only", () => {

@@ -21,7 +21,7 @@ import {
   seedDefaultGroup,
 } from "@/server/wallet-groups";
 import { archiveWallet, createWallet, getWallet, listWallets, updateWallet } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -145,6 +145,7 @@ describe("wallets and groups", () => {
     const { personal, business, shop } = await setup();
     expect((await updateWallet(alice.id, shop.id, { name: "Shop", initialBalanceMinor: 5000 })).groupId).toBe(business);
     const moved = await updateWallet(alice.id, shop.id, { name: "Shop", initialBalanceMinor: 5000, groupId: personal });
+    const balance = (await getWallet(alice.id, shop.id, { balanceOn: EVERY_ENTRY }))!.balanceMinor;
     expect(moved).toMatchObject({ groupId: personal, groupName: "Personal", transactionCount: moved.transactionCount });
     expect(moved.transactionCount).toBeGreaterThan(0);
     await expectServiceError(
@@ -152,7 +153,7 @@ describe("wallets and groups", () => {
       "NOT_FOUND",
       "groupId",
     );
-    expect((await getWallet(alice.id, shop.id))!.balanceMinor).toBe(moved.balanceMinor);
+    expect((await getWallet(alice.id, shop.id, { balanceOn: EVERY_ENTRY }))!.balanceMinor).toBe(balance);
   });
 
   it("listWallets narrows by group; another user's group is just empty", async () => {
@@ -200,16 +201,16 @@ describe("transactions, dashboard, categories and insights by group", () => {
 
   it("getDashboard narrows wallets, totals, categories and recent entries", async () => {
     const { personal, business } = await setup();
-    const d = await getDashboard(alice.id, { month: MONTH, groupId: personal });
+    const d = await getDashboard(alice.id, { month: MONTH, balanceOn: EVERY_ENTRY, groupId: personal });
     expect(d.wallets.map((w) => w.name)).toEqual(["Home"]);
     expect(d.totalsByCurrency).toEqual([{ currency: "EUR", balanceMinor: 1000 - 1200 + 500, incomeMinor: 0, expenseMinor: 1200 }]);
     expect(d.expenseByCategory.map((c) => c.categoryName).sort()).toEqual(["Bills", "Food"]);
     expect(d.recent.every((t) => t.walletName === "Home")).toBe(true);
 
-    const b = await getDashboard(alice.id, { month: MONTH, groupId: business });
+    const b = await getDashboard(alice.id, { month: MONTH, balanceOn: EVERY_ENTRY, groupId: business });
     expect(b.totalsByCurrency.map((t) => t.currency)).toEqual(["EUR", "USD"]);
     expect(b.totalsByCurrency[0]).toMatchObject({ incomeMinor: 9000, expenseMinor: 3000 });
-    expect((await getDashboard(alice.id, { month: MONTH })).wallets).toHaveLength(3);
+    expect((await getDashboard(alice.id, { month: MONTH, balanceOn: EVERY_ENTRY })).wallets).toHaveLength(3);
   });
 
   it("listCategoriesWithUsage counts only the group's wallets; the list itself is not narrowed", async () => {
@@ -236,7 +237,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     expect(await pickDefaultCurrency(alice.id, MONTH, { groupId: personal })).toBe("EUR");
     expect(await pickDefaultCurrency(alice.id, MONTH, { groupId: await getDefaultGroupId(bob.id) })).toBeNull();
 
-    const i = async (groupId?: number) => getMonthInsights(alice.id, { month: MONTH, currency: "EUR", groupId });
+    const i = async (groupId?: number) => getMonthInsights(alice.id, { today: "2026-11-25", month: MONTH, currency: "EUR", groupId });
     expect(await i()).toMatchObject({ expenseMinor: 4200, incomeMinor: 9000 });
     expect(await i(personal)).toMatchObject({ expenseMinor: 1200, incomeMinor: 0, topCategory: { categoryName: "Food" } });
     expect(await i(business)).toMatchObject({ expenseMinor: 3000, incomeMinor: 9000, topCategory: { categoryName: "Bills" } });
@@ -255,7 +256,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     const { personal, business } = await setup();
     const rates: DailyRates = { base: "EUR", days: [{ date: "2026-03-06", rates: { USD: 2 } }] };
     const convert = { rates };
-    const i = async (groupId?: number) => getMonthInsights(alice.id, { month: MONTH, currency: "EUR", groupId, convert });
+    const i = async (groupId?: number) => getMonthInsights(alice.id, { today: "2026-11-25", month: MONTH, currency: "EUR", groupId, convert });
     expect((await i(personal)).expenseMinor).toBe(1200);
     expect((await i(business)).expenseMinor).toBe(3000 + 350); // 700 USD at 2 USD per EUR
     expect((await i()).expenseMinor).toBe(1200 + 3350);
@@ -275,7 +276,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     expect(await rows(personal)).toBe(3); // two entries + the transfer (its incoming leg matches)
     // The group column names each row's wallet's group, and the wallet rows carry it too.
     const all = parseCsv(await buildTransactionsCsv(alice.id)).records.map((r) => r.cells);
-    expect(all[0].slice(10)).toEqual(["group", "archived", "kind"]);
+    expect(all[0].slice(10)).toEqual(["group", "archived", "kind", "tags"]);
     const wallets = all.filter((r) => r[1] === "wallet").map((r) => `${r[2]}|${r[10]}`);
     expect(wallets).toContain("Home|Personal");
     expect(wallets.some((w) => w.endsWith("|Business"))).toBe(true);
@@ -326,8 +327,8 @@ describe("import and backup with groups", () => {
     expect(byName).toEqual({ Home: "Personal", Shop: "Business", "Shop USD": "Business" });
     expect((await listWalletGroups(bob.id)).map((g) => g.name)).toEqual(["Personal", "Business"]);
     // Same balances as the original.
-    expect((await listWallets(bob.id)).find((w) => w.name === "Shop")!.balanceMinor).toBe((await getWallet(alice.id, shop.id))!.balanceMinor);
-    expect((await listWallets(bob.id)).find((w) => w.name === "Home")!.balanceMinor).toBe((await getWallet(alice.id, home.id))!.balanceMinor);
+    expect((await listWallets(bob.id, { balanceOn: EVERY_ENTRY })).find((w) => w.name === "Shop")!.balanceMinor).toBe((await getWallet(alice.id, shop.id, { balanceOn: EVERY_ENTRY }))!.balanceMinor);
+    expect((await listWallets(bob.id, { balanceOn: EVERY_ENTRY })).find((w) => w.name === "Home")!.balanceMinor).toBe((await getWallet(alice.id, home.id, { balanceOn: EVERY_ENTRY }))!.balanceMinor);
   });
 
   it("matches group names ignoring case and falls back to the target group for a file without groups", async () => {

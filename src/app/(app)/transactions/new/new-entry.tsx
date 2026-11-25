@@ -1,10 +1,12 @@
 import { EntryForm, type EntryKind } from "@/components/transactions/entry-form";
 import { Card, EmptyState, LinkButton } from "@/components/ui";
-import { todayISO } from "@/lib/dates";
+import type { CurrentUser } from "@/lib/auth";
+import { todayInZone } from "@/lib/dates";
 import { getGroupScope } from "@/lib/group-scope";
+import { isFrequency } from "@/lib/recurrence";
 import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
-import { categoryOptions, param, parseId, walletOptions } from "../form-options";
+import { categoryOptions, duplicateInitial, param, parseId, tagOptions, walletOptions } from "../form-options";
 
 const KINDS: EntryKind[] = ["expense", "income", "transfer"];
 
@@ -16,17 +18,18 @@ export type SearchParams = Record<string, string | string[] | undefined>;
  * and supplies the heading.
  */
 export async function NewEntry({
-  userId,
+  user,
   searchParams,
   returnTo,
   variant = "page",
 }: {
-  userId: number;
+  user: Pick<CurrentUser, "id" | "timeZone">;
   searchParams: SearchParams;
   returnTo: string;
   /** "dialog" from the intercepted route: no card, and a save closes the dialog instead of redirecting. */
   variant?: "page" | "dialog";
 }) {
+  const userId = user.id;
   const wallets = await walletOptions(userId);
 
   if (wallets.length === 0) {
@@ -48,13 +51,20 @@ export async function NewEntry({
   const groupFirst = selected ? (await listWallets(userId, { groupId: selected.id }))[0]?.id : undefined;
   const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : groupFirst;
 
-  const today = todayISO();
+  const today = todayInZone(user.timeZone);
+  const repeatParam = param(searchParams.repeat);
+  const categories = await categoryOptions(userId);
+  // "Duplicate": `?from=<id>` wins over `kind` / `wallet`.
+  const copied = await duplicateInitial(userId, parseId(searchParams.from), today, { wallets, categories });
   return (
     <EntryForm
+      // A different source (or none) is a different form: its defaults apply on mount only.
+      key={copied ? `from-${param(searchParams.from)}` : "new"}
       variant={variant}
       wallets={wallets}
-      categories={await categoryOptions(userId)}
-      initial={{ kind, walletId, fromWalletId: walletId, date: today }}
+      categories={categories}
+      tags={await tagOptions(userId)}
+      initial={copied ?? { kind, walletId, fromWalletId: walletId, date: today }}
       today={today}
       transactionAction={createTransactionAction}
       transferAction={createTransferAction}
@@ -62,6 +72,8 @@ export async function NewEntry({
       canTransfer={wallets.length >= 2}
       // Dialog and full page share the draft "Manage categories" keeps.
       draftKey="new"
+      // `?repeat=monthly` (the "New" button of /recurring) preselects Repeat.
+      repeat={{ frequency: isFrequency(repeatParam) ? repeatParam : "never" }}
     />
   );
 }

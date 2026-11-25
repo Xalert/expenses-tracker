@@ -4,12 +4,13 @@ import { ConfirmDeleteForm } from "@/components/transactions/confirm-delete-form
 import { EntryForm } from "@/components/transactions/entry-form";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
-import { todayISO } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { minorToInputValue } from "@/lib/money";
 import { safeReturnTo, withReturnTo } from "@/lib/return-to";
 import { getTransaction } from "@/server/transactions";
 import { deleteTransactionAction, updateTransactionAction } from "../../actions";
-import { categoryOptions, parseId, walletOptions } from "../../form-options";
+import { categoryOptions, parseId, tagOptions, walletOptions } from "../../form-options";
+import { joinTags } from "@/lib/tags";
 
 export const metadata: Metadata = { title: "Edit transaction" };
 
@@ -59,8 +60,10 @@ export default async function EditTransactionPage({
           amount: minorToInputValue(t.amountMinor, t.currency),
           date: t.date,
           note: t.note ?? "",
+          tags: joinTags(t.tags),
         }}
-        today={todayISO()}
+        tags={await tagOptions(user.id)}
+        today={todayInZone(user.timeZone)}
         transactionAction={updateTransactionAction.bind(null, t.id)}
         returnTo={returnTo}
         submitLabel="Save changes"

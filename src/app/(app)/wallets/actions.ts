@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { todayInZone } from "@/lib/dates";
 import { formValues, serviceErrorState, type FormState } from "@/lib/form";
+import { adjustmentResultMessage } from "@/lib/reconcile";
+import { reconcileWallet } from "@/server/reconcile";
 import {
   archiveWallet,
   createWallet,
@@ -26,6 +29,7 @@ import {
   groupNameField,
   parseCreateWallet,
   parseGroupId,
+  parseReconcile,
   parseUpdateWallet,
   parseWalletId,
 } from "./form-input";
@@ -131,6 +135,33 @@ export async function deleteWalletAction(walletIdArg: number): Promise<FormState
   }
   revalidateWallet();
   redirect("/wallets");
+}
+
+/**
+ * Bind the wallet id. The wallet page's "Reconcile balance" form: records the difference between the actual balance
+ * and the tracked one at the end of the date as one entry (`reconcileWallet`) and stays on the page with a
+ * confirmation that says what was added. On success `values` holds only the date, so the form can link to its month.
+ */
+export async function reconcileWalletAction(walletIdArg: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const values = formValues(formData);
+  const walletId = parseWalletId(walletIdArg);
+  const wallet = walletId ? await getWallet(user.id, walletId) : null;
+  if (!wallet) return { ...NOT_FOUND_STATE, values };
+
+  const parsed = parseReconcile(formData, values, wallet.currency);
+  if (!parsed.ok) return parsed.state;
+
+  let message: string;
+  try {
+    const result = await reconcileWallet(user.id, wallet.id, parsed.data, { today: todayInZone(user.timeZone) });
+    message = adjustmentResultMessage(result, parsed.data.date, wallet.currency);
+  } catch (err) {
+    return serviceErrorState(err, values);
+  }
+  // A new entry (and maybe a new category) shows on most pages.
+  revalidatePath("/", "layout");
+  return { ok: true, message, values: { date: parsed.data.date } };
 }
 
 const GROUP_NOT_FOUND_STATE: FormState = { message: "Group not found. It may have been deleted already." };

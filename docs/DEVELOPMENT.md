@@ -89,18 +89,33 @@ The Statement Importer page can be tried locally: the `statement-importer-harnes
 
 ## End-to-end tests
 
-Browser tests in `e2e/` (Playwright, Chromium only) run against a production build on a throwaway database, never on
+Browser tests in `e2e/` (Playwright: Chromium, Firefox and WebKit) run against a production build on a throwaway database, never on
 the development one. `scripts/e2e.mjs` starts its own Postgres (`compose.e2e.yaml`: project `expenses-tracker-e2e`,
 `127.0.0.1:5434`, data on tmpfs), runs `npm run build`, starts `.next/standalone/server.js` on it with
 `EXCHANGE_RATES=false` (no network), wipes the database, runs the tests and removes the container again, also when a
 test fails or the run is interrupted. Each test makes its own user through the app's services
-(`e2e/support/seed.ts`), so the tests run in parallel. Two projects: `desktop` (1280px) runs every test, `phone`
-(375px, touch) the ones tagged `@phone` / `@phone-only`; every test fails on a console error.
+(`e2e/support/seed.ts`), so the tests run in parallel. Every test fails on a console error. Five projects:
 
-Once, to download the browser:
+| Project | Browser | What it runs |
+| --- | --- | --- |
+| `desktop` | Chromium, 1280px | every test except `@phone-only` |
+| `phone` | Chromium, 375px, touch | the tests tagged `@phone` / `@phone-only` |
+| `desktop-firefox` | Firefox, 1280px | as `desktop` |
+| `desktop-webkit` | WebKit, 1280px | as `desktop` |
+| `phone-webkit` | WebKit, 375px, touch | as `phone` (the nearest to iOS Safari; Firefox has no mobile emulation) |
+
+These are Playwright's headless builds of the three engines, not Safari on a Mac or an iPhone, nor a released Firefox.
+
+Once (and after a Playwright upgrade), to download the browsers into Playwright's user-level cache:
 
 ```bash
-npx playwright install chromium
+npx playwright install chromium firefox webkit
+```
+
+On Linux, the same with the system libraries the browsers need (asks for `sudo`):
+
+```bash
+npx playwright install --with-deps chromium firefox webkit
 ```
 
 The whole suite (needs Docker):
@@ -113,6 +128,12 @@ One file or one project; the arguments go to `playwright test`:
 
 ```bash
 make test-e2e ARGS="e2e/transactions.spec.ts --project=desktop"
+```
+
+One browser only (`--project=` can be given more than once):
+
+```bash
+make test-e2e ARGS="--project=desktop-webkit --project=phone-webkit"
 ```
 
 Without `make`, again without the build (reusing the last one):
@@ -199,6 +220,7 @@ data in `expenses`), `make build`, `make migration` (`db:generate`), `make docke
 | `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
 | `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email> [--stdin]` | set a random (printed) or piped-in password and delete that user's sessions; needs `DATABASE_URL` on the command and refuses the real `expenses` database |
 | `npm run db:reset -- --demo` / `--clean` | real database: delete every row, then seed the demo data / leave it empty; asks first |
+| `node scripts/generate-icons.mjs` | re-render the home-screen icons in `public/` (`icons/`, `apple-touch-icon.png`) from the brand mark with Playwright's Chromium; run it after changing `src/components/brand.tsx` (keep the glyph in the script in step) and commit the PNGs |
 
 ## Releasing
 

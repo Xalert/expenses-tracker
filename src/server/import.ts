@@ -1,7 +1,21 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, manualRates, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
+import {
+  budgets,
+  categories,
+  manualRates,
+  recurringTransactions,
+  tags,
+  transactions,
+  transactionTags,
+  transfers,
+  walletGroups,
+  wallets,
+  type CategoryKind,
+} from "@/db/schema";
+import { tagKey } from "@/lib/tags";
+import { ensureTagIds } from "./tags";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
@@ -13,6 +27,7 @@ import { getDefaultGroupId, getOpenGroupRow, nextGroupPosition } from "./wallet-
 import { backupFormat } from "./import-formats/backup";
 import {
   addTally,
+  type BudgetSpec,
   categoryKey,
   type CategorySpec,
   emptyParsed,
@@ -106,6 +121,19 @@ export type ImportPreview = {
    * has is kept as it is, never replaced).
    */
   manualRatesToAdd: number;
+  /** Backup only: repeating entries the account lacks (created), and those it already has (skipped). */
+  recurringToAdd: number;
+  duplicateRecurring: number;
+  /**
+   * Backup only: the file's budgets the account lacks (the overall one, or one for a category that has none, created
+   * or existing). A budget the account already has is kept as it is, never replaced.
+   */
+  budgetsToAdd: number;
+  /**
+   * Tags the account lacks (by name, ignoring case) that the import creates: those an added entry carries (CSV `tags`,
+   * backup entry `tags`) and, from a backup, every tag of its `tags` list.
+   */
+  tagsToCreate: string[];
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -285,8 +313,18 @@ export function parseImportFiles(
     parsed.wallets.forEach((w, k) => mergeWalletDetails(combined, walletMap[k], w, tag));
     const categoryMap = parsed.categories.map((c) => merger.categoryFor(c.kind, c.name));
     parsed.categories.forEach((c, k) => mergeCategoryDetails(combined, categoryMap[k], c, tag));
+    const tagMap = parsed.tags.map((t) => merger.tagFor(t.name));
+    parsed.tags.forEach((t, k) => {
+      if (t.listed) combined.tags[tagMap[k]].listed = true;
+    });
     combined.entries.push(
-      ...parsed.entries.map((e) => ({ ...e, wallet: walletMap[e.wallet], category: categoryMap[e.category], loc: tag(e.loc) })),
+      ...parsed.entries.map((e) => ({
+        ...e,
+        wallet: walletMap[e.wallet],
+        category: categoryMap[e.category],
+        ...(e.tags ? { tags: e.tags.map((i) => tagMap[i]) } : {}),
+        loc: tag(e.loc),
+      })),
     );
     combined.transfers.push(
       ...parsed.transfers.map((t) => ({ ...t, from: walletMap[t.from], to: walletMap[t.to], loc: tag(t.loc) })),
@@ -422,8 +460,15 @@ type Plan = {
   categoryArchived: boolean[];
   categoriesToCreate: number[];
   manualRatesToAdd: ManualRateSpec[];
+  /** Per file repeating entry: the account's identical rule (skipped, entries link to it), or null → created. */
+  recurringTargets: (number | null)[];
+  /** File repeating-entry indexes to create, in file order. */
+  recurringToCreate: number[];
+  budgetsToAdd: BudgetSpec[];
   /** Non-blocking notes from planning (e.g. rates the account already had for a date). */
   notices: ImportNotice[];
+  /** File tag indexes the account lacks that the import creates (used by an added entry, or listed by a backup). */
+  tagsToCreate: number[];
   entriesToAdd: EntrySpec[];
   transfersToAdd: TransferSpec[];
   duplicateTransactions: number;
@@ -564,6 +609,70 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     }
   }
 
+  // Repeating entries (backup): one the account already has — same wallet, category, amount, note and schedule —
+  // is skipped (its next date and paused state are the account's own); any other is created (import adds, never
+  // changes). A rule whose wallet or category is created by this import is always new.
+  const recurringTargets: (number | null)[] = [];
+  const recurringToCreate: number[] = [];
+  if (parsed.recurring?.length) {
+    const existingRules = await tx
+      .select()
+      .from(recurringTransactions)
+      .where(eq(recurringTransactions.userId, userId))
+      .orderBy(recurringTransactions.id);
+    const taken = new Set<number>();
+    parsed.recurring.forEach((r, i) => {
+      const walletId = walletTargets[r.wallet].id;
+      const categoryId = categoryTargets[r.category];
+      const same = existingRules.find(
+        (e) =>
+          !taken.has(e.id) &&
+          e.walletId === walletId &&
+          e.categoryId === categoryId &&
+          e.kind === r.kind &&
+          e.amountMinor === r.amountMinor &&
+          e.note === r.note &&
+          e.frequency === r.frequency &&
+          e.interval === r.interval &&
+          e.startDate === r.startDate &&
+          e.endDate === r.endDate,
+      );
+      if (same) taken.add(same.id);
+      else recurringToCreate.push(i);
+      recurringTargets.push(same?.id ?? null);
+    });
+  }
+
+  // Budgets (backup): added for the overall budget and for categories (existing or created) that have none; an
+  // existing budget is kept, even when the file's differs (import adds, never changes; as the rates above).
+  const budgetsToAdd: BudgetSpec[] = [];
+  if (parsed.budgets?.length) {
+    const existingBudgets = new Map(
+      (
+        await tx
+          .select({ categoryId: budgets.categoryId, currency: budgets.currency, amountMinor: budgets.amountMinor })
+          .from(budgets)
+          .where(eq(budgets.userId, userId))
+      ).map((b) => [b.categoryId, b]),
+    );
+    let kept = 0;
+    for (const b of parsed.budgets) {
+      const target = b.category === null ? null : categoryTargets[b.category];
+      const existing = b.category !== null && target === null ? undefined : existingBudgets.get(target);
+      if (!existing) budgetsToAdd.push(b);
+      else if (existing.currency !== b.currency || existing.amountMinor !== b.amountMinor) kept++;
+    }
+    if (kept > 0) {
+      notices.push({
+        code: "budgets-kept",
+        count: kept,
+        message:
+          `${kept === 1 ? "1 budget" : `${fmtCount(kept)} budgets`} in the backup differ from the budget you already have ` +
+          `for that category; your own ${kept === 1 ? "is" : "are"} kept. Change ${kept === 1 ? "it" : "them"} on the Categories page if needed.`,
+      });
+    }
+  }
+
   // Existing entries as multisets (only needed when skipping duplicates) ------------------------------
   // In a CSV a wallet *is* its name + currency, so two same-named wallets of the account count as one for
   // duplicate detection (re-importing an export of such an account must still add nothing). A backup keeps
@@ -679,6 +788,18 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     transfersToAdd.push(t);
   }
 
+  // Tags: matched by name ignoring case; a missing one is created when an entry the import adds carries it, or when a
+  // backup lists it. A duplicate entry adds nothing, not even its tags (import adds, never changes).
+  const existingTagIds = new Map<string, number>();
+  if (parsed.tags.length > 0) {
+    for (const t of await tx.select({ id: tags.id, name: tags.name }).from(tags).where(eq(tags.userId, userId))) {
+      existingTagIds.set(tagKey(t.name), t.id);
+    }
+  }
+  const neededTags = new Set<number>(parsed.tags.flatMap((t, i) => (t.listed ? [i] : [])));
+  for (const e of entriesToAdd) for (const i of e.tags ?? []) neededTags.add(i);
+  const tagsToCreate = [...neededTags].filter((i) => !existingTagIds.has(parsed.tags[i].key)).sort((a, b) => a - b);
+
   // Report problems in file order (entries and transfers are interleaved in a CSV).
   const sortedProblems = sortByLocation(problems);
 
@@ -692,7 +813,11 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     categoryArchived,
     categoriesToCreate,
     manualRatesToAdd,
+    recurringTargets,
+    recurringToCreate,
+    budgetsToAdd,
     notices,
+    tagsToCreate,
     entriesToAdd,
     transfersToAdd,
     duplicateTransactions,
@@ -738,6 +863,10 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
       ...(parsed.categories[i].archived ? { archived: true as const } : {}),
     })),
     manualRatesToAdd: plan?.manualRatesToAdd.length ?? 0,
+    recurringToAdd: plan?.recurringToCreate.length ?? 0,
+    duplicateRecurring: plan ? plan.recurringTargets.length - plan.recurringToCreate.length : 0,
+    budgetsToAdd: plan?.budgetsToAdd.length ?? 0,
+    tagsToCreate: (plan?.tagsToCreate ?? []).map((i) => parsed.tags[i].name),
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
     notices: [...parsed.notices, ...(plan?.notices ?? [])].map(publicLocation),
@@ -820,10 +949,28 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
         name: c.name,
         kind: c.kind,
         archivedAt: c.archived ? (c.archivedAt ? new Date(c.archivedAt) : now) : null,
+        // A backup's colour, only on the categories the import creates (existing ones keep theirs).
+        color: c.color ?? null,
         createdAt: now,
       })
       .returning({ id: categories.id });
     categoryIds[i] = created.id;
+  }
+
+  if (plan.budgetsToAdd.length > 0) {
+    await tx
+      .insert(budgets)
+      .values(
+        plan.budgetsToAdd.map((b) => ({
+          userId,
+          categoryId: b.category === null ? null : categoryIds[b.category]!,
+          currency: b.currency,
+          amountMinor: b.amountMinor,
+          createdAt: now,
+        })),
+      )
+      // Planned against this transaction's snapshot; a budget set meanwhile is kept.
+      .onConflictDoNothing();
   }
 
   for (const chunk of chunks(plan.manualRatesToAdd)) {
@@ -834,8 +981,45 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
       .onConflictDoNothing({ target: [manualRates.userId, manualRates.currency, manualRates.effectiveDate] });
   }
 
+  // Repeating entries before the entries that link to them. Created as the file has them (next date, paused); a
+  // next date already past is caught up by the next request, like any rule.
+  const recurringIds = [...plan.recurringTargets];
+  for (const i of plan.recurringToCreate) {
+    const r = parsed.recurring![i];
+    const [created] = await tx
+      .insert(recurringTransactions)
+      .values({
+        userId,
+        walletId: walletIds[r.wallet]!,
+        kind: r.kind,
+        categoryId: categoryIds[r.category]!,
+        amountMinor: r.amountMinor,
+        note: r.note,
+        frequency: r.frequency,
+        interval: r.interval,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        nextDate: r.nextDate,
+        pausedAt: r.paused && r.nextDate !== null ? now : null,
+        createdAt: now,
+      })
+      .returning({ id: recurringTransactions.id });
+    recurringIds[i] = created.id;
+  }
+
+  // Tags: the ones to create (unused ones a backup lists too) and those the added entries carry, by name.
+  const tagNames = new Set<number>(plan.tagsToCreate);
+  for (const e of plan.entriesToAdd) for (const i of e.tags ?? []) tagNames.add(i);
+  const tagIdOf = await ensureTagIds(
+    userId,
+    [...tagNames].map((i) => parsed.tags[i].name),
+    tx,
+  );
+
   for (const chunk of chunks(plan.entriesToAdd)) {
-    await tx
+    // Identity values are assigned in VALUES order within one INSERT, so the ascending ids line up with `chunk`.
+    const ids = (
+      await tx
       .insert(transactions)
       .values(
         chunk.map((e) => ({
@@ -847,9 +1031,19 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
           date: e.date,
           note: e.note,
           transferId: null,
+          recurringId: e.recurring === undefined ? null : recurringIds[e.recurring],
           createdAt: now,
         })),
-      );
+      )
+      .returning({ id: transactions.id })
+    )
+      .map((r) => r.id)
+      .sort((a, b) => a - b);
+    if (ids.length !== chunk.length) throw new Error("Transaction insert returned an unexpected number of rows.");
+    const links = chunk.flatMap((e, j) =>
+      [...new Set((e.tags ?? []).map((i) => tagIdOf.get(parsed.tags[i].name)!))].map((tagId) => ({ transactionId: ids[j], tagId })),
+    );
+    for (const part of chunks(links, CHUNK * 5)) await tx.insert(transactionTags).values(part);
   }
 
   for (const chunk of chunks(plan.transfersToAdd, CHUNK / 2)) {

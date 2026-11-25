@@ -11,7 +11,7 @@ import { createTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { createWalletGroup, listWalletGroups } from "@/server/wallet-groups";
 import { archiveWallet, createWallet, listWallets } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -70,7 +70,7 @@ async function newUser(email: string) {
 type WalletState = { name: string; currency: string; initial: number; balance: number; archived: boolean; count: number };
 
 async function walletState(userId: number): Promise<WalletState[]> {
-  return (await listWallets(userId, { includeArchived: true }))
+  return (await listWallets(userId, { includeArchived: true, balanceOn: EVERY_ENTRY }))
     .map((w) => ({
       name: w.name,
       currency: w.currency,
@@ -158,7 +158,7 @@ describe("buildTransactionsCsv", () => {
   it("writes one row per entry and per transfer, with a BOM, CRLF and protected formulas", async () => {
     await seedAlice();
     const out = await buildTransactionsCsv(alice.id);
-    expect(out.startsWith("﻿date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind\r\n")).toBe(true);
+    expect(out.startsWith("﻿date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind,tags\r\n")).toBe(true);
     const all = parseCsv(out).records.slice(1).map((r) => r.cells);
     // Wallet rows first: one per name + currency (the two "Main" EUR wallets share one, initial balances summed).
     const walletRows = all.filter((r) => r[1] === "wallet");
@@ -178,9 +178,9 @@ describe("buildTransactionsCsv", () => {
     expect(rows.find((r) => r[6] === "'=SUM(A1:A9)")).toBeTruthy();
     expect(rows.find((r) => r[6] === "'-5 refund later")).toBeTruthy();
     expect(rows.find((r) => r[6] === "'+plus @at")).toBeTruthy();
-    expect(rows.find((r) => r[6] === "Ramen")).toEqual(["2026-02-01", "expense", "Tokyo", "JPY", "1500", "Food", "Ramen", "", "", "", "Personal", "", ""]);
+    expect(rows.find((r) => r[6] === "Ramen")).toEqual(["2026-02-01", "expense", "Tokyo", "JPY", "1500", "Food", "Ramen", "", "", "", "Personal", "", "", ""]);
     expect(rows.find((r) => r[6] === "Three decimals")?.[4]).toBe("1.234");
-    expect(rows.find((r) => r[6] === "ATM")).toEqual(["2026-01-05", "transfer", "Main", "EUR", "100.00", "", "ATM", "Cash", "EUR", "100.00", "Personal", "", ""]);
+    expect(rows.find((r) => r[6] === "ATM")).toEqual(["2026-01-05", "transfer", "Main", "EUR", "100.00", "", "ATM", "Cash", "EUR", "100.00", "Personal", "", "", ""]);
     // Oldest first.
     expect(rows[0][0]).toBe("2025-12-01");
   });
@@ -366,7 +366,7 @@ describe("CSV round trip", () => {
       { name: "Cash", currency: "EUR", archived: false, group: "Personal", described: false },
       { name: "Tokyo", currency: "JPY", archived: false, group: "Personal", described: false },
     ]);
-    const ws = await listWallets(alice.id);
+    const ws = await listWallets(alice.id, { balanceOn: EVERY_ENTRY });
     expect(ws.find((w) => w.currency === "EUR")?.balanceMinor).toBe(-1_250);
     expect(ws.find((w) => w.currency === "JPY")?.balanceMinor).toBe(-1_500);
   });
@@ -430,8 +430,8 @@ describe("archived wallets", () => {
     const { old } = await seedAlice();
     const bob = await newUser("bob@example.com");
     await runImport(bob.id, await backupText(alice.id));
-    const copy = (await listWallets(bob.id, { includeArchived: true })).find((w) => w.name === "Old card")!;
-    const orig = (await listWallets(alice.id, { includeArchived: true })).find((w) => w.id === old.id)!;
+    const copy = (await listWallets(bob.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.name === "Old card")!;
+    const orig = (await listWallets(alice.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.id === old.id)!;
     expect(copy.archivedAt).not.toBeNull();
     expect(copy.balanceMinor).toBe(orig.balanceMinor);
     expect(copy.transactionCount).toBe(orig.transactionCount);
@@ -819,7 +819,7 @@ describe("CSV wallet rows and groups", () => {
     expect(await snapshot()).toEqual(before);
     return p;
   };
-  const wallet = async (name: string) => (await listWallets(alice.id, { includeArchived: true })).find((w) => w.name === name);
+  const wallet = async (name: string) => (await listWallets(alice.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.name === name);
   const groupNames = async () => (await listWalletGroups(alice.id)).map((g) => g.name).sort();
 
   it("creates wallets with the initial balance, group and archived date of their wallet rows", async () => {
@@ -974,7 +974,7 @@ describe("CSV category rows", () => {
     await db.update(categories).set({ archivedAt: new Date("2026-02-10T15:00:00.000Z") }).where(eq(categories.id, pets.id));
     const out = await buildTransactionsCsv(alice.id);
     const rows = parseCsv(out).records.slice(1).map((r) => r.cells);
-    expect(rows.filter((r) => r[1] === "category")).toEqual([["", "category", "", "", "", "'=Pets", "", "", "", "", "", "2026-02-10", "expense"]]);
+    expect(rows.filter((r) => r[1] === "category")).toEqual([["", "category", "", "", "", "'=Pets", "", "", "", "", "", "2026-02-10", "expense", ""]]);
     // Wallet rows, then category rows, then entries.
     expect(rows.map((r) => r[1])).toEqual(["wallet", "category", "expense", "expense"]);
 

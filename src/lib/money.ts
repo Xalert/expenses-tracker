@@ -25,13 +25,29 @@ export function parseAmount(
   currency: string,
   opts: { allowNegative?: boolean } = {},
 ): number | null {
+  const d = splitDecimalInput(input);
+  if (!d || (d.negative && !opts.allowNegative)) return null;
+  const decimals = currencyDecimals(currency);
+  if (d.frac.length > decimals) return null;
+
+  const minor = Number(d.whole + d.frac.padEnd(decimals, "0"));
+  if (!Number.isSafeInteger(minor)) return null;
+  if (minor === 0) return 0;
+  return d.negative ? -minor : minor;
+}
+
+/**
+ * The digits of a user-entered decimal by `parseAmount`'s rules (spaces and `'` as grouping, the last of `.` / `,` as
+ * the decimal separator when both appear, a lone `,` always decimal, a leading `-` / `−`): `{ negative, whole, frac }`,
+ * or null for junk or empty input. No currency and no length check.
+ */
+export function splitDecimalInput(input: string): { negative: boolean; whole: string; frac: string } | null {
   if (typeof input !== "string") return null;
   let s = input.trim().replace(/[\s  ']/g, "");
   if (!s) return null;
 
   let negative = false;
   if (s.startsWith("-") || s.startsWith("−")) {
-    if (!opts.allowNegative) return null;
     negative = true;
     s = s.slice(1);
   }
@@ -52,14 +68,7 @@ export function parseAmount(
 
   const m = /^(\d+)(?:\.(\d+))?$/.exec(s);
   if (!m) return null;
-  const [, whole, frac = ""] = m;
-  const decimals = currencyDecimals(currency);
-  if (frac.length > decimals) return null;
-
-  const minor = Number(whole + frac.padEnd(decimals, "0"));
-  if (!Number.isSafeInteger(minor)) return null;
-  if (minor === 0) return 0;
-  return negative ? -minor : minor;
+  return { negative, whole: m[1], frac: m[2] ?? "" };
 }
 
 /**

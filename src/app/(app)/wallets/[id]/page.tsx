@@ -6,20 +6,24 @@ import { AddButton } from "@/components/shell/add-button";
 import { DayList } from "@/components/transactions/day-list";
 import { InlineEditProvider } from "@/components/transactions/inline-edit";
 import { InsightCard, LinkButton } from "@/components/ui";
+import { ReconcileForm } from "@/components/wallets/reconcile-form";
 import { WalletMenu } from "@/components/wallets/wallet-menu";
 import { WalletMonthChart } from "@/components/wallets/wallet-month-chart";
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { currencyName } from "@/lib/currencies";
-import { currentMonth, formatMonth, isValidMonth, todayISO } from "@/lib/dates";
+import { formatMonth, isValidMonth, todayInZone } from "@/lib/dates";
 import { walletDayAside } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
-import { toCategoryOptions } from "../../transactions/form-options";
+import { tagOptions, toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
+import { countRecurringForWallet } from "@/server/recurring";
+import { listWalletClosingBalances } from "@/server/reconcile";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
+import { reconcileWalletAction } from "../actions";
 import { parseWalletId } from "../form-input";
 
 /** The month's entries on this page: no pagination here; "Open in Transactions" has the full list. */
@@ -27,7 +31,8 @@ const MONTH_LIMIT = 200;
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ month?: string | string[] }>;
+  /** `reconcile=1` opens the "Reconcile balance" panel (the wallet menu links there). */
+  searchParams: Promise<{ month?: string | string[]; reconcile?: string | string[] }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -46,16 +51,18 @@ const KIND_PILLS = [
 export default async function WalletPage({ params, searchParams }: Props) {
   const user = await requireUser();
   const walletId = parseWalletId((await params).id);
-  const wallet = walletId ? await getWallet(user.id, walletId) : null;
+  const today = todayInZone(user.timeZone);
+  // The balance at the end of today, as on /wallets and the Overview: entries dated later are "projected" on this
+  // page (the day headers), so they are left out, and a reconciliation as of today makes it exactly the balance typed.
+  const wallet = walletId ? await getWallet(user.id, walletId, { balanceOn: today }) : null;
   if (!wallet) notFound();
 
   const sp = await searchParams;
-  const maxMonth = currentMonth();
+  const maxMonth = today.slice(0, 7);
   const requested = typeof sp.month === "string" && isValidMonth(sp.month) ? sp.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
   const isCurrentMonth = month === maxMonth;
-  const today = todayISO();
-  const data = await getWalletMonth(user.id, wallet.id, month);
+  const data = await getWalletMonth(user.id, wallet.id, month, { today });
   if (!data) notFound();
 
   const archived = wallet.archivedAt !== null;
@@ -63,6 +70,11 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const hidden = archived || wallet.groupArchived;
   const self = `/wallets/${wallet.id}`;
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
+  const reconcileHref = `${self}?${isCurrentMonth ? "" : `month=${month}&`}reconcile=1`;
+  const reconcileOpen = !hidden && sp.reconcile === "1";
+  const balanceToday = wallet.balanceMinor;
+  const projectedMinor = wallet.balanceMinor + wallet.laterChangeMinor;
+  const reconcileData = reconcileOpen ? await listWalletClosingBalances(user.id, wallet.id, today) : null;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
   const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });
   const closingByDate = new Map(data.days.map((d) => [d.date, d.closingMinor]));
@@ -128,14 +140,19 @@ export default async function WalletPage({ params, searchParams }: Props) {
               <p
                 className={cn(
                   "mt-2 text-[36px] leading-none font-extrabold tracking-[-0.03em] tabular-nums sm:text-[44px]",
-                  wallet.balanceMinor < 0 ? "text-expense" : "text-foreground",
+                  balanceToday < 0 ? "text-expense" : "text-foreground",
                 )}
               >
-                {money(wallet.balanceMinor)}
+                {money(balanceToday)}
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 Balance today · started with {money(wallet.initialBalanceMinor)}
               </p>
+              {projectedMinor !== balanceToday && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {money(projectedMinor)} projected after the entries dated later
+                </p>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {!hidden &&
@@ -154,9 +171,26 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 walletName={wallet.name}
                 archived={archived}
                 canDelete={wallet.transactionCount === 0}
+                recurringCount={wallet.transactionCount === 0 ? await countRecurringForWallet(user.id, wallet.id) : 0}
+                reconcileHref={hidden ? undefined : reconcileHref}
               />
             </div>
           </div>
+
+          {reconcileOpen && reconcileData && (
+            <ReconcileForm
+              action={reconcileWalletAction.bind(null, wallet.id)}
+              walletId={wallet.id}
+              walletName={wallet.name}
+              currency={wallet.currency}
+              today={today}
+              initialBalanceMinor={reconcileData.initialBalanceMinor}
+              closings={reconcileData.closings}
+              closeHref={pageHref}
+              month={month}
+              walletHref={self}
+            />
+          )}
 
           {archived && (
             <p className="rounded-2xl bg-surface-muted px-4 py-3 text-sm text-muted-foreground">
@@ -231,7 +265,13 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 : `No entries in ${formatMonth(month)}. Add one with the buttons above.`}
             </p>
           ) : (
-            <InlineEditProvider wallets={walletOptions} categories={categoryOptions} today={today} returnTo={pageHref}>
+            <InlineEditProvider
+              wallets={walletOptions}
+              categories={categoryOptions}
+              tags={await tagOptions(user.id)}
+              today={today}
+              returnTo={pageHref}
+            >
               <DayList
                 items={items}
                 today={today}

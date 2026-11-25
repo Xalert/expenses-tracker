@@ -1,5 +1,5 @@
 import { addDays } from "@/lib/dates";
-import { expect, hydrated, test } from "./support/fixtures";
+import { expect, expectNoHorizontalOverflow, hydrated, test } from "./support/fixtures";
 import { seedEntry, seedGroup, seedWallet, todayISO } from "./support/seed";
 
 test("the wallet page shows the balance after each day, and a projected one for a future-dated entry", async ({ signedIn: page, user }) => {
@@ -14,6 +14,90 @@ test("the wallet page shows the balance after each day, and a projected one for 
   await expect(page.getByText("Balance after €937.66 · projected", { exact: true })).toBeVisible();
 });
 
+test("a wallet with a future-dated entry shows the same balance on /wallets, its page and the Overview @phone", async ({ signedIn: page, user }) => {
+  const today = todayISO();
+  const bank = await seedWallet(user.id, { name: "Bank", currency: "EUR", initialBalanceMinor: 100_000 });
+  await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Food", amountMinor: 1_234, note: "today" });
+  // Far enough ahead to fall after today in any month; it is "projected", not in the balance.
+  await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Bills", amountMinor: 5_000, date: addDays(today, 40), note: "rent" });
+
+  await page.goto("/wallets");
+  const card = page.getByRole("link", { name: /^Bank/ });
+  await expect(card).toContainText("Balance €987.66");
+  await expect(card).toContainText("€937.66 projected after later entries");
+  await expect(page.getByRole("region", { name: /^EUR/ }).getByText("Total in EUR:")).toHaveCount(1);
+  await expect(page.getByRole("region", { name: /^EUR/ }).getByRole("paragraph").first()).toHaveText("Total in EUR: €987.66");
+  await expectNoHorizontalOverflow(page);
+
+  await card.click();
+  await expect(page).toHaveURL(new RegExp(`/wallets/${bank.id}$`));
+  await expect(page.getByRole("region", { name: "Bank", exact: true }).getByRole("paragraph").first()).toHaveText("€987.66");
+  await expect(page.getByText("€937.66 projected after the entries dated later")).toBeVisible();
+
+  await page.goto("/");
+  const row = page.getByRole("region", { name: "Wallets" }).getByRole("link", { name: /^Bank/ });
+  await expect(row).toContainText("€987.66");
+  await expect(row).not.toContainText("€937.66");
+});
+
+test.describe("reconcile balance", () => {
+  test("reconcile from the ⋯ menu: the preview, the adjustment entry and the typed balance @phone", async ({ signedIn: page, user }) => {
+    const today = todayISO();
+    const bank = await seedWallet(user.id, { name: "Bank", currency: "EUR", initialBalanceMinor: 100_000 });
+    await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Food", amountMinor: 1_234, note: "lunch" });
+    // A future-dated entry is "projected": the balance today, and so the reconciliation, leave it out.
+    await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Bills", amountMinor: 5_000, date: addDays(today, 3), note: "rent" });
+    await page.goto(`/wallets/${bank.id}`);
+    await hydrated(page);
+    const balance = page.getByRole("region", { name: "Bank", exact: true }).getByRole("paragraph").first();
+    await expect(balance).toHaveText("€987.66");
+    await expect(page.getByText("€937.66 projected after the entries dated later")).toBeVisible();
+
+    const trigger = page.getByRole("button", { name: "More actions for Bank" });
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "Reconcile balance" }).click();
+    const panel = page.getByRole("region", { name: "Reconcile balance" });
+    const input = panel.getByLabel("Actual balance");
+    await expect(input).toBeFocused();
+    await expect(panel.getByText("Tracked balance at the end of today: €987.66.")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await input.fill("950");
+    await expect(panel.getByText("This adds an expense of €37.66.")).toBeVisible();
+    await panel.getByRole("button", { name: "Record adjustment" }).click();
+    await expect(panel.getByRole("status")).toContainText("Added an expense of €37.66");
+    await expect(balance).toHaveText("€950.00");
+    await expect(panel.getByText("Tracked balance at the end of today: €950.00.")).toBeVisible();
+    await expect(panel.getByLabel("Actual balance")).toHaveValue("");
+    const entries = page.getByRole("region", { name: /^Entries in/ });
+    await expect(entries.getByText("Balance adjustment").first()).toBeVisible();
+
+    // A match records nothing.
+    await panel.getByLabel("Actual balance").fill("950,00");
+    await expect(panel.getByText("The balance already matches. Nothing will be added.")).toBeVisible();
+
+    // Escape closes the panel and puts focus back on the ⋯ button.
+    await panel.getByLabel("Actual balance").press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect(page).toHaveURL(new RegExp(`/wallets/${bank.id}$`));
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("the reconcile form posts and the confirmation says what was recorded", async ({ signedIn: page, user }) => {
+      const cash = await seedWallet(user.id, { name: "Cash", currency: "JPY", initialBalanceMinor: 5_000 });
+      await page.goto(`/wallets/${cash.id}?reconcile=1`);
+      const panel = page.getByRole("region", { name: "Reconcile balance" });
+      await panel.getByLabel("Actual balance").fill("5 250");
+      await panel.getByRole("button", { name: "Record adjustment" }).click();
+      await expect(panel.getByRole("status")).toContainText("Added income of ¥250");
+      await expect(page.getByRole("region", { name: "Cash", exact: true }).getByRole("paragraph").first()).toHaveText("¥5,250");
+    });
+  });
+});
+
 test.describe("wallet groups", () => {
   test("move, recolour, archive and unarchive a group @phone", async ({ signedIn: page, user }) => {
     await seedGroup(user.id, "Work");
@@ -21,7 +105,11 @@ test.describe("wallet groups", () => {
     await page.goto("/wallets");
     await hydrated(page);
     const groups = page.getByRole("region", { name: /^Groups · 3 groups/ });
-    const names = () => groups.getByRole("listitem").getByRole("button").filter({ hasText: /wallet/ }).allInnerTexts();
+    // The same region, found through its heading: in Playwright's Firefox (1.65, build 1572) a multi-element query
+    // (allInnerTexts) under a region located by its accessible name makes the next query crash the content process
+    // (SIGSEGV), even on a static one-section page.
+    const list = page.getByRole("region").filter({ has: page.getByRole("heading", { name: /^Groups · 3 groups/ }) });
+    const names = () => list.getByRole("listitem").getByRole("button").filter({ hasText: /wallet/ }).allInnerTexts();
     expect((await names()).map((n) => n.split("\n")[0])).toEqual(["Personal", "Work", "Travel"]);
 
     // Move Travel up: a plain form post.

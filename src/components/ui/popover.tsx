@@ -65,6 +65,8 @@ export type PopoverProps = {
   id?: string;
   role?: "dialog" | "listbox" | "menu";
   "aria-label"?: string;
+  /** For a `listbox` whose options toggle (several can be selected). */
+  "aria-multiselectable"?: boolean;
   className?: string;
   children: ReactNode;
 };
@@ -113,6 +115,7 @@ function PopoverPanel({
   className,
   children,
   "aria-label": ariaLabel,
+  "aria-multiselectable": multiselectable,
 }: PopoverProps & { onDismiss: (restoreFocus: boolean) => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onDismissRef = useRef(onDismiss);
@@ -132,7 +135,12 @@ function PopoverPanel({
       onDismissRef.current(true);
     }
     function onOutside(e: Event) {
-      if (!inside(e.target)) onDismissRef.current(false);
+      if (inside(e.target)) return;
+      // Focus landing on a container of the popover (e.g. the Dialog's panel) is not leaving it: WebKit moves focus
+      // there when the focused element inside is removed (a day cell replaced by the next month's), and that must not
+      // close the picker. A click there still does (pointerdown).
+      if (e.type === "focusin" && e.target instanceof Node && anchor.current && e.target.contains(anchor.current)) return;
+      onDismissRef.current(false);
     }
 
     document.addEventListener("keydown", onKeyDown);
@@ -195,6 +203,7 @@ function PopoverPanel({
       id={id}
       role={role}
       aria-label={ariaLabel}
+      aria-multiselectable={multiselectable || undefined}
       data-placement={placement}
       className={cn(
         "absolute z-30 rounded-2xl border border-border bg-surface p-3 text-foreground",

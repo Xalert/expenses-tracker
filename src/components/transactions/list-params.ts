@@ -3,15 +3,23 @@
 // `month` is what the URL says (`YYYY-MM` or `all`); absent means the default, the current month — unless `from` or
 // `to` is given, which override the month (the service ignores `month` then). `resolveView` turns that into what the
 // list shows. `currency` only picks the day strip's currency and `view=only` turns its conversion off ("EUR only"
-// instead of the default "All in EUR"); neither is a filter.
+// instead of the default "All in EUR"); neither is a filter. `select` turns on selection mode (bulk edit); not a filter.
+//
+// `category` and `tag` take several ids, comma-separated (`?category=1,2,3`; a repeated key, as a no-JS multiple
+// select sends, is read too and redirected to the comma form). `min` / `max` are the amount range in major units, kept
+// as typed (trimmed) even when invalid, so the page can say what is wrong (`amountRangeErrors`); `listFilters` passes
+// only the valid bounds on.
 
 import { isValidCurrency } from "@/lib/currencies";
-import { currentMonth, formatDate, formatMonth, isValidDate, isValidMonth } from "@/lib/dates";
+import { MAX_BOUND_LENGTH, parseAmountRange, type AmountRangeErrors } from "@/lib/amount-filter";
+import { formatDate, formatMonth, isValidDate, isValidMonth } from "@/lib/dates";
 // Type-only: this module also runs in the browser (the chip row).
 import type { TransactionFilters } from "@/server/transactions";
 
 export const PAGE_SIZE = 50;
 const MAX_Q_LENGTH = 200;
+/** Most ids kept per list filter (`MAX_FILTER_IDS` in src/server/transactions.ts). */
+export const MAX_LIST_IDS = 100;
 
 export type ListKind = "expense" | "income" | "transfer";
 
@@ -20,7 +28,13 @@ export type ListParams = {
   month?: string;
   wallet?: number;
   kind?: ListKind;
-  category?: number;
+  /** `?category=1,2`: entries in any of these categories (ascending, deduped; undefined when none). */
+  categories?: number[];
+  /** `?tag=1,2`: entries carrying any of these tags. */
+  tags?: number[];
+  /** `?min=` / `?max=`: the amount range in major units, as typed (trimmed; possibly invalid, see `amountRangeErrors`). */
+  min?: string;
+  max?: string;
   from?: string;
   to?: string;
   q?: string;
@@ -28,6 +42,8 @@ export type ListParams = {
   currency?: string;
   /** `?view=only`: the day strip counts only `currency` instead of converting every wallet; not a filter. */
   view?: "only";
+  /** `?select=1`: selection mode (checkboxes for bulk edit); `?select=page` also ticks every row shown. Not a filter. */
+  select?: "on" | "page";
   page: number;
 };
 
@@ -37,6 +53,20 @@ const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v
 
 function id(v: string | undefined): number | undefined {
   return v && /^[1-9]\d{0,14}$/.test(v) ? Number(v) : undefined;
+}
+
+/** Every id in every value of the key (comma-separated), valid ones only, ascending, deduped, at most MAX_LIST_IDS. */
+function ids(v: string | string[] | undefined): number[] | undefined {
+  const parts = (Array.isArray(v) ? v : v === undefined ? [] : [v]).flatMap((x) => x.split(","));
+  const out = [...new Set(parts.map((x) => id(x.trim())).filter((n): n is number => n !== undefined))]
+    .sort((a, b) => a - b)
+    .slice(0, MAX_LIST_IDS);
+  return out.length > 0 ? out : undefined;
+}
+
+function bound(v: string | undefined): string | undefined {
+  const s = v?.trim().slice(0, MAX_BOUND_LENGTH);
+  return s ? s : undefined;
 }
 
 export function parseListParams(sp: SearchParams): ListParams {
@@ -52,12 +82,16 @@ export function parseListParams(sp: SearchParams): ListParams {
     month: month === "all" || isValidMonth(month) ? month : undefined,
     wallet: id(first(sp.wallet)),
     kind: kind === "expense" || kind === "income" || kind === "transfer" ? kind : undefined,
-    category: id(first(sp.category)),
+    categories: ids(sp.category),
+    tags: ids(sp.tag),
+    min: bound(first(sp.min)),
+    max: bound(first(sp.max)),
     from: isValidDate(from) ? from : undefined,
     to: isValidDate(to) ? to : undefined,
     q: q || undefined,
     currency: currency !== undefined && isValidCurrency(currency) ? currency : undefined,
     view: first(sp.view) === "only" ? "only" : undefined,
+    select: first(sp.select) === "1" ? "on" : first(sp.select) === "page" ? "page" : undefined,
     page,
   };
 }
@@ -71,13 +105,26 @@ export function hasEmptyParams(sp: SearchParams): boolean {
   return Object.values(sp).some((v) => (Array.isArray(v) ? v : [v]).some((x) => x !== undefined && x.trim() === ""));
 }
 
+/**
+ * True when a key is given more than once (`?category=1&category=2`, from the no-JS form's multiple select): the page
+ * then redirects to the same list under its clean URL (`?category=1,2`), like `hasEmptyParams`.
+ */
+export function hasRepeatedParams(sp: SearchParams): boolean {
+  return Object.values(sp).some((v) => Array.isArray(v) && v.length > 1);
+}
+
+/** The amount range's problems (field `min` / `max`), shown by the Amount chip and the no-JS form. */
+export function amountRangeErrors(p: ListParams): AmountRangeErrors {
+  return parseAmountRange(p.min, p.max).errors;
+}
+
 /** What the list shows: one month, all time, or an explicit `from` / `to` range (which overrides the month). */
 export type ListView =
   | { type: "month"; month: string }
   | { type: "all" }
   | { type: "range"; from?: string; to?: string };
 
-export function resolveView(p: ListParams, thisMonth: string = currentMonth()): ListView {
+export function resolveView(p: ListParams, thisMonth: string): ListView {
   if (p.from || p.to) return { type: "range", from: p.from, to: p.to };
   if (p.month === "all") return { type: "all" };
   return { type: "month", month: p.month ?? thisMonth };
@@ -89,22 +136,26 @@ function monthIsFilter(p: ListParams, thisMonth: string): boolean {
 }
 
 /** Any filter set besides the default month (the currency, the view and the page are not filters). */
-export function hasFilters(p: ListParams, thisMonth: string = currentMonth()): boolean {
-  return Boolean(monthIsFilter(p, thisMonth) || p.wallet || p.kind || p.category || p.from || p.to || p.q);
+export function hasFilters(p: ListParams, thisMonth: string): boolean {
+  return Boolean(monthIsFilter(p, thisMonth) || hasNonDateFilters(p) || p.from || p.to);
 }
 
-/** Filters other than the month / date range (wallet, type, category, search). */
+/** Filters other than the month / date range (wallet, type, categories, tags, amount, search). */
 export function hasNonDateFilters(p: ListParams): boolean {
-  return Boolean(p.wallet || p.kind || p.category || p.q);
+  return Boolean(p.wallet || p.kind || p.categories || p.tags || p.min || p.max || p.q);
 }
 
 /** The service filters for these params (no paging): the default month is applied when nothing else is given. */
-export function listFilters(p: ListParams, thisMonth: string = currentMonth()): TransactionFilters {
+export function listFilters(p: ListParams, thisMonth: string): TransactionFilters {
   const view = resolveView(p, thisMonth);
+  const { range } = parseAmountRange(p.min, p.max);
   return {
     walletId: p.wallet,
     kind: p.kind,
-    categoryId: p.category,
+    categoryIds: p.categories,
+    tagIds: p.tags,
+    minAmount: range.min?.text,
+    maxAmount: range.max?.text,
     month: view.type === "month" ? view.month : undefined,
     from: p.from,
     to: p.to,
@@ -119,22 +170,34 @@ export function listHref(p: ListParams, overrides: Partial<ListParams> = {}): st
   if (merged.month) qs.set("month", merged.month);
   if (merged.wallet) qs.set("wallet", String(merged.wallet));
   if (merged.kind) qs.set("kind", merged.kind);
-  if (merged.category) qs.set("category", String(merged.category));
+  if (merged.categories?.length) qs.set("category", merged.categories.join(","));
+  if (merged.tags?.length) qs.set("tag", merged.tags.join(","));
+  if (merged.min) qs.set("min", merged.min);
+  if (merged.max) qs.set("max", merged.max);
   if (merged.from) qs.set("from", merged.from);
   if (merged.to) qs.set("to", merged.to);
   if (merged.q) qs.set("q", merged.q);
   if (merged.currency) qs.set("currency", merged.currency);
   if (merged.view) qs.set("view", merged.view);
+  if (merged.select) qs.set("select", merged.select === "page" ? "page" : "1");
   if (merged.page > 1) qs.set("page", String(merged.page));
-  const s = qs.toString();
+  // Commas stay readable (`category=1,2`); an encoded one decodes the same.
+  const s = qs.toString().replace(/%2C/gi, ",");
   return s ? `/transactions?${s}` : "/transactions";
+}
+
+/** The list with `id` added to (or, when there, removed from) a multi-value filter; page 1. */
+export function toggleIdHref(p: ListParams, key: "categories" | "tags", id: number): string {
+  const current = p[key] ?? [];
+  const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id].sort((a, b) => a - b);
+  return listHref(p, { [key]: next.length > 0 ? next : undefined, page: 1 });
 }
 
 /**
  * The list showing `month` (the current one leaves `month` out of the URL; `"all"` = all time), keeping the other
  * filters and the currency, dropping `from` / `to` and the page.
  */
-export function monthHref(p: ListParams, month: string, thisMonth: string = currentMonth()): string {
+export function monthHref(p: ListParams, month: string, thisMonth: string): string {
   return listHref(p, { month: month === thisMonth ? undefined : month, from: undefined, to: undefined, page: 1 });
 }
 
@@ -142,7 +205,7 @@ export function monthHref(p: ListParams, month: string, thisMonth: string = curr
  * A day bar of the strip for `month`: narrows the list to that day (`from=to=<date>`), keeping the month in the URL
  * so clearing the day returns to it. `date` null = back to the whole month.
  */
-export function dayHref(p: ListParams, month: string, date: string | null, thisMonth: string = currentMonth()): string {
+export function dayHref(p: ListParams, month: string, date: string | null, thisMonth: string): string {
   return listHref(p, {
     month: month === thisMonth ? undefined : month,
     from: date ?? undefined,
@@ -156,17 +219,22 @@ export function dayHref(p: ListParams, month: string, date: string | null, thisM
  * The month the list shows is always written out — the export route itself defaults to all time. `groupId` (the
  * selected wallet group) adds `group=<id>`; the service ignores it when a wallet filter is set.
  */
-export function exportCsvHref(p: ListParams, thisMonth: string = currentMonth(), groupId?: number): string {
+export function exportCsvHref(p: ListParams, thisMonth: string, groupId?: number): string {
   const view = resolveView(p, thisMonth);
+  // Only the bounds the list applies (an invalid one is reported on the page, not exported).
+  const { range } = parseAmountRange(p.min, p.max);
   const qs = listHref(p, {
     month: view.type === "month" ? view.month : undefined,
+    min: range.min?.text,
+    max: range.max?.text,
     currency: undefined,
     view: undefined,
+    select: undefined,
     page: 1,
   }).split("?")[1];
   const all = new URLSearchParams(qs ?? "");
   if (groupId) all.set("group", String(groupId));
-  const query = all.toString();
+  const query = all.toString().replace(/%2C/gi, ",");
   return query ? `/api/export/transactions?${query}` : "/api/export/transactions";
 }
 
@@ -177,7 +245,7 @@ function shortDate(date: string, year: string): string {
 }
 
 /** The month chip's text: "November 2026", "All time", "5 Nov – 12 Nov", "5 Nov", "From 5 Nov", "Until 12 Nov". */
-export function viewLabel(view: ListView, thisMonth: string = currentMonth()): string {
+export function viewLabel(view: ListView, thisMonth: string): string {
   if (view.type === "all") return "All time";
   if (view.type === "month") return formatMonth(view.month);
   const year = thisMonth.slice(0, 4);

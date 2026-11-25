@@ -92,10 +92,11 @@ names so errors land on the right control.
 **Money.** Integer minor units everywhere (`amountMinor`), never floats; decimals come from the currency
 (`currencyDecimals`: JPY 0, EUR 2, KWD 3). Stored as `bigint` (`mode: "number"`). Stored amounts are positive and the transaction kind gives the sign.
 User input goes through `parseAmount(value, currency)` with the currency of the wallet looked up server-side.
-Currency conversion exists only in the "All in <currency>" views of the Overview, the /transactions day strip and
-/categories (`src/lib/fx.ts`, provider rates stored in `exchange_rates` by `src/server/exchange-rates.ts`, manual
-rates from `/rates` in `src/server/manual-rates.ts`, the `convert` option of the month services); wallet pages and
-every other total stay per currency, and nothing converted is stored.
+Currency conversion exists only in the "All in <currency>" views of the Overview, the /transactions day strip,
+/categories and /reports, and in budget progress, which is measured in the budget's own currency (`src/lib/fx.ts`,
+provider rates stored in `exchange_rates` by `src/server/exchange-rates.ts`, manual rates from `/rates` in
+`src/server/manual-rates.ts`, the `convert` option of the month services, `getYearReport` and `getMonthBudgets`);
+wallet pages and every other total stay per currency, and nothing converted is stored.
 
 **Transfers** are one `transfers` row plus two `transactions` legs (`transfer_out`, `transfer_in`) written in
 one DB transaction; legs are only edited or deleted through the transfer. Cross-currency transfers store both
@@ -143,6 +144,13 @@ the Dockerfile's build stage and may import only what the standalone output ship
 
 ## Conventions and gotchas
 
+- **"Today" is the account's, not the server's:** `todayInZone(user.timeZone)` (`src/lib/dates.ts`; `CurrentUser`
+  carries the zone, and an account without one falls back to the server's date). Pages and actions compute it and
+  pass it into services and client components; nothing reads the clock in a service or during a component's render.
+- **A wallet's balance needs a day:** `listWallets` / `getWallet` return a balance only with `{ balanceOn }` (entries
+  dated later are in `laterChangeMinor`, shown as "projected"); a page that shows a current balance passes today.
+- **Repeating entries have no scheduler:** `getCurrentUser()` (`src/lib/auth.ts`) turns due occurrences into entries
+  (`materializeDueRecurring`, `src/server/recurring.ts`) before any page, action or export reads, once per request.
 - **Tests** live in `tests/` (not next to the code). One in-memory PGlite per test file; service tests call
   `db = await useFreshDb()` in `beforeEach` (truncates the app tables, installs the DB via `setDb`) and `await
   makeUser(db, email)` from `tests/helpers.ts` (user ID derived from the whole email). Assert failures with

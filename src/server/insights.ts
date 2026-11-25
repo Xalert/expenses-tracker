@@ -1,20 +1,21 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/db";
-import { categories, transactions, wallets } from "@/db/schema";
+import { categories, transactions, transactionTags, wallets } from "@/db/schema";
 import { compareCategoryNames } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
-import { isValidMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { isValidMonth, monthRange, shiftMonth } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { convertMinor, tableFor, type Conversion } from "@/lib/fx";
-import { assertDate, assertId, isPgId } from "./_validate";
+import { amountConditions } from "./_filters";
+import { assertId, isPgId } from "./_validate";
 import { signedAmountSql } from "./wallets";
 
 // Per-currency month figures for the redesigned Overview, wallet page and charts. Every figure is for ONE currency
 // and nothing is converted. "Expense" / "income" mean transactions of those kinds (transfers excluded) on every
 // wallet of that currency, archived included, unless a `walletId` narrows it — so the numbers match the
 // Transactions list. Day N is today's day of the month for the current month, the month's last day for a past
-// month, and 0 for a future month (server local time).
+// month, and 0 for a future month; "today" is the user's (`todayInZone`), passed in by the caller.
 //
 // The one exception is `convert` (view "All in <currency>" on Overview, the /transactions day strip and
 // /categories): the month figures then cover every wallet, each currency converted into `currency` at the rate of
@@ -96,30 +97,61 @@ function monthDates(month: string): string[] {
   return Array.from({ length: monthLength(month) }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`);
 }
 
-/** Day N: today's day for the current month, the last day for a past month, 0 for a future month. */
-export function monthDayN(month: string, today: string = todayISO()): number {
+/**
+ * Day N: today's day for the current month, the last day for a past month, 0 for a future month. `today` is the
+ * user's (`todayInZone`).
+ */
+export function monthDayN(month: string, today: string): number {
   const current = today.slice(0, 7);
   if (month === current) return Number(today.slice(8));
   return month < current ? monthLength(month) : 0;
 }
 
-type Narrow = { walletId?: number; groupId?: number; categoryId?: number };
+export type Narrow = {
+  walletId?: number;
+  groupId?: number;
+  categoryId?: number;
+  tagId?: number;
+  /** Any of these categories / tags (the /transactions filters); validated ids. */
+  categoryIds?: number[];
+  tagIds?: number[];
+  /** Amount bounds in major units, as `TransactionFilters.minAmount` / `maxAmount`. */
+  minAmount?: string;
+  maxAmount?: string;
+};
 
-/** Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. */
-function currencyConditions(userId: number, currency: string | null, narrow: Narrow = {}): SQL[] {
+/**
+ * Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. Exported for
+ * the year report (`reports.ts`).
+ */
+export function currencyConditions(userId: number, currency: string | null, narrow: Narrow = {}): SQL[] {
   const conds: SQL[] = [eq(transactions.userId, userId), eq(wallets.userId, userId)];
   if (currency !== null) conds.push(eq(wallets.currency, currency));
   if (narrow.walletId !== undefined) conds.push(eq(transactions.walletId, narrow.walletId));
   else if (narrow.groupId !== undefined) conds.push(eq(wallets.groupId, narrow.groupId));
   if (narrow.categoryId !== undefined) conds.push(eq(transactions.categoryId, narrow.categoryId));
+  if (narrow.categoryIds !== undefined && narrow.categoryIds.length > 0) {
+    conds.push(inArray(transactions.categoryId, narrow.categoryIds));
+  }
+  if (narrow.tagId !== undefined) {
+    conds.push(
+      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${transactionTags.tagId} = ${narrow.tagId})`,
+    );
+  }
+  if (narrow.tagIds !== undefined && narrow.tagIds.length > 0) {
+    conds.push(
+      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${inArray(transactionTags.tagId, narrow.tagIds)})`,
+    );
+  }
+  conds.push(...amountConditions(narrow.minAmount, narrow.maxAmount));
   return conds;
 }
 
 /**
  * `amountMinor` in `from` on `date` → minor units of `to`: unchanged without `convert`, else at that date's rate
- * (null when there is none; the caller adds `from` to its missing set).
+ * (null when there is none; the caller adds `from` to its missing set). Exported for the year report (`reports.ts`).
  */
-function converter(to: string, convert: ConvertOption | undefined) {
+export function converter(to: string, convert: ConvertOption | undefined) {
   return (amountMinor: number, from: string, date: string): number | null =>
     !convert || from === to ? amountMinor : convertMinor(amountMinor, from, to, tableFor(convert, date));
 }
@@ -205,6 +237,16 @@ export async function pickDefaultCurrency(
   opts: { groupId?: number } = {},
 ): Promise<string | null> {
   const { from, to } = monthRange(assertMonth(month));
+  return pickDefaultCurrencyBetween(userId, from, to, opts);
+}
+
+/** `pickDefaultCurrency`'s rule over the dates [from, to] (both valid `YYYY-MM-DD`): a year on /reports. */
+export async function pickDefaultCurrencyBetween(
+  userId: number,
+  from: string,
+  to: string,
+  opts: { groupId?: number } = {},
+): Promise<string | null> {
   const db = await getDb();
   const inGroup = opts.groupId === undefined ? undefined : eq(wallets.groupId, opts.groupId);
   const busiest = await db
@@ -253,6 +295,13 @@ export async function getMonthTimeline(
     /** Only wallets of this group; ignored when `walletId` is set. */
     groupId?: number;
     categoryId?: number;
+    /** Only entries carrying this tag (the /transactions tag filter). */
+    tagId?: number;
+    /** The /transactions filters: any of these categories, any of these tags, the amount range (major units). */
+    categoryIds?: number[];
+    tagIds?: number[];
+    minAmount?: string;
+    maxAmount?: string;
     convert?: ConvertOption;
   },
 ): Promise<MonthTimeline> {
@@ -262,6 +311,12 @@ export async function getMonthTimeline(
   if (opts.walletId !== undefined) narrow.walletId = assertId(opts.walletId, "walletId", "wallet");
   if (opts.groupId !== undefined) narrow.groupId = assertId(opts.groupId, "groupId", "group");
   if (opts.categoryId !== undefined) narrow.categoryId = assertId(opts.categoryId, "categoryId", "category");
+  if (opts.tagId !== undefined) narrow.tagId = assertId(opts.tagId, "tagId", "tag");
+  if (opts.categoryIds !== undefined) narrow.categoryIds = opts.categoryIds.map((id) => assertId(id, "categoryId", "category"));
+  if (opts.tagIds !== undefined) narrow.tagIds = opts.tagIds.map((id) => assertId(id, "tagId", "tag"));
+  narrow.minAmount = opts.minAmount;
+  narrow.maxAmount = opts.maxAmount;
+  amountConditions(opts.minAmount, opts.maxAmount); // validated up front (VALIDATION on `min` / `max`)
 
   const previous = shiftMonth(month, -1);
   const { convert } = opts;
@@ -349,10 +404,13 @@ export function pickTopCategory<T extends TopCategoryRow>(rows: T[]): T | undefi
   )[0];
 }
 
-/** The Overview insight cards for one month and currency (with `convert`: every currency, converted). */
+/**
+ * The Overview insight cards for one month and currency (with `convert`: every currency, converted). `today` (the
+ * user's, `todayInZone`) decides how far into the month the pace and no-spend days count.
+ */
 export async function getMonthInsights(
   userId: number,
-  opts: { month: string; currency: string; groupId?: number; convert?: ConvertOption },
+  opts: { month: string; currency: string; today: string; groupId?: number; convert?: ConvertOption },
 ): Promise<MonthInsights> {
   const month = assertMonth(opts.month);
   const currency = assertCurrency(opts.currency);
@@ -378,7 +436,7 @@ export async function getMonthInsights(
     expenseMinor += expenseOn(flows, date);
   }
 
-  const n = monthDayN(month);
+  const n = monthDayN(month, opts.today);
   const throughN = dates.slice(0, n);
   const previousThroughN = previousDates.slice(0, Math.min(n, previousDates.length));
   const sumExpenses = (ds: string[]) => ds.reduce((s, d) => s + expenseOn(flows, d), 0);
@@ -453,13 +511,13 @@ export async function getMonthInsights(
 
 /**
  * One wallet's month: opening balance, money in / out (transfers included), the balance after each day 1..N and,
- * for the days after today, the projected balance after each (`projectedDays`). `today` is for tests.
+ * for the days after today, the projected balance after each (`projectedDays`). `today` is the user's (`todayInZone`).
  */
 export async function getWalletMonth(
   userId: number,
   walletId: number,
   month: string,
-  { today = todayISO() }: { today?: string } = {},
+  { today }: { today: string },
 ): Promise<WalletMonth | null> {
   const { from, to } = monthRange(assertMonth(month));
   if (!isPgId(walletId)) return null;
@@ -568,30 +626,4 @@ export async function getCategoryMonthAmounts(
     amounts.set(r.categoryId, (amounts.get(r.categoryId) ?? 0) + value);
   }
   return { amounts, missingCurrencies: sorted(missing) };
-}
-
-/**
- * The balance of each of the user's wallets at the end of `date` (initial balance + every entry dated on or before
- * it, transfers included), by wallet id: the Overview's Wallets card for a past month. Archived wallets included.
- */
-export async function getWalletBalancesOn(
-  userId: number,
-  date: string,
-  opts: { groupId?: number } = {},
-): Promise<Map<number, number>> {
-  const day = assertDate(date);
-  const groupId = opts.groupId === undefined ? undefined : assertId(opts.groupId, "groupId", "group");
-  const rows = await (await getDb())
-    .select({
-      id: wallets.id,
-      balanceMinor: sql<number>`${wallets.initialBalanceMinor} + coalesce(sum(${signedAmountSql}), 0)`.mapWith(Number),
-    })
-    .from(wallets)
-    .leftJoin(
-      transactions,
-      and(eq(transactions.walletId, wallets.id), eq(transactions.userId, userId), lte(transactions.date, day)),
-    )
-    .where(and(eq(wallets.userId, userId), groupId === undefined ? undefined : eq(wallets.groupId, groupId)))
-    .groupBy(wallets.id);
-  return new Map(rows.map((r) => [r.id, r.balanceMinor]));
 }

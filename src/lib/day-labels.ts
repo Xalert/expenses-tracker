@@ -9,7 +9,7 @@ const SHORT_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as cons
 
 /**
  * A day header: "Today · Sunday 8", "Yesterday · Saturday 7", "Tuesday 3" (in today's month), "Tue 3 Nov" (in
- * today's year), "Tue 3 Nov 2025" (another year). `today` is the server's `todayISO()`.
+ * today's year), "Tue 3 Nov 2025" (another year). `today` is the user's (`todayInZone`).
  */
 export function dayHeaderLabel(date: string, today: string): string {
   if (!isValidDate(date)) return date;

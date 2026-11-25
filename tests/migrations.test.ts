@@ -54,11 +54,15 @@ describe("migrations on an empty database", () => {
       sql`select table_name from information_schema.tables where table_schema = 'public' order by table_name`,
     );
     expect(tables.map((t) => t.table_name)).toEqual([
+      "budgets",
       "categories",
       "exchange_rate_days",
       "exchange_rates",
       "manual_exchange_rates",
+      "recurring_transactions",
       "sessions",
+      "tags",
+      "transaction_tags",
       "transactions",
       "transfers",
       "users",

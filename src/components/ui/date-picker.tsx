@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { WEEKDAY_LABELS, WEEKDAY_NAMES, calendarWeeks, clampTo, dateInMonth, dateLabel, monthOf, moveDate } from "@/lib/calendar";
 import { cn } from "@/lib/cn";
-import { formatDate, formatMonth, isValidDate, shiftMonth, todayISO } from "@/lib/dates";
+import { formatDate, formatMonth, isValidDate, shiftMonth } from "@/lib/dates";
 import { controlClasses } from "./input";
 import { MonthGrid, pickerNavButton } from "./month-grid";
 import { CalendarIcon, ChevronIcon, XIcon } from "./picker-icons";
@@ -17,6 +17,11 @@ export type DatePickerProps = {
   id: string;
   /** Name of the hidden input that carries the `YYYY-MM-DD` value. */
   name: string;
+  /**
+   * Today (`YYYY-MM-DD`), marked in the calendar and where it opens without a value. From the server (the user's
+   * today, `todayInZone`), never the browser's clock: it is in the account's zone, and SSR and hydration agree.
+   */
+  today: string;
   /** `YYYY-MM-DD`, or "" for no date. Read once: remount (key) the form to reset it. */
   defaultValue?: string;
   required?: boolean;
@@ -51,6 +56,7 @@ export type DatePickerProps = {
 export function DatePicker({
   id,
   name,
+  today,
   defaultValue = "",
   required,
   error,
@@ -136,6 +142,7 @@ export function DatePicker({
       >
         <CalendarPanel
           value={value}
+          today={today}
           max={max}
           allowEmpty={allowEmpty}
           onPick={(date) => {
@@ -163,18 +170,20 @@ const footerButton =
  */
 export function CalendarPanel({
   value,
+  today,
   max,
   allowEmpty,
   onPick,
   initialView = "days",
 }: {
   value: string;
+  /** See `DatePickerProps.today`. */
+  today: string;
   max?: string;
   allowEmpty: boolean;
   onPick: (date: string) => void;
   initialView?: "days" | "months";
 }) {
-  const today = todayISO();
   const [view, setView] = useState<"days" | "months">(initialView);
   const [focusDate, setFocusDate] = useState(() => clampTo(value || today, undefined, max));
   const [viewMonth, setViewMonth] = useState(() => monthOf(clampTo(value || today, undefined, max)));
@@ -223,6 +232,7 @@ export function CalendarPanel({
       {view === "months" ? (
         <MonthGrid
           value={value ? monthOf(value) : null}
+          thisMonth={monthOf(today)}
           focusMonth={viewMonth}
           maxMonth={maxMonth}
           autoFocus
@@ -237,7 +247,11 @@ export function CalendarPanel({
             <button
               type="button"
               className={pickerNavButton}
-              onClick={() => showMonth(prevMonth, false)}
+              onClick={(e) => {
+                // WebKit does not focus a clicked button: keep focus here, not on a day cell the change removes.
+                e.currentTarget.focus();
+                showMonth(prevMonth, false);
+              }}
               disabled={!canPrev}
               aria-label={`Previous month, ${formatMonth(prevMonth)}`}
             >
@@ -255,7 +269,11 @@ export function CalendarPanel({
             <button
               type="button"
               className={pickerNavButton}
-              onClick={() => showMonth(nextMonth, false)}
+              onClick={(e) => {
+                // WebKit does not focus a clicked button: keep focus here, not on a day cell the change removes.
+                e.currentTarget.focus();
+                showMonth(nextMonth, false);
+              }}
               disabled={!canNext}
               aria-label={`Next month, ${formatMonth(nextMonth)}`}
             >

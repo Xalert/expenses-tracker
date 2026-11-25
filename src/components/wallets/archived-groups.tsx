@@ -3,10 +3,11 @@ import { deleteGroupAction, moveGroupAction, unarchiveGroupAction } from "@/app/
 import { formatMoney } from "@/lib/money";
 import { entryCountLabel } from "@/lib/wallet-chart";
 import type { WalletGroupView } from "@/server/wallet-groups";
-import type { WalletView } from "@/server/wallets";
+import type { WalletWithBalance } from "@/server/wallets";
 import { ActionButton } from "./action-button";
 import { GroupDot } from "./group-dot";
 import { ArchivedGroupEditor } from "./groups-card";
+import { projectedLabel } from "./wallet-cards";
 
 const walletsLabel = (n: number) => (n === 1 ? "1 wallet" : `${n} wallets`);
 
@@ -15,7 +16,7 @@ const walletsLabel = (n: number) => (n === 1 ? "1 wallet" : `${n} wallets`);
  * its order, its wallets (links, balances), Edit (rename / recolour in place, without unarchiving; needs JavaScript)
  * and Unarchive — plus Delete while it is empty. The rest works without JavaScript apart from the confirm on Delete.
  */
-export function ArchivedGroups({ groups, wallets }: { groups: WalletGroupView[]; wallets: WalletView[] }) {
+export function ArchivedGroups({ groups, wallets }: { groups: WalletGroupView[]; wallets: WalletWithBalance[] }) {
   if (groups.length === 0) return null;
   return (
     <details className="group/archived rounded-[18px] border border-border bg-surface">
@@ -89,6 +90,7 @@ export function ArchivedGroups({ groups, wallets }: { groups: WalletGroupView[];
                       <span className="text-xs text-muted-foreground">
                         {w.currency} · {w.transactionCount === 0 ? "no entries" : entryCountLabel(w.transactionCount)}
                         {w.archivedAt !== null && " · archived"}
+                        {projectedLabel(w) && ` · ${projectedLabel(w)}`}
                       </span>
                       <span className="font-bold text-muted-foreground tabular-nums">
                         <span className="sr-only">Balance </span>

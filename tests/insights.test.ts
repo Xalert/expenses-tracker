@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "@/db";
-import { addDays, currentMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
+import { addDays, monthRange, shiftMonth } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import type { DailyRates } from "@/lib/fx";
 import {
@@ -51,8 +51,11 @@ const move = async (u: User, fromWalletId: number, toWalletId: number, amountMin
 const expensesByDay = (days: { date: string; expenseMinor: number }[]) =>
   Object.fromEntries(days.filter((d) => d.expenseMinor !== 0).map((d) => [d.date, d.expenseMinor]));
 
-// 2026-03 has 31 days, 2026-02 has 28, 2026-04 has 30, 2026-05 has 31. All are in the past relative to the
-// test run (the suite was written in November 2026), so day N is the month's last day.
+// The services take today from the caller (the user's, `todayInZone`); these tests fix it.
+const TODAY = "2026-11-25";
+
+// 2026-03 has 31 days, 2026-02 has 28, 2026-04 has 30, 2026-05 has 31. All are in the past relative to TODAY, so
+// day N is the month's last day.
 
 describe("monthDayN", () => {
   it("is today's day for the current month, the last day for a past month and 0 for a future one", async () => {
@@ -60,7 +63,6 @@ describe("monthDayN", () => {
     expect(monthDayN("2026-10", "2026-11-08")).toBe(31);
     expect(monthDayN("2026-02", "2026-11-08")).toBe(28);
     expect(monthDayN("2026-12", "2026-11-08")).toBe(0);
-    expect(monthDayN(currentMonth())).toBe(Number(todayISO().slice(8)));
   });
 });
 
@@ -269,7 +271,7 @@ describe("getMonthInsights", () => {
     await spend(alice, w, 800, "2026-02-10", "Food");
     await spend(alice, w, 200, "2026-02-28", "Food");
 
-    const i = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" });
+    const i = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR" });
     expect(i.incomeMinor).toBe(10000);
     expect(i.expenseMinor).toBe(6000);
     expect(i.netMinor).toBe(4000);
@@ -290,18 +292,18 @@ describe("getMonthInsights", () => {
     await spend(alice, w, 50, "2026-04-15");
     await spend(alice, w, 7, "2026-05-31");
 
-    const april = await getMonthInsights(alice.id, { month: "2026-04", currency: "EUR" });
+    const april = await getMonthInsights(alice.id, { today: TODAY, month: "2026-04", currency: "EUR" });
     expect(april.pace).toEqual({ day: 30, thisMonthMinor: 50, previousMonthMinor: 100 });
     expect(april.noSpendDays).toEqual({ days: 29, outOf: 30, previousDays: 29, previousOutOf: 31 });
 
-    const may = await getMonthInsights(alice.id, { month: "2026-05", currency: "EUR" });
+    const may = await getMonthInsights(alice.id, { today: TODAY, month: "2026-05", currency: "EUR" });
     expect(may.pace).toEqual({ day: 31, thisMonthMinor: 7, previousMonthMinor: 50 });
     expect(may.noSpendDays).toEqual({ days: 30, outOf: 31, previousDays: 29, previousOutOf: 30 });
   });
 
   it("uses today as day N for the current month", async () => {
-    const today = todayISO();
-    const month = currentMonth();
+    const today = TODAY;
+    const month = today.slice(0, 7);
     const n = Number(today.slice(8));
     const { to } = monthRange(month);
     const w = await wallet(alice);
@@ -313,7 +315,7 @@ describe("getMonthInsights", () => {
     await spend(alice, w, 40, `${previous}-01`);
     await spend(alice, w, 60, monthRange(previous).to);
 
-    const i = await getMonthInsights(alice.id, { month, currency: "EUR" });
+    const i = await getMonthInsights(alice.id, { today, month, currency: "EUR" });
     const spentToday = 500 + (n > 1 ? 100 : 0);
     expect(i.expenseMinor).toBe(spentToday + (today !== to ? 9999 : 0));
     expect(i.pace).toEqual({
@@ -331,7 +333,7 @@ describe("getMonthInsights", () => {
 
   it("returns zeros and nulls for an empty or future month", async () => {
     await wallet(alice);
-    const empty = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" });
+    const empty = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR" });
     expect(empty).toEqual({
       incomeMinor: 0,
       expenseMinor: 0,
@@ -340,7 +342,7 @@ describe("getMonthInsights", () => {
       pace: { day: 31, thisMonthMinor: 0, previousMonthMinor: 0 },
       noSpendDays: { days: 31, outOf: 31, previousDays: 28, previousOutOf: 28 },
     });
-    const future = await getMonthInsights(alice.id, { month: shiftMonth(currentMonth(), 2), currency: "EUR" });
+    const future = await getMonthInsights(alice.id, { today: TODAY, month: shiftMonth(TODAY.slice(0, 7), 2), currency: "EUR" });
     expect(future.pace).toEqual({ day: 0, thisMonthMinor: 0, previousMonthMinor: 0 });
     expect(future.noSpendDays.days).toBe(0);
     expect(future.noSpendDays.outOf).toBe(0);
@@ -359,18 +361,18 @@ describe("getMonthInsights", () => {
     await archiveWallet(alice.id, old);
     await spend(bob, await wallet(bob, "EUR"), 999999, "2026-03-02");
 
-    const e = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" });
+    const e = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR" });
     expect([e.incomeMinor, e.expenseMinor, e.netMinor]).toEqual([0, 400, -400]);
     expect(e.topCategory).toMatchObject({ categoryName: "Bills", amountMinor: 300, sharePercent: 75 });
     expect(e.noSpendDays.days).toBe(29);
-    const u = await getMonthInsights(alice.id, { month: "2026-03", currency: "USD" });
+    const u = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "USD" });
     expect([u.incomeMinor, u.expenseMinor, u.netMinor]).toEqual([7000, 5000, 2000]);
     expect(u.topCategory).toMatchObject({ categoryName: "Housing", sharePercent: 100 });
   });
 
   it("rejects an invalid month or currency", async () => {
-    await expectServiceError(async () => await getMonthInsights(alice.id, { month: "", currency: "EUR" }), "VALIDATION", "month");
-    await expectServiceError(async () => await getMonthInsights(alice.id, { month: "2026-03", currency: "EURO" }), "VALIDATION", "currency");
+    await expectServiceError(async () => await getMonthInsights(alice.id, { today: TODAY, month: "", currency: "EUR" }), "VALIDATION", "month");
+    await expectServiceError(async () => await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EURO" }), "VALIDATION", "currency");
   });
 });
 
@@ -386,7 +388,7 @@ describe("getWalletMonth", () => {
     await move(alice, usd, cash, 100, "2026-03-20", 90);
     await spend(alice, cash, 10, "2026-04-01");
 
-    const m = (await getWalletMonth(alice.id, cash, "2026-03"))!;
+    const m = (await getWalletMonth(alice.id, cash, "2026-03", { today: TODAY }))!;
     expect(m.openingMinor).toBe(900);
     expect(m.inMinor).toBe(590);
     expect(m.outMinor).toBe(250);
@@ -400,20 +402,20 @@ describe("getWalletMonth", () => {
     expect(m.days[30].closingMinor).toBe(1240);
 
     // The other legs land on their own wallets, in their own currency's amounts.
-    const u = (await getWalletMonth(alice.id, usd, "2026-03"))!;
+    const u = (await getWalletMonth(alice.id, usd, "2026-03", { today: TODAY }))!;
     expect([u.openingMinor, u.inMinor, u.outMinor, u.entryCount]).toEqual([0, 0, 100, 1]);
     expect(u.days[19]).toEqual({ date: "2026-03-20", inMinor: 0, outMinor: 100, closingMinor: -100 });
-    expect((await getWalletMonth(alice.id, savings, "2026-03"))!.inMinor).toBe(200);
+    expect((await getWalletMonth(alice.id, savings, "2026-03", { today: TODAY }))!.inMinor).toBe(200);
 
     // April opens where March closed.
-    expect((await getWalletMonth(alice.id, cash, "2026-04"))!.openingMinor).toBe(1240);
+    expect((await getWalletMonth(alice.id, cash, "2026-04", { today: TODAY }))!.openingMinor).toBe(1240);
   });
 
   it("works for an archived wallet and gives an empty month its opening balance throughout", async () => {
     const w = await wallet(alice, "EUR", "Old", -500);
     await spend(alice, w, 100, "2026-01-05");
     await archiveWallet(alice.id, w);
-    const m = (await getWalletMonth(alice.id, w, "2026-02"))!;
+    const m = (await getWalletMonth(alice.id, w, "2026-02", { today: TODAY }))!;
     expect(m).toMatchObject({ openingMinor: -600, inMinor: 0, outMinor: 0, entryCount: 0, totalEntryCount: 1 });
     expect(m.days).toHaveLength(28);
     expect(m.days.every((d) => d.closingMinor === -600 && d.inMinor === 0 && d.outMinor === 0)).toBe(true);
@@ -421,12 +423,12 @@ describe("getWalletMonth", () => {
 
   it("runs days 1..today for the current month and has no days for a future month", async () => {
     const w = await wallet(alice, "EUR", "Cash", 100);
-    const today = todayISO();
+    const today = TODAY;
     await spend(alice, w, 30, today);
-    const m = (await getWalletMonth(alice.id, w, currentMonth()))!;
+    const m = (await getWalletMonth(alice.id, w, today.slice(0, 7), { today }))!;
     expect(m.days).toHaveLength(Number(today.slice(8)));
     expect(m.days.at(-1)).toEqual({ date: today, inMinor: 0, outMinor: 30, closingMinor: 70 });
-    const future = (await getWalletMonth(alice.id, w, shiftMonth(currentMonth(), 2)))!;
+    const future = (await getWalletMonth(alice.id, w, shiftMonth(TODAY.slice(0, 7), 2), { today: TODAY }))!;
     expect(future.days).toEqual([]);
     expect(future.openingMinor).toBe(70);
   });
@@ -452,9 +454,9 @@ describe("getWalletMonth", () => {
 
   it("returns null for another user's or a missing wallet and rejects an invalid month", async () => {
     const bobs = await wallet(bob);
-    expect(await getWalletMonth(alice.id, bobs, "2026-03")).toBeNull();
-    expect(await getWalletMonth(alice.id, 999999, "2026-03")).toBeNull();
-    await expectServiceError(async () => await getWalletMonth(bob.id, bobs, "2026-00"), "VALIDATION", "month");
+    expect(await getWalletMonth(alice.id, bobs, "2026-03", { today: TODAY })).toBeNull();
+    expect(await getWalletMonth(alice.id, 999999, "2026-03", { today: TODAY })).toBeNull();
+    await expectServiceError(async () => await getWalletMonth(bob.id, bobs, "2026-00", { today: TODAY }), "VALIDATION", "month");
   });
 });
 
@@ -484,11 +486,11 @@ describe("convert (Overview 'All in <currency>')", () => {
     expect(t.largestDay).toMatchObject({ date: "2026-03-07", amountMinor: 600 });
     expect(t.missingCurrencies).toEqual([]);
 
-    const i = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    const i = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR", convert: { rates } });
     expect([i.incomeMinor, i.expenseMinor, i.netMinor]).toEqual([500, 850, -350]);
     // Without convert, nothing changes.
-    expect((await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" })).expenseMinor).toBe(100);
-    expect((await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR" })).missingCurrencies).toBeUndefined();
+    expect((await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR" })).expenseMinor).toBe(100);
+    expect((await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR" })).missingCurrencies).toBeUndefined();
   });
 
   it("labels the largest day with the largest entry after conversion", async () => {
@@ -505,7 +507,7 @@ describe("convert (Overview 'All in <currency>')", () => {
     const usd = await wallet(alice, "USD");
     await spend(alice, eur, 300, "2026-03-09", "Food");
     await spend(alice, usd, 1000, "2026-03-06", "Bills"); // 500 EUR
-    const i = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    const i = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR", convert: { rates } });
     expect(i.topCategory).toMatchObject({ categoryName: "Bills", amountMinor: 500, sharePercent: 63 });
   });
 
@@ -517,7 +519,7 @@ describe("convert (Overview 'All in <currency>')", () => {
     const t = await getMonthTimeline(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
     expect(t.days[8].expenseMinor).toBe(200);
     expect(t.missingCurrencies).toEqual(["CHF"]);
-    const none = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates: null } });
+    const none = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR", convert: { rates: null } });
     expect(none.expenseMinor).toBe(100);
     expect(none.missingCurrencies).toEqual(["CHF", "RON"]);
   });
@@ -525,7 +527,7 @@ describe("convert (Overview 'All in <currency>')", () => {
   it("never counts another user's wallets", async () => {
     await wallet(alice, "EUR");
     await spend(bob, await wallet(bob, "USD"), 1000, "2026-03-09");
-    const i = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert: { rates } });
+    const i = await getMonthInsights(alice.id, { today: TODAY, month: "2026-03", currency: "EUR", convert: { rates } });
     expect(i.expenseMinor).toBe(0);
   });
 });

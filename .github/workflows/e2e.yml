@@ -1,6 +1,7 @@
-# End-to-end browser tests (e2e/, Playwright, Chromium) against a production build on a fresh Postgres service
-# container. `npm run test:e2e` (scripts/e2e.mjs) builds, starts .next/standalone/server.js through Playwright's
-# webServer and runs the desktop (1280px) and phone (375px) projects. With E2E_DATABASE_URL set it uses that database
+# End-to-end browser tests (e2e/, Playwright: Chromium, Firefox and WebKit) against a production build on a fresh
+# Postgres service container. `npm run test:e2e` (scripts/e2e.mjs) builds, starts .next/standalone/server.js through
+# Playwright's webServer and runs every project: desktop (1280px) in Chromium, Firefox and WebKit, phone (375px, touch)
+# in Chromium and WebKit. With E2E_DATABASE_URL set it uses that database
 # instead of starting compose.e2e.yaml. The HTML report and the failure traces are uploaded when a test fails.
 name: E2E tests
 
@@ -45,8 +46,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - name: Install Chromium for Playwright
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium, Firefox and WebKit for Playwright
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Run the e2e suite
         run: npm run test:e2e
       - name: Upload the Playwright report

@@ -121,11 +121,82 @@ export const categories = pgTable(
     kind: text("kind", { enum: CATEGORY_KINDS }).notNull(),
     /** Set while archived: hidden from the entry form's pickers, still in reports, history and exports. */
     archivedAt: timestamp("archived_at", { withTimezone: true, mode: "date" }),
+    /** One of `GROUP_COLORS` (src/lib/group-colors.ts, the same palette as wallet groups) or null; checked by the service. */
+    color: text("color"),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex("categories_user_kind_name_uq").on(t.userId, t.kind, t.name),
     check("categories_kind_chk", sql`${t.kind} in ('expense', 'income')`),
+  ],
+);
+
+export const RECURRING_FREQUENCIES = ["daily", "weekly", "monthly", "yearly"] as const;
+export type RecurringFrequency = (typeof RECURRING_FREQUENCIES)[number];
+
+/**
+ * A monthly spending limit (src/server/budgets.ts): for one expense category, or for all spending when
+ * `category_id` is NULL. One amount in one currency; it applies to every month (no history of past amounts).
+ * At most one per category and one overall per user (the two partial unique indexes).
+ */
+export const budgets = pgTable(
+  "budgets",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** NULL = the overall budget. Removing a category removes its budget. */
+    categoryId: integer("category_id").references(() => categories.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("budgets_user_category_uq").on(t.userId, t.categoryId).where(sql`${t.categoryId} is not null`),
+    uniqueIndex("budgets_user_overall_uq").on(t.userId).where(sql`${t.categoryId} is null`),
+    check("budgets_amount_positive", sql`${t.amountMinor} > 0`),
+    check("budgets_currency_len", sql`length(${t.currency}) = 3`),
+  ],
+);
+
+/**
+ * A repeating expense or income (src/server/recurring.ts): every `interval` days / weeks / months / years from
+ * `start_date`, until `end_date` (inclusive) when set. Occurrences are counted from `start_date` (the 31st stays the
+ * 31st in months that have one). `next_date` is the next occurrence not yet turned into an entry, NULL once the rule
+ * has ended; entries are created for every occurrence up to today when the user next opens the app (no scheduler),
+ * with the rule row locked while they are written. A paused rule creates nothing.
+ */
+export const recurringTransactions = pgTable(
+  "recurring_transactions",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    walletId: integer("wallet_id")
+      .notNull()
+      .references(() => wallets.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: CATEGORY_KINDS }).notNull(),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "restrict" }),
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
+    note: text("note"),
+    frequency: text("frequency", { enum: RECURRING_FREQUENCIES }).notNull(),
+    interval: integer("interval").notNull().default(1),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date"),
+    nextDate: text("next_date"),
+    pausedAt: timestamp("paused_at", { withTimezone: true, mode: "date" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("recurring_transactions_user_idx").on(t.userId),
+    check("recurring_transactions_kind_chk", sql`${t.kind} in ('expense', 'income')`),
+    check("recurring_transactions_frequency_chk", sql`${t.frequency} in ('daily', 'weekly', 'monthly', 'yearly')`),
+    check("recurring_transactions_interval_chk", sql`${t.interval} >= 1`),
+    check("recurring_transactions_amount_positive", sql`${t.amountMinor} > 0`),
   ],
 );
 
@@ -163,12 +234,17 @@ export const transactions = pgTable(
     transferId: integer("transfer_id").references(() => transfers.id, {
       onDelete: "cascade",
     }),
+    /** The recurring rule that created this entry, if any; kept (as NULL) when the rule is deleted. */
+    recurringId: integer("recurring_id").references(() => recurringTransactions.id, {
+      onDelete: "set null",
+    }),
     createdAt: createdAt(),
   },
   (t) => [
     index("transactions_user_date_idx").on(t.userId, t.date),
     index("transactions_wallet_date_idx").on(t.walletId, t.date),
     index("transactions_transfer_idx").on(t.transferId),
+    index("transactions_recurring_idx").on(t.recurringId),
     check("transactions_amount_positive", sql`${t.amountMinor} > 0`),
     check(
       "transactions_kind_shape",
@@ -176,6 +252,34 @@ export const transactions = pgTable(
         or (${t.kind} in ('transfer_out', 'transfer_in') and ${t.categoryId} is null and ${t.transferId} is not null)`,
     ),
   ],
+);
+
+/** A user's tags (src/server/tags.ts): free labels across categories ("holiday 2026"). Unique per user ignoring case. */
+export const tags = pgTable(
+  "tags",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("tags_user_name_lower_uq").on(t.userId, sql`lower(${t.name})`)],
+);
+
+/** Which tags an entry carries. Rows go with the entry or the tag. */
+export const transactionTags = pgTable(
+  "transaction_tags",
+  {
+    transactionId: integer("transaction_id")
+      .notNull()
+      .references(() => transactions.id, { onDelete: "cascade" }),
+    tagId: integer("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.transactionId, t.tagId] }), index("transaction_tags_tag_idx").on(t.tagId)],
 );
 
 // Exchange rates (src/server/exchange-rates.ts, src/server/manual-rates.ts). Rates are exact decimals (`numeric`, read
@@ -246,3 +350,6 @@ export type Category = typeof categories.$inferSelect;
 export type Transfer = typeof transfers.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type ManualRateRow = typeof manualRates.$inferSelect;
+export type Budget = typeof budgets.$inferSelect;
+export type RecurringTransaction = typeof recurringTransactions.$inferSelect;
+export type Tag = typeof tags.$inferSelect;

@@ -88,12 +88,14 @@ describe("NoScriptFilters", () => {
         showClear={false}
       />,
     );
-    // Month (its popover button only: the ‹ › links stay), Wallet, Type, Category.
-    expect(html.match(/data-needs-js=""/g)).toHaveLength(4);
+    // Month (its popover button only: the ‹ › links stay), Wallet, Type, Category, Amount.
+    expect(html.match(/data-needs-js=""/g)).toHaveLength(5);
     // Without scripts the month label is a link to the <noscript> form's month select, with the same label.
     const fallback = /<noscript><a href="#no-script-month"[^>]*>(.*?)<\/a><\/noscript>/.exec(html);
     expect(fallback?.[1]).toContain('<span class="sr-only">Month: </span><span class="truncate">September 2026</span>');
-    expect(html.match(/<noscript>/g)).toHaveLength(1);
+    // The Month and Amount labels: links to their fields in the no-JS form.
+    expect(html.match(/<noscript>/g)).toHaveLength(2);
+    expect(html).toMatch(/<noscript><a href="#no-script-min"/);
     // The ‹ › step links are outside the hidden part.
     expect(html).toMatch(/aria-label="Previous month, August 2026 \(\[\)"/);
     expect(render({})).toContain('id="no-script-month"');
