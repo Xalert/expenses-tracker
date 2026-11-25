@@ -379,6 +379,9 @@ src/
   components/data/copy-context-button.tsx           # client: "Copy to clipboard" for the wallets & categories export
   server/wallets.ts  server/wallet-groups.ts  server/categories.ts  server/transactions.ts  server/transfers.ts  server/dashboard.ts
   server/export.ts  server/import.ts
+  server/budgets.ts  lib/budgets.ts                 # budgets: service + pure display helpers ("Budgets")
+  components/categories/budget-meter.tsx  budget-form.tsx  components/dashboard/budgets-card.tsx
+  components/ui/color-choice.tsx                    # colour radios of the group and category forms
   server/users.ts  server/_validate.ts (internal helpers)
   app/manifest.ts                                   # web app manifest (/manifest.webmanifest); icons in public/
 scripts/seed.ts  scripts/generate-icons.mjs  tests/  drizzle/
@@ -411,7 +414,8 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
-`firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`.
+`firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`, `color`,
+`today`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -463,7 +467,7 @@ archiveWallet(userId, walletId): WalletView / unarchiveWallet(userId, walletId):
 deleteWallet(userId, walletId): void                                           // CONFLICT if it has transactions
 
 // categories.ts
-type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null }
+type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null; color: GroupColor | null }   // color: a GROUP_COLORS key; a stored value outside the palette reads as null
 listCategories(userId, kind?, opts?: { includeArchived?: boolean }): CategoryView[]   // archived excluded by default; `sortCategories` (src/lib/category-order.ts): expense first, active before archived, then name lower-cased by code point, then id — sorted in JS, never SQL lower(name)
 getCategory(userId, categoryId): CategoryView | null                           // archived included
 seedDefaultCategories(userId, tx?)                                             // called inside registration's DB transaction; idempotent
@@ -471,8 +475,10 @@ DEFAULT_CATEGORIES: Record<'expense' | 'income', string[]>
 type CategoryWithUsage = CategoryView & { transactionCount: number }
 listCategoriesWithUsage(userId, opts?): CategoryWithMonthUsage[]               // archived included; same order as listCategories
 createCategory(userId, { name, kind }): CategoryView                           // VALIDATION (field name | kind), CONFLICT (field name) on duplicate
-renameCategory(userId, categoryId, { name }): CategoryView                     // NOT_FOUND; same rules; changing only the letter case of its own name is allowed
-changeCategoryKind(userId, categoryId, { kind }): CategoryView                 // NOT_FOUND; same kind → no-op; in use → CONFLICT (field kind);
+renameCategory(userId, categoryId, { name, color? }): CategoryView             // NOT_FOUND; same rules; changing only the letter case of its own name is allowed;
+                                                                               // color omitted → unchanged, null / "" → none, outside GROUP_COLORS → VALIDATION (field color)
+changeCategoryKind(userId, categoryId, { kind }): CategoryView & { budgetRemoved: boolean }   // NOT_FOUND; same kind → no-op; in use → CONFLICT (field kind);
+                                                                               // expense → income removes the category's budget in the same DB transaction;
                                                                                // name taken in the new kind → CONFLICT (field kind); the category row is locked
                                                                                // FOR UPDATE and createTransaction reads it FOR SHARE, so no entry slips in between
 archiveCategory(userId, categoryId): CategoryView / unarchiveCategory(userId, categoryId): CategoryView   // NOT_FOUND; idempotent (first archive date kept)
@@ -894,7 +900,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      coloured), **Top category** (name, share and amount), **Pace vs <previous month>** (expenses through day N
      this month minus through day N last month, "less/more spent than by 8 Oct"), **No-spend days** ("1 of 8",
      plus the previous month's figure).
-  3. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
+  3. **Budgets** (only when the account has a budget; `BudgetsCard`, see "Budgets → Screens").
+  4. **Wallets** (active; name, this month's change, balance) and **Latest** (5 most recent entries, all wallets,
      with a link to Transactions), side by side from `lg` up.
   - **Converted view** (`src/lib/fx.ts`, `src/server/exchange-rates.ts`). `?view=` applies to the whole page:
     - `all` (default, left out of the URL): every wallet counts, converted into the selected currency.
@@ -1268,7 +1275,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     transfer edit page no switch). The amount is a 72px-tall box with a 44px (48px from `sm`) extrabold
     `tabular-nums` input and the currency text beside it (`<id>-currency`, in the input's `aria-describedby`):
     "EUR · from Cash" for expense / income, the bare code for Sent / Received. Category: muted heading (the group's
-    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind, then two dashed pills after the pills (so
+    `aria-labelledby`), `PillPicker name="categoryId"` keyed on the kind (a category with a colour shows it as a
+    round dot before its name in the pill, `CategoryOption.color`), then two dashed pills after the pills (so
     Tab reaches them after the group): "+ New category" and the "Manage categories" link. With no category of the
     kind the pills are replaced by "You have no expense categories yet. Add one to record an expense." (the two
     dashed pills stay; there is no submit). Wallet: `PillPicker name="walletId"` of the active wallets
@@ -1347,13 +1355,20 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     - **Lists**: one `<section>` card per kind — `<h2 tabIndex=-1>` "Expense · 5 categories" (active ones), a visible
       `role="status"` line under it — each its own `ExpandableList` (one open row per card, archived rows included).
       With only archived categories the empty line reads "No active expense categories. Add one below …". Row summary: a 10px
-      swatch (expense: its ramp colour from the split via `rowShare`, so the colour follows the amount rank, not the
-      row order; an expense with nothing this month: a hollow `--border-strong` ring; income: `bg-income`), **name**
-      and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
+      swatch (expense: a small **square** in its ramp colour from the split via `rowShare`, as in the split's legend,
+      so the colour follows the amount rank, not the row order; an expense with nothing this month: a hollow
+      `--border-strong` square; income: a round `bg-income` dot), the category's own **colour** as a round dot
+      (`GroupDot`, only when it has one) right before the **name**, and "N this month · M in all" (inline after a "·" from `sm`, a second line below it), the share bar (expense
       only, `w-12` / `sm:w-20`, `h-1.5`, `aria-hidden`, with ", N% of the month's spending" as visually hidden text
       after the amount) and the amount (income in `text-income`, unsigned; "—" muted, read as "nothing in EUR").
+      An expense category with a budget adds the **budget meter** on a line of its own inside the row button (see
+      "Budgets → Screens"); the expense card starts with the **Overall budget** row.
     - **Open row** (`CategoryPanel`, region "Edit Food"): "New name for “Food”" + the input (focused and
-      selected on open, accent border) + Rename (primary) + Cancel. Under a divider:
+      selected on open, accent border), the **Colour** radios (`ColorChoice` from `src/components/ui/color-choice.tsx`,
+      field `color`: "No colour" then the six palette dots, 44px targets, arrow keys move the choice; the same
+      component as the wallet-group forms, which keep 32px swatches) + Save (primary) + Cancel; one form,
+      `renameCategoryAction` (message "Renamed to “X”." when the name changed, else "Saved “X”."). Expense categories
+      then get the budget form under a divider ("Budgets → Screens"). Under a divider:
       - **Kind**: unused → "Make it an income category" (secondary pill; a hidden `kind` field with the other kind,
         `changeCategoryKindAction`, no confirm); used → the muted line "Used by N transactions, so it stays an expense
         category: changing it would turn those entries into income." A refusal (it gained entries meanwhile, or the
@@ -1361,6 +1376,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       - **Archive**: "Archive" (secondary pill, no confirm — one click undoes it) with "Hides it from the entry form;
         its entries stay in reports and history."; archived → "Unarchive" with "Archived: hidden from the entry
         form. …" (`setCategoryArchivedAction(id, archived)`).
+      With a budget, the kind change adds "Budgets are for expenses only, so its budget is removed with the change."
+      and the removal says "Its budget is removed with it." (in the `confirm()` of an unused one, as a line above the
+      button of a used one).
       Under another divider the remove flow: unused → "Remove Food" (ghost button in `--danger`, `confirm()`); used
       → "Remove, moving its N transactions to" + a select of the card's other **active** categories plus "A new
       expense category…" (`value="new"`), which shows "Name of the new expense category" (`moveToNewCategoryName`)
@@ -1410,7 +1428,95 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   `?returnTo=<path>` for their full-page form (only same-site relative paths starting with a single `/`; default
   `/transactions`); the dialog ignores it and closes instead.
 
+## Budgets
+
+A monthly spending limit per expense category, plus an optional overall one (all spending). Table `budgets` (see
+"Data model"); service `src/server/budgets.ts`; pure display helpers `src/lib/budgets.ts`.
+
+### Rules
+
+- **One amount for every month**, in one currency; no history. A past month is compared with the current amount.
+- **Expense categories only**, one budget per category and one overall per user (the partial unique indexes).
+  Archived categories may have one.
+- The **currency** is one the user holds a wallet in (archived wallets count); the typed amount goes through
+  `parseAmount(value, currency)` in the action, the service takes minor units.
+- **Progress is measured in the budget's own currency over every wallet** (archived included, every wallet group):
+  the month's expenses in the category (overall: all expenses), summed per category, date and currency, each sum
+  converted once at that date's rate (`tableFor(convert, date)`, the same mechanism as the "All in <currency>"
+  views). A currency without a rate is left out and named (`missingCurrencies`). It never depends on the page's
+  currency switch or "All in / only" switch. Transfers and income never count.
+- **Account-wide.** In a group scope progress is not shown; one line says "Budgets cover all your wallet groups, so
+  their progress shows only with All groups selected." (both on /categories and in the Overview card). The budget
+  form still works there.
+- **A category's life:** removing it removes its budget (FK `on delete cascade`); archiving keeps the budget and its
+  progress (archiving is undone with one click, so nothing is thrown away); switching an expense category to income
+  removes its budget in the same DB transaction (`changeCategoryKind` → `budgetRemoved`). A refused kind change keeps it.
+- In the backup (JSON) only, not in the CSV ("Import / export").
+
+### Services
+
+```ts
+// src/server/budgets.ts
+type BudgetView = { id; categoryId: number | null /* null = overall */; currency; amountMinor }
+type BudgetProgress = BudgetView & {
+  category: { name; archived: boolean; color: GroupColor | null } | null /* null = overall */;
+  spentMinor; remainingMinor /* amount − spent, negative when over */; missingCurrencies: string[] }
+type MonthBudgets = { month; budgets: BudgetProgress[] /* overall first, then the category order */;
+  elapsed: { day; days } | null /* the current month only: day N (monthDayN) of the month's length */ }
+listBudgets(userId): BudgetView[]                                              // overall first, then by category id
+setBudget(userId, { categoryId: number | null; currency; amountMinor }): BudgetView   // create or replace in place.
+//   VALIDATION: currency not a code (field currency) or not held ("Choose the currency of one of your wallets (EUR, JPY).",
+//   or "Add a wallet first…" without wallets; field currency); amountMinor not a positive safe integer (field amount);
+//   an income category (field categoryId). NOT_FOUND (field categoryId): missing or another user's category.
+//   Reads the category FOR SHARE (a concurrent kind change waits); a unique violation from a simultaneous first
+//   write retries as a replace.
+removeBudget(userId, categoryId: number | null): boolean                       // false when there was none (or not the user's)
+getMonthBudgets(userId, { month; today; convert?: Conversion }): MonthBudgets  // VALIDATION (field month / today).
+//   Without `convert` only spending already in a budget's currency counts; every other currency is missing.
+// src/lib/budgets.ts (pure)
+budgetShare / budgetPercent (floored) / isOver / budgetBar(b, elapsed): { fill /* capped at 1 */; pace: number | null }
+spentOfLine ("€120.00 of €300.00"), leftLine ("€180.00 left" | "Limit reached" | "€20.00 over"),
+paceLine ("40% spent · day 10 of 30"; a past month "40% spent"), missingLine ("RON not counted: no exchange rate")
+closestToLimit(budgets, limit = 3)                                             // category budgets only, largest share first
+```
+
+The pages call `getMonthBudgets` only without a group scope and when the account has budgets; `convert` is the page's
+own conversion when it has one, else `getConversion(user.id, monthStart, monthEnd)` when the user holds more than one
+currency (archived wallets included).
+
+Actions (`src/app/(app)/categories/actions.ts`, bound target = category id or `null` for overall):
+`setBudgetAction(target, prev, formData)` (fields `amount`, `currency`; "Enter an amount.", the currency-precision
+messages of the entry form, "Enter an amount greater than zero."; success "Budget for “Food”: €300.00 a month." /
+"Overall budget: €2,000.00 a month."), `removeBudgetAction(target)` ("Removed the budget for “Food”." / "Removed the
+overall budget."). Both `revalidatePath("/", "layout")` and echo `values` on errors. `changeCategoryKindAction`
+appends "Its budget was removed." when it was.
+
+### Screens
+
+- **Budget meter** (`BudgetMeter`, `src/components/categories/budget-meter.tsx`, phrasing content so it fits inside a
+  row button): "€120.00 of €300.00" and, right-aligned, "€180.00 left" (muted) or "€20.00 over" (`text-danger`); an
+  8px bar (`aria-hidden`; the text carries the same figures): the fill is the share spent, capped at the end,
+  `bg-muted-foreground`, `bg-danger` once over; for the current month a 2px `bg-foreground` tick (ringed in
+  `--surface`) at day N ÷ days, so "60% spent at day 10 of 30" reads at a glance; under it "40% spent · day 10 of
+  30" and, when some spending is left out, "RON not counted: no exchange rate".
+- **/categories**, expense card: the first row is **Overall budget** · all spending, with "€2,000.00 a month" or
+  "Not set" on the right and the meter under it; its panel is the budget form + Cancel. Every expense row with a
+  budget shows "Budget:" (visually hidden) + the meter on a line of its own (the row button wraps, `flex-wrap`,
+  indented to the name). The open row's **budget form** (`BudgetForm`, after the rename / colour form): label "Monthly
+  budget for “Food”" (overall: "… for all spending"), the amount (`inputMode="decimal"`, echoed after a refused
+  save), the currency (a `Select` keyed on its value when there are several held currencies, "Budget currency" for
+  screen readers; one currency: a hidden field and the code as text), "Set budget" / "Save budget"; a note "Now
+  €300.00 a month. The same amount every month, over all your wallets and groups; spending in other currencies is
+  converted at each day's rate."; with a budget, "Remove the budget for Food" (ghost, danger, no confirm). Without
+  wallets: "Add a wallet to set a budget: …". Success closes the row and announces in the card's status line.
+- **Overview** `BudgetsCard` (`src/components/dashboard/budgets-card.tsx`), between the insight cards and Wallets /
+  Latest when the account has a budget: heading "Budgets", a link to `/categories` (with the month in view)
+  "Manage budgets" or "All budgets (N more)", then a grid (1 / 2 / 4 columns) of the overall budget ("All
+  spending") and the three category budgets closest to or over their limit (`closestToLimit`), each name (with its
+  colour dot, "(archived)" when archived) over its meter. In a group scope only the one line.
+
 ## Import / export
+
 
 Purpose: data portability for a self-hosted app — back up an account, move it to another instance, and get
 transactions in and out of a spreadsheet. Importing bank statements in arbitrary formats (column mapping,
@@ -1429,7 +1535,10 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   written for an archived category, restored on import; absent → archived as of the import); transactions date, kind (`expense`|`income`), wallet ref, category ref, amount, note;
   transfers date, note, from/to wallet refs, amount sent, amount received; an optional top-level `manualRates[]`
   (the user's own exchange rates from `/rates`: `{ currency, base, effectiveDate, rate }`, `rate` the exact decimal
-  string stored, by currency then date; absent in older files). References use ids local to the file.
+  string stored, by currency then date; absent in older files); an optional `color` per category (a `GROUP_COLORS`
+  key, written only when set; anything else reads as none); an optional top-level `budgets[]` (`{ category?, currency,
+  amountMinor, amount }`: `category` names an expense category of the file, absent or null for the overall budget;
+  the overall one first; absent in older files). The version stays 1. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
@@ -1509,7 +1618,15 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   - Categories are matched by kind + name (ignoring case); missing ones are created (from a backup with its
     archived flag and `archivedAt`, from a CSV with its category row's archived date; the preview's
     `categoriesToCreate` entry then carries `archived: true` and the preview card says "(archived)" after its name).
-    An existing category's archived state is left untouched.
+    An existing category's archived state is left untouched. A backup category's `color` is set only on a category
+    the import creates (an existing one keeps its own); two file categories merged into one keep the first colour.
+  - **Budgets** (backup `budgets`): each one the account lacks (the overall one, or a category — existing or
+    created by the import — without a budget) is added; one the account already has is kept as it is, with a notice
+    `budgets-kept` when the file's currency or amount differs (as the manual rates). Problems: an unknown currency
+    code, a `category` that names no expense category of the file (an income one is named as such), a second budget
+    for the same category (ignoring case) or a second overall one, a decimal `amount` that disagrees with
+    `amountMinor`. The currency need not be held. The preview counts them (`budgetsToAdd`, "Budgets: N to add to the
+    Categories page."; also in the confirmation differences and the success line).
   - **Manual exchange rates** (backup `manualRates`): each one the account lacks (by currency + effective date) is
     added; one the account already has for that currency and date is kept as it is (import adds, never changes),
     with a notice `manual-rates-kept` when the file's rate or base differs. Validated like `setManualRate` (ISO
@@ -1762,6 +1879,7 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
   walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
   groupsToCreate: string[]; categoriesToCreate: { name; kind; archived?: true }[]; manualRatesToAdd: number /* backup */;
+  budgetsToAdd: number /* backup */;
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
@@ -1776,8 +1894,9 @@ type ImportContext = { timeZone /* validated: account's, else browser's, else UT
   timeZoneSource: 'account' | 'browser' | 'none'; timeZoneFallback: boolean /* browser sent an invalid zone */;
   unpairedTransfersAsEntries: boolean }
 type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, non-empty */; csvHeader(): string[] /* lower-cased, lazy */ }
-type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc? */;
+type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc?, color? */;
   manualRates?: ManualRateSpec[] /* backup: { currency; base; effectiveDate; rate; loc } */;
+  budgets?: BudgetSpec[] /* backup: { category: index into categories | null (overall); currency; amountMinor; loc } */;
   entries: EntrySpec[]; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
   problems: ImportProblem[]; notices: ImportNotice[]; unpairedTransferRows: number; rowCount: number;
   tallies: Map<string, number> /* per-format counters summed over the selection, e.g. "rounded:RON" */ }
