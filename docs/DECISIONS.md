@@ -313,7 +313,8 @@ Added 2026-11-08.
 | The README has a short "Development" section with the everyday `make` commands (dev, check, test, test-e2e, watch, demo-reset, down), one-line blocks; everything else stays in `docs/DEVELOPMENT.md` | The owner wants them runnable straight from the README (2026-11-17); this relaxes the earlier "no dev commands in the README" rule for these only | owner |
 | The env var table lives only in the README; `docs/SELF-HOSTING.md` links to it | One table cannot drift from another | built |
 | The user-facing import details (Spendee pairing, time zones, labels, rounding, limits) are no longer repeated in the README; it links to `docs/SPEC.md` → Import / export, which already held every one of them | Avoids a third copy; the nginx upload-limit note moved to the reverse-proxy section of `docs/SELF-HOSTING.md` | built |
-| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433 | planner (ask), built |
+| **End-to-end browser tests (2026-11-18): Playwright, Chromium only, against a production build (`.next/standalone/server.js`) on a throwaway Postgres** (`compose.e2e.yaml`, port 5434, tmpfs, torn down after every run; CI: a service container, `.github/workflows/e2e.yml`). Seeding calls the services in the test process, one user per test; `EXCHANGE_RATES=false`; desktop 1280px + phone 375px projects; any console error fails a test | The "Not verified" list had grown to mostly UI behaviour only a real browser shows (focus, popover placement, form resets, overflow). A production build is what self-hosters run (dev mode differs: StrictMode double effects, no minification). Chromium only keeps CI fast and the install small; Safari / Firefox and real touch / screen readers stay manual. The e2e database is never the dev one: the config refuses a name without `e2e` and port 5433. *(Extended 2026-11-25 to Firefox and WebKit, next row.)* | planner (ask), built |
+| **The e2e suite in Firefox and WebKit too (2026-11-25)**: projects `desktop-firefox` and `desktop-webkit` (the desktop tests at 1280px) and `phone-webkit` (the phone tests at 375px with touch, the nearest Playwright has to iOS Safari); `desktop` and `phone` stay Chromium under their old names. No Firefox phone project: Playwright's Firefox does not support `isMobile`. CI installs all three browsers (`--with-deps`) and runs every project | Headless Chromium alone had left Safari and Firefox unchecked. A test that has to tell the layouts apart reads the viewport width (the app's own `sm` breakpoint), not the project name. In WebKit the `consoleErrors` fixture ignores one message: "Fetch API cannot load …?_rsc=… due to access control checks.", WebKit's rejection of a Next.js link prefetch that a `page.goto` cancels while the old page is still alive (Chromium and Firefox stay silent; soft navigations between pages logged none, checked with a throwaway probe test). Only that same-origin `_rsc` form is ignored, and only in WebKit. `e2e/wallets.spec.ts` reads the group names through the region found by its heading: in Playwright 1.65's Firefox a multi-element query under a region located by its accessible name makes the next query crash the content process (SIGSEGV), also on a one-section static page, so it is the test tool, not the app | planner (ask), built |
 | README reduced to a landing page (2026-11-10): what the app is, the Docker quick start, a self-hosting pointer and links. "Run it", "Debugging", "Scripts" and "Layout" moved unchanged to `docs/DEVELOPMENT.md`; the import/export, statement importer and accounts paragraphs were dropped because `docs/SPEC.md`, `docs/STATEMENT-IMPORTER.md` and `docs/SELF-HOSTING.md` already hold them. Supersedes the "five-minute path" README above; the one-line `bash` block rule now applies to `docs/DEVELOPMENT.md` | The owner found the README had too many commands and wants only a quick Docker start, a short description and the self-hosting pointer there | owner |
 
 ### Interface
@@ -346,6 +347,7 @@ Added 2026-11-08.
 | Length messages say "Keep the name to N characters or fewer." (names: categories and groups 40, wallets 60; notes 500), in `normalizeName` / `normalizeNote`, the wallet form schema and the entry form schema | "under 40" read as 39 while 40 is allowed; matches the first name / surname wording | planner |
 | *(2026-11-18)* Without JavaScript the /transactions Month chip's popover button is hidden like the other popover chips and a `<noscript>` link with the same label jumps to the no-JS filter form's Month select (`#no-script-month`) | The label looked like a button that did nothing; the ‹ › links keep working, and the form below is where a month is chosen without scripts. With scripts nothing changes | planner |
 | **Fix (2026-11-18, found by the e2e suite): pickers focus their first item with `preventScroll`** (date picker days, month grid, the /transactions filter chips' options) | On open the focus ran before the Popover had re-placed itself above a trigger near the bottom, so the browser scrolled the page to the panel's first, below position and the panel never flipped | built |
+| **Fix (2026-11-25, found by the e2e suite in Firefox and WebKit): "+ New category" focuses the new pill from an effect, not a `requestAnimationFrame`** | The state updates that remount the category picker with the new pill checked run inside the action's transition; in Firefox (3 runs in 4) and WebKit (1 in 4) the frame callback often ran before that commit, found no pill, and the pill never got focus. An effect runs after the commit. Chromium had always passed. Covered by `e2e/entries.spec.ts` ("+ New category creates the category…") in all three engines | built |
 | **Fix (2026-11-18, found by the e2e suite): the charts' screen-reader day tables are hidden by an `sr-only` wrapper, not by `sr-only` on the `<table>`** | A table does not shrink to the 1px width: on the wallet page with a long wallet name the hidden table was 470px wide and the page scrolled sideways at 375px | built |
 
 ### Redesign (decided 2026-11-08; being built in the steps of SPEC "Redesign build order", step 1 done)
@@ -591,10 +593,15 @@ New features beyond these have not been chosen yet.
 
 ### Not verified
 
-- **End-to-end browser suite (2026-11-18): what it does and does not cover.** `e2e/` (Playwright, Chromium,
-  production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in a real
-  browser what the entries below list as covered. It runs in headless Chromium only: no Safari / Firefox, no real
-  touch device (the phone project emulates a 375px touch viewport), no screen reader (announcements and labels are
+- **End-to-end browser suite (2026-11-18, three engines since 2026-11-25): what it does and does not cover.** `e2e/`
+  (Playwright, production build, throwaway Postgres, `make test-e2e`; run twice in a row, all passing) now checks in
+  a real browser what the entries below list as covered. Since 2026-11-25 every desktop test also runs in
+  Playwright's Firefox and WebKit, and every phone test in WebKit (all passing in two full runs in a row and one with
+  CI's settings, on macOS arm64; the Linux builds CI uses have not been run here). These are Playwright's headless
+  builds of the engines, not a released Firefox or Safari: no Safari on a Mac or iPhone, no iOS (the
+  `phone-webkit` project is desktop WebKit with a 375px touch viewport, not Mobile Safari's keyboard, gestures or
+  viewport behaviour), no Firefox on Android, no real
+  touch device (the phone projects emulate a 375px touch viewport), no screen reader (announcements and labels are
   checked through the accessibility tree, not heard), no real clipboard, file picker (files are set on the input) or
   password manager, and the 375px / dark-mode checks are for sideways overflow and the scheme's background, not a
   visual review.
@@ -660,7 +667,7 @@ New features beyond these have not been chosen yet.
 - **Password change (2026-11-17).** The account menu's "Account settings" link closing the popover, the form
   clearing after success, another signed-in browser being sent to `/login` while this one stays, and the new
   password signing in: covered by `e2e/account.spec.ts`. Not checked: a password manager picking up the new
-  password (Playwright's Chromium has none).
+  password (Playwright's browsers have none).
 - **Postgres deployment, partly verified (2026-11-09).** Checked: the image built locally (arm64, Docker Desktop)
   and run through `deploy/compose.yaml` with no `.env` and an empty volume — `db` healthy, migrations applied (7
   tables), `/api/health`, `/login`, `/register` 200; register, create a KWD wallet, add an expense, see the 9.250
@@ -770,7 +777,8 @@ New features beyond these have not been chosen yet.
 - **No screen-reader pass.** Focus handling and labels were checked through the DOM. This includes the date and
   month pickers: roles, `aria-selected` / `aria-pressed`, the combobox trigger and roving focus were checked in
   headless Chrome through the DevTools protocol (keyboard and mouse events, light and dark, 1280px and 375px), not
-  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox.
+  with VoiceOver or NVDA, and not on a real touch device or in Safari / Firefox (the e2e suite's picker tests run
+  in Playwright's Firefox and WebKit since 2026-11-25; see the suite entry above).
 - **Native dialogs were not exercised**: the confirmation dialog was stubbed, and test files were injected by
   script rather than chosen in a real file picker; downloads were fetched by script.
 - **No real spreadsheet application** was used to open or re-save an exported CSV.
