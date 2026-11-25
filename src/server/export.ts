@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, manualRates, transactions, transfers, walletGroups, wallets } from "@/db/schema";
+import { categories, manualRates, recurringTransactions, transactions, transfers, walletGroups, wallets } from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
 import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
@@ -95,10 +95,17 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       .from(manualRates)
       .where(eq(manualRates.userId, userId))
       .orderBy(asc(manualRates.currency), asc(manualRates.effectiveDate));
+    const ruleRows = await tx
+      .select()
+      .from(recurringTransactions)
+      .where(eq(recurringTransactions.userId, userId))
+      .orderBy(asc(recurringTransactions.id));
 
     const walletRef = new Map(walletRows.map((w, i) => [w.id, i + 1]));
     const currencyOf = new Map(walletRows.map((w) => [w.id, w.currency]));
     const categoryRef = new Map(categoryRows.map((c, i) => [c.id, i + 1]));
+    const categoryById = new Map(categoryRows.map((c) => [c.id, c]));
+    const ruleRef = new Map(ruleRows.map((r, i) => [r.id, i + 1]));
 
     return {
       app: BACKUP_APP,
@@ -131,6 +138,7 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         amountMinor: t.amountMinor,
         amount: minorToInputValue(t.amountMinor, currencyOf.get(t.walletId)!),
         note: t.note,
+        ...(t.recurringId !== null && ruleRef.has(t.recurringId) ? { recurringId: ruleRef.get(t.recurringId)! } : {}),
       })),
       transfers: transferRows.map((t) => ({
         date: t.date,
@@ -144,6 +152,22 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       })),
       // The user's own exchange rates (/rates); the provider's rates are shared and not part of an account.
       manualRates: rateRows.map((r) => ({ currency: r.currency, base: r.base, effectiveDate: r.effectiveDate, rate: r.rate })),
+      // The repeating entries, in creation order; the category by kind + name.
+      recurring: ruleRows.map((r) => ({
+        id: ruleRef.get(r.id)!,
+        walletId: walletRef.get(r.walletId)!,
+        kind: r.kind,
+        category: categoryById.get(r.categoryId)!.name,
+        amountMinor: r.amountMinor,
+        amount: minorToInputValue(r.amountMinor, currencyOf.get(r.walletId)!),
+        note: r.note,
+        frequency: r.frequency,
+        interval: r.interval,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        nextDate: r.nextDate,
+        paused: r.pausedAt !== null,
+      })),
     };
   }, SNAPSHOT);
 }

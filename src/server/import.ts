@@ -1,7 +1,16 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, manualRates, transactions, transfers, walletGroups, wallets, type CategoryKind } from "@/db/schema";
+import {
+  categories,
+  manualRates,
+  recurringTransactions,
+  transactions,
+  transfers,
+  walletGroups,
+  wallets,
+  type CategoryKind,
+} from "@/db/schema";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
@@ -106,6 +115,9 @@ export type ImportPreview = {
    * has is kept as it is, never replaced).
    */
   manualRatesToAdd: number;
+  /** Backup only: repeating entries the account lacks (created), and those it already has (skipped). */
+  recurringToAdd: number;
+  duplicateRecurring: number;
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -422,6 +434,10 @@ type Plan = {
   categoryArchived: boolean[];
   categoriesToCreate: number[];
   manualRatesToAdd: ManualRateSpec[];
+  /** Per file repeating entry: the account's identical rule (skipped, entries link to it), or null → created. */
+  recurringTargets: (number | null)[];
+  /** File repeating-entry indexes to create, in file order. */
+  recurringToCreate: number[];
   /** Non-blocking notes from planning (e.g. rates the account already had for a date). */
   notices: ImportNotice[];
   entriesToAdd: EntrySpec[];
@@ -564,6 +580,40 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     }
   }
 
+  // Repeating entries (backup): one the account already has — same wallet, category, amount, note and schedule —
+  // is skipped (its next date and paused state are the account's own); any other is created (import adds, never
+  // changes). A rule whose wallet or category is created by this import is always new.
+  const recurringTargets: (number | null)[] = [];
+  const recurringToCreate: number[] = [];
+  if (parsed.recurring?.length) {
+    const existingRules = await tx
+      .select()
+      .from(recurringTransactions)
+      .where(eq(recurringTransactions.userId, userId))
+      .orderBy(recurringTransactions.id);
+    const taken = new Set<number>();
+    parsed.recurring.forEach((r, i) => {
+      const walletId = walletTargets[r.wallet].id;
+      const categoryId = categoryTargets[r.category];
+      const same = existingRules.find(
+        (e) =>
+          !taken.has(e.id) &&
+          e.walletId === walletId &&
+          e.categoryId === categoryId &&
+          e.kind === r.kind &&
+          e.amountMinor === r.amountMinor &&
+          e.note === r.note &&
+          e.frequency === r.frequency &&
+          e.interval === r.interval &&
+          e.startDate === r.startDate &&
+          e.endDate === r.endDate,
+      );
+      if (same) taken.add(same.id);
+      else recurringToCreate.push(i);
+      recurringTargets.push(same?.id ?? null);
+    });
+  }
+
   // Existing entries as multisets (only needed when skipping duplicates) ------------------------------
   // In a CSV a wallet *is* its name + currency, so two same-named wallets of the account count as one for
   // duplicate detection (re-importing an export of such an account must still add nothing). A backup keeps
@@ -692,6 +742,8 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     categoryArchived,
     categoriesToCreate,
     manualRatesToAdd,
+    recurringTargets,
+    recurringToCreate,
     notices,
     entriesToAdd,
     transfersToAdd,
@@ -738,6 +790,8 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
       ...(parsed.categories[i].archived ? { archived: true as const } : {}),
     })),
     manualRatesToAdd: plan?.manualRatesToAdd.length ?? 0,
+    recurringToAdd: plan?.recurringToCreate.length ?? 0,
+    duplicateRecurring: plan ? plan.recurringTargets.length - plan.recurringToCreate.length : 0,
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
     notices: [...parsed.notices, ...(plan?.notices ?? [])].map(publicLocation),
@@ -834,6 +888,32 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
       .onConflictDoNothing({ target: [manualRates.userId, manualRates.currency, manualRates.effectiveDate] });
   }
 
+  // Repeating entries before the entries that link to them. Created as the file has them (next date, paused); a
+  // next date already past is caught up by the next request, like any rule.
+  const recurringIds = [...plan.recurringTargets];
+  for (const i of plan.recurringToCreate) {
+    const r = parsed.recurring![i];
+    const [created] = await tx
+      .insert(recurringTransactions)
+      .values({
+        userId,
+        walletId: walletIds[r.wallet]!,
+        kind: r.kind,
+        categoryId: categoryIds[r.category]!,
+        amountMinor: r.amountMinor,
+        note: r.note,
+        frequency: r.frequency,
+        interval: r.interval,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        nextDate: r.nextDate,
+        pausedAt: r.paused && r.nextDate !== null ? now : null,
+        createdAt: now,
+      })
+      .returning({ id: recurringTransactions.id });
+    recurringIds[i] = created.id;
+  }
+
   for (const chunk of chunks(plan.entriesToAdd)) {
     await tx
       .insert(transactions)
@@ -847,6 +927,7 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
           date: e.date,
           note: e.note,
           transferId: null,
+          recurringId: e.recurring === undefined ? null : recurringIds[e.recurring],
           createdAt: now,
         })),
       );

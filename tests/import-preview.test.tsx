@@ -20,6 +20,8 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     groupsToCreate: [],
     categoriesToCreate: [],
     manualRatesToAdd: 0,
+    recurringToAdd: 0,
+    duplicateRecurring: 0,
     problems: [],
     problemCount: 0,
     notices: [],
