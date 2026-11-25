@@ -65,6 +65,8 @@ export type PopoverProps = {
   id?: string;
   role?: "dialog" | "listbox" | "menu";
   "aria-label"?: string;
+  /** For a `listbox` whose options toggle (several can be selected). */
+  "aria-multiselectable"?: boolean;
   className?: string;
   children: ReactNode;
 };
@@ -113,6 +115,7 @@ function PopoverPanel({
   className,
   children,
   "aria-label": ariaLabel,
+  "aria-multiselectable": multiselectable,
 }: PopoverProps & { onDismiss: (restoreFocus: boolean) => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onDismissRef = useRef(onDismiss);
@@ -200,6 +203,7 @@ function PopoverPanel({
       id={id}
       role={role}
       aria-label={ariaLabel}
+      aria-multiselectable={multiselectable || undefined}
       data-placement={placement}
       className={cn(
         "absolute z-30 rounded-2xl border border-border bg-surface p-3 text-foreground",

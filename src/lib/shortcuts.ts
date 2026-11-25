@@ -14,12 +14,14 @@ export type ShortcutEvent = {
 
 type ElementLike = {
   tagName?: string;
+  type?: string;
   isContentEditable?: boolean;
   closest?: (selector: string) => unknown;
 };
 
 /** Where typing is text entry, or where a dialog owns the keyboard: shortcuts stay off there. */
-const BLOCKING_ANCESTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"][aria-modal="true"]';
+const MODAL = '[role="dialog"][aria-modal="true"]';
+const BLOCKING_ANCESTOR = `input, textarea, select, [contenteditable]:not([contenteditable="false"]), ${MODAL}`;
 
 /**
  * True when a keydown should open the Add dialog: "n" or "N" (Shift is allowed, so Caps Lock works), no Ctrl /
@@ -46,6 +48,11 @@ function plainKey(e: ShortcutEvent, matches: (key: string) => boolean): boolean 
   if (!target) return true;
   if (target.isContentEditable) return false;
   const tag = target.tagName?.toUpperCase();
+  // A checkbox takes no typing (the selection mode of /transactions keeps the shortcuts while a row box has focus);
+  // inside a modal dialog it still blocks.
+  if (tag === "INPUT" && target.type?.toLowerCase() === "checkbox") {
+    return !(typeof target.closest === "function" && target.closest(MODAL));
+  }
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return false;
   if (typeof target.closest === "function" && target.closest(BLOCKING_ANCESTOR)) return false;
   return true;

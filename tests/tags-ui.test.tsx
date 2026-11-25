@@ -94,6 +94,7 @@ const row = (over: Partial<TransactionView>): TransactionView => ({
   currency: "EUR",
   categoryId: 10,
   categoryName: "Food",
+  categoryColor: null,
   amountMinor: 1200,
   signedAmountMinor: -1200,
   date: TODAY,
@@ -143,10 +144,10 @@ describe("the tag filter", () => {
 
   it("lives in the URL as ?tag=<id>, counts as a filter and reaches the service, the month links and the export", () => {
     const p = parseListParams({ tag: "5", month: "2026-10" });
-    expect(p.tag).toBe(5);
-    expect(parseListParams({ tag: "x" }).tag).toBeUndefined();
+    expect(p.tags).toEqual([5]);
+    expect(parseListParams({ tag: "x" }).tags).toBeUndefined();
     expect(hasFilters(parseListParams({ tag: "5" }), "2026-11")).toBe(true);
-    expect(listFilters(p, "2026-11")).toMatchObject({ tagId: 5, month: "2026-10" });
+    expect(listFilters(p, "2026-11")).toMatchObject({ tagIds: [5], month: "2026-10" });
     expect(listHref(p)).toBe("/transactions?month=2026-10&tag=5");
     expect(monthHref(p, "2026-09", "2026-11")).toBe("/transactions?month=2026-09&tag=5");
     expect(exportCsvHref(p, "2026-11")).toBe("/api/export/transactions?month=2026-10&tag=5");
@@ -173,8 +174,8 @@ describe("the tag filter", () => {
     const html = renderToStaticMarkup(
       <NoScriptFilters params={parseListParams({ tag: "6" })} thisMonth="2026-11" wallets={[]} categories={[]} tags={TAGS} />,
     );
-    expect(html).toMatch(/<select name="tag"/);
-    expect(html).toContain('<option value="">All tags</option>');
+    // A multiple select since tags can be combined (none chosen = all tags).
+    expect(html).toMatch(/<select name="tag" multiple=""/);
     expect(html).toContain('<option value="6" selected="">Work</option>');
   });
 });

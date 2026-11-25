@@ -434,7 +434,8 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
 `actualBalance`, `color`, `today`, `balanceOn`, `frequency`, `interval`, `endDate`, `nextDate` (the last four:
-repeating entries), `tags` (an entry's tag list), `tagId` (the tag filter).
+repeating entries), `tags` (an entry's tag list), `tagId` (the tag filter), `min` / `max` (the /transactions amount
+range), `ids`, `tagName` (bulk edit, below).
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -542,6 +543,7 @@ type TransactionView = {
   id; kind: 'expense' | 'income' | 'transfer_out' | 'transfer_in';
   walletId; walletName; currency;
   categoryId: number | null; categoryName: string | null;
+  categoryColor: GroupColor | null   // the category's colour (same query), the dot before its name in the day lists
   amountMinor: number;            // always positive
   signedAmountMinor: number;      // negative for expense / transfer_out
   date: string; note: string | null;
@@ -549,12 +551,21 @@ type TransactionView = {
   counterparty: { walletId; walletName; currency; amountMinor } | null   // the other leg, for transfers
   tags: string[]                  // the entry's tag names, by name ignoring case; [] for transfer legs (see "Tags")
 }
-type TransactionFilters = { walletId?; kind?: 'expense' | 'income' | 'transfer'; categoryId?; tagId?; from?: string; to?: string; q?: string; limit?: number; offset?: number }
+type TransactionFilters = { walletId?; groupId?; kind?: 'expense' | 'income' | 'transfer'; categoryId?; categoryIds?: number[];
+  tagId?; tagIds?: number[]; minAmount?: string; maxAmount?: string; month?; from?: string; to?: string; q?: string;
+  limit?: number; offset?: number }
+//   categoryId and categoryIds are merged: an entry matches when its category is any of them (same for tagId / tagIds:
+//   it carries any of them); at most 100 ids each, a malformed one → VALIDATION (field categoryId / tagId); another
+//   user's id matches nothing. minAmount / maxAmount: inclusive bounds in major units as typed ("12.50", "12,5"),
+//   compared with each entry in its own wallet's currency (amount_minor against the bound scaled by that currency's
+//   decimals, rounded inwards; nothing converted; src/lib/amount-filter.ts, src/server/_filters.ts); invalid, negative,
+//   more than 3 decimals, or a maximum below the minimum → VALIDATION (field min / max). Different filters combine with AND.
 type TransactionInput = { walletId; kind: 'expense' | 'income'; categoryId; amountMinor; date; note?: string | null; tags?: string[] }
 //   tags: replaces the entry's whole set in its DB transaction (create: omitted = none; update: omitted = unchanged)
 listTransactions(userId, filters?): { items: TransactionView[]; total: number }   // date desc, id desc; default limit 50, clamped to 1..200
-//   kind 'transfer' matches both legs; from/to inclusive (malformed → VALIDATION); q = case-insensitive substring of the note
-//   (transfer legs carry a copy of the transfer note, so they match too); total = count of all matches ignoring limit/offset
+//   kind 'transfer' matches both legs; from/to inclusive (malformed → VALIDATION); q = case-insensitive substring of the note,
+//   the category name or one of the entry's tag names (transfer legs carry a copy of the transfer note and have neither of
+//   the others, so they match on the note); total = count of all matches ignoring limit/offset
 getTransaction(userId, id): TransactionView | null                                 // includes transfer legs (use transferId to route to the transfer editor)
 createTransaction(userId, TransactionInput): TransactionView
 updateTransaction(userId, id, TransactionInput): TransactionView   // rejects transfer legs (VALIDATION)
@@ -575,6 +586,25 @@ deleteTransfer(userId, transferId): void                            // removes t
 // Rules: from ≠ to (VALIDATION, field toWalletId); both wallets owned (NOT_FOUND, field fromWalletId/toWalletId) and not
 // archived — except a wallet the transfer already used on the same side when editing; same currency ⇒ received = sent
 // (receivedAmountMinor ignored); different currency ⇒ receivedAmountMinor required and > 0 (field receivedAmount).
+
+// bulk.ts (bulk edit on /transactions; each call one DB transaction, all or nothing, target rows locked FOR UPDATE)
+type BulkTarget = { ids: number[] } | { filters: TransactionFilters }   // ticked rows, or the list's filters re-evaluated
+type BulkSelection = { entries; transfers }      // expenses / income, and transfers (each once, whichever legs matched)
+MAX_BULK_ENTRIES = 2000                          // rows (entries and legs) one call may touch; more → VALIDATION (no field)
+                                                 // "That is 2,345 entries; one change can touch at most 2,000. …" and nothing changes
+previewBulk(userId, target): BulkSelection       // what the target is now (the delete confirmation)
+bulkDelete(userId, target, opts?: { expected?: BulkSelection }): BulkSelection
+//   deletes the entries and, for every selected leg, its whole transfer (both legs); a target that no longer matches
+//   `expected` → CONFLICT, nothing deleted
+bulkSetCategory(userId, target, categoryId): { category; changed; unchanged; skippedOtherKind; skippedTransfers }
+//   only entries of the category's kind move; category owned (NOT_FOUND) and not archived (VALIDATION), field categoryId;
+//   no entry of that kind in the target → VALIDATION (categoryId)
+bulkAddTag(userId, target, tagName): { tag: { id | null; name }; added; already; skippedAtLimit; skippedTransfers }
+//   name cleaned like any tag (VALIDATION, field tagName), matched ignoring case or created (only when an entry gets it);
+//   entries at 10 tags skipped and counted; no expense / income in the target → VALIDATION (tagName)
+bulkRemoveTag(userId, target, tagId): { tag; removed; notTagged; skippedTransfers }   // tag owned (NOT_FOUND, field tagId); the tag stays
+// Common: ids empty or malformed → VALIDATION (field ids); another user's ids behave like missing ones; nothing matched
+// → NOT_FOUND.
 
 // dashboard.ts
 getDashboard(userId, opts: { month: string /* YYYY-MM, required (the caller's current month); invalid → VALIDATION */;
@@ -604,7 +634,9 @@ pickDefaultCurrency(userId, month): string | null
 //   none → the currency of the active wallet with the most transactions overall (then by code); no active wallets
 //   → null. A `?currency=` the user has no wallet in is ignored (falls back to this).
 listUserCurrencies(userId): string[]                                         // currencies of active wallets, by code
-getMonthTimeline(userId, { month; currency; walletId?; categoryId? }): {    // walletId/categoryId not a positive
+getMonthTimeline(userId, { month; currency; walletId?; groupId?; categoryId?; tagId?; categoryIds?; tagIds?;
+                           minAmount?; maxAmount?; convert? }): {          // the /transactions filters that narrow the strip;
+                                                                            // walletId/categoryId not a positive
                                                                             // integer → VALIDATION; another user's → zeros
   days: { date; expenseMinor; incomeMinor }[];   // every calendar day of the month, zeros included
   previousCumulativeMinor: number[];             // running expense total per day of the previous month (index 0 = day 1),
@@ -1063,8 +1095,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       amount (income `text-income`, expense `text-foreground`, transfers `text-transfer`; a cross-currency transfer
       shows only its own leg).
 - **/transactions** — (with a wallet group selected the list, totals, strip, currency picker and wallet options are
-  narrowed to it and "Export CSV" carries `group=<id>`; an explicit `wallet` filter wins) filter chips at the top (month, wallet, type, category, tag; each opens a popover; a search field
-  for the note text), then the **day strip**, then the list. **The default view is the current month**
+  narrowed to it and "Export CSV" carries `group=<id>`; an explicit `wallet` filter wins) filter chips at the top (month, wallet, type, categories, tags, amount; each opens a popover; a search field
+  for the note, category and tag names), then the **day strip**, then the list. A "Select" button switches the list into
+  **selection mode** for bulk edits (below); an open row's footer has **Duplicate**. **The default view is the current month**
   (`?month=YYYY-MM`, with "All time" in the month chip; explicit `from`/`to` still work and override `month`).
   - **Day strip** (only when one month is shown): a bar per day of that month for expenses in one currency — the
     filtered wallet's currency, else the currency switch's value. Clicking a bar narrows the list to that day
@@ -1086,17 +1119,34 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - As built (step 4; `page.tsx`, `components/transactions/{list-params,filter-chips,day-strip,day-list,inline-edit}`,
     `lib/day-labels.ts`):
     - **URL state** (`list-params.ts`): `month` (`YYYY-MM` or `all`; absent = the current month), `wallet`, `kind`,
-      `category`, `tag` (one tag id; see "Tags"), `from`, `to`, `q`, `page`, and `currency` (a valid uppercase code; only picks the strip's currency,
-      not a filter). Invalid values are dropped. `resolveView(params, thisMonth)` → `{ type: 'month', month }`,
+      `category` and `tag` (each one id or several, comma-separated: `?category=1,2,3`; `ListParams.categories` /
+      `tags`, ascending, deduped, at most 100; a repeated key — `?category=1&category=2`, what the no-JS multiple select
+      sends — is read too and redirected to the comma form, `hasRepeatedParams`), `min` / `max` (the amount range in major
+      units, kept as typed even when invalid so the page can say so: `amountRangeErrors`; `listFilters` passes only the
+      valid bounds), `from`, `to`, `q`, `page`, `currency` (a valid uppercase code; only picks the strip's currency,
+      not a filter) and `select` (`1` = selection mode, `page` = selection mode with every shown row ticked; not a filter;
+      kept by `listHref`, dropped by `exportCsvHref`). `listHref` writes commas unencoded; `toggleIdHref(params,
+      'categories' | 'tags', id)` adds or removes one id (page 1). Other invalid values are dropped. `resolveView(params, thisMonth)` → `{ type: 'month', month }`,
       `{ type: 'all' }` or `{ type: 'range', from?, to? }` (any `from`/`to` wins over `month`); `listFilters` turns
       that into `TransactionFilters`. `hasFilters` counts a month only when it differs from the current one
       (`?month=<current>` is not a filter) and ignores `currency` and `page`. `monthHref` / `dayHref` keep the other
       filters and the currency and leave the current month out of the URL; `exportCsvHref` drops page and currency.
     - **Header**: "Transactions" and "N entries this month" / "N entries in October 2026" / "N entries" (all time) /
-      "N match your filters" (any wallet, type, category, tag, search or date range). No Add button (the floating one).
-    - **Chip row** (`FilterChips`, client): Month · Wallet · Type · Category · Tag pills (`pillClasses`; the selected
+      "N match your filters" (any wallet, type, category, tag, amount, search or date range). No Add button (the floating
+      one). Header actions: "Select" (secondary; `listHref(params, { select: 'on' })`, shown when the list has entries) —
+      "Done selecting" (primary) in selection mode — then "Repeating".
+    - **Chip row** (`FilterChips`, client): Month · Wallet · Type · Category · Tag · Amount pills (`pillClasses`; the selected
       style when set — the month chip only away from the current month), each opening a `Popover` (Tag only when the
-      user has a tag or one is selected; an id that is no tag of theirs reads "Unknown tag" and matches nothing). Wallet,
+      user has a tag or one is selected; ids that are no tag / category of theirs read "Unknown tag" / "Unknown category"
+      and match nothing). **Category and Tag are multi-select**: the listbox has `aria-multiselectable="true"`, an option
+      toggles its id in the URL (`toggleIdHref`) and the panel stays open (the option keeps a stable key, so focus stays
+      on it across the navigation); "All categories" / "All tags" clears and closes; categories with a colour show its dot.
+      The chip reads the one name, "Food +2" for several. **Amount** (`aria-haspopup="dialog"`, panel "Choose an amount
+      range"): "At least" / "At most" text inputs (`inputMode="decimal"`, 44px), a hint "Each entry is compared in its
+      own currency. Both bounds are included.", Apply (pushes `listHref` with `min` / `max`) and "Any amount" when set;
+      the chip reads "10 – 50", "≥ 10" or "≤ 50". An invalid bound is left out of the list and named in a
+      `role="alert"` line under the row ("Amount filter not applied: The minimum cannot be negative."); the panel shows
+      it on its field (`aria-invalid`). Wallet,
       Type, Category and Tag: `aria-haspopup="listbox"`, a `role="listbox"` panel of `next/link` options (`role="option"`,
       `aria-selected`, a ✓ on the chosen one; Category grouped Expense / Income in `role="group"`s; archived wallets
       marked); opening focuses the selected option, Up / Down / Home / End move, Enter follows the link, Tab leaves.
@@ -1104,7 +1154,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       `MonthGrid` (its own ‹ year › stepper; picking pushes the URL) over a row of links "‹ Oct", "All time", "Dec ›".
       Its label is `viewLabel`: "November 2026", "All time", "5 Nov – 12 Nov", "3 Nov", "From 5 Nov", "Until 12 Nov"
       (the year is added outside the current year). "Clear" (a text link to `/transactions`) when `hasFilters`. The
-      search is a GET `<form role="search" action="/transactions">` with hidden inputs for the other params (no-JS)
+      search (label "Search notes, categories and tags", placeholder "Search notes, tags…") is a GET
+      `<form role="search" action="/transactions">` with hidden inputs for the other params, `select` included (no-JS)
       and `onSubmit` pushing a clean URL (an empty search drops `q`); then the Export CSV pill (hidden when the list
       is empty). At 375px the chips wrap and the search + export share a full-width line.
       **Clean URLs**: a request with any empty (or blank) query value (`?q=`, `?wallet=` from a no-JS form) is
@@ -1112,7 +1163,10 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       **Without JavaScript** (`NoScriptFilters`, server, rendered by the page inside `<noscript>`): a GET
       `<form action="/transactions" aria-label="Filters">` of native selects — Month (next month, the current month
       as the empty default, the 24 before it, the month in view if older, "All time"), Wallet ("All wallets", archived
-      marked), Type, Category (`<optgroup>` Expense / Income), Tag ("All tags"; under the chip's rule) — with hidden `q` and `currency` and an "Apply" button;
+      marked), Type, "Categories (none = all)" (a `<select multiple>` with `<optgroup>` Expense / Income), "Tags (none =
+      all)" (`<select multiple>`, unknown ids as "Unknown tag"; under the chip's rule), "At least" / "At most" (text
+      inputs, `#no-script-min` is the Amount chip's fallback link target, errors under them) — with hidden `q`,
+      `currency`, `view` and `select` and an "Apply" button;
       a selected day or range is replaced by the chosen month. A `<style>` in it hides the Wallet / Type / Category
       chips and the Month chip's popover button (`data-needs-js`); the Month chip's ‹ › links stay, and in place of
       its button a `<noscript>` link with the same label (`#no-script-month`, the id of the form's Month select)
@@ -1142,8 +1196,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       `ConversionNotes` line sits under the heading; `?view=only` (in `ListParams.view`, kept by `listHref`, the
       no-JS form and the search form, dropped from the CSV export link) counts only that currency. With a wallet
       filter there is no conversion (one wallet, one currency).
-      `getMonthTimeline(userId, { month, currency, walletId, categoryId, tagId, convert? })`; the type and
-      search filters do not apply (it always shows expenses). `DayBars` 48px tall (72 with a cap), scaled with
+      `getMonthTimeline(userId, { month, currency, walletId, categoryIds, tagIds, minAmount, maxAmount, convert? })`; the type and
+      search filters do not apply (it always shows expenses); the categories, tags and amount range do (`categoryIds`,
+      `tagIds`, `minAmount`, `maxAmount`). `DayBars` 48px tall (72 with a cap), scaled with
       `pickScale` (one huge day capped, labelled with its amount), days after today `future`, inside a
       `role="group"` labelled "Each day of November 2026: select a day to list only that day"; each bar links to
       `dayHref(…, date)` with the `aria-label` "3 November: €64.20 spent"; with a selected day that bar is the
@@ -1162,7 +1217,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       items; one 18px card per day: an `<h2>` with `dayHeaderLabel(date, today)` ("Today · Sunday 8", "Yesterday ·
       Saturday 7", "Tuesday 3" in today's month, "Tue 3 Nov" in today's year, "Tue 3 Nov 2025") and on the right
       `dayNetLabel` of `listDayTotals(userId, filters, datesOnThisPage)` ("-€133.85 · -lei 118.50 · -$15.99"; a day
-      whose transfers cancel out shows "€0.00"), muted. Rows (`ExpandableRow`): kind dot, `transactionLabel`, "note ·
+      whose transfers cancel out shows "€0.00"), muted. Rows (`ExpandableRow`): kind dot, the category's colour dot
+      (`GroupDot`, 8px, decorative, from `TransactionView.categoryColor`) when it has one, `transactionLabel`, "note ·
       wallet" muted, the signed amount bold (income `text-income`, expense `text-foreground`, transfers
       `text-transfer`) and, for a cross-currency transfer leg, the other leg's amount small and muted under it. Each
       row also has a `<noscript>` "Edit <label>" link to its edit page. `PAGE_SIZE` stays 50. An entry with tags shows
@@ -1175,7 +1231,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       switch; a transfer row (either leg) edits the whole transfer (From / To / Sent / Received, no switch). Wallets:
       active plus the archived ones the entry uses. The footer sits outside the keyed form: Delete
       (`ConfirmDeleteForm`, danger text, `confirm()`, the delete action redirects back to the list URL) and "Open as
-      page" (the edit page with `returnTo`) on the left, Cancel and Save (`form=`) on the right. Wallets, categories,
+      page" (the edit page with `returnTo`) and **"Duplicate"** (`/transactions/new?from=<the row's id>` with `returnTo`;
+      a transfer row passes its own leg) on the left, Cancel and Save (`form=`) on the right. Wallets, categories,
       today and the list URL reach every panel once through `InlineEditProvider`. On `ok` the row closes, focus
       returns to its button, the message is announced and `router.refresh()` runs; errors show inline and focus the
       first invalid control.
@@ -1189,6 +1246,38 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       "<notice> Focus is on the next entry." / "… The list is empty." — the notice is "Expense deleted." /
       "Income deleted." / "Transfer deleted." (set by `ConfirmDeleteForm`'s `onConfirmed`) or "<save message>. It is
       no longer in this list.".
+    - **Selection mode** (`?select=1`; `components/transactions/bulk-edit.tsx`, `transactions/bulk-actions.ts`,
+      `src/server/bulk.ts`, `src/lib/bulk-result.ts`): the day list's rows become `<label>`s around a checkbox
+      (`name="ids"`, value the row's id, `form="bulk-edit"`: the bar's form, since forms cannot nest and the rows are
+      outside it) and the row summary, so each box is named by its row; no row opens in this mode. Above the list a card
+      `<section>` "Bulk edit · 3 of 50 shown selected" (accent border; sticky from `sm`) holds the `<form id="bulk-edit">`:
+      "Select all shown" / "Clear" (buttons with JavaScript; without it links to `?select=page` / `?select=1`), when the
+      filtered result is larger than the page a checkbox "Select all N matching entries (every page, not only the 50
+      shown)" (`scope=all`), then Action (`op`: Set category · Add tag · Remove tag · Delete; default Set category), its
+      field — Category (active categories, grouped by kind), "Tag to add" (text with a `<datalist>` of the user's tags),
+      or "Tag to remove" (select) — and Apply ("Delete…" for Delete). Without JavaScript all three fields show, labelled
+      "(for Set category)" etc. A hidden `list` carries the list's query string. With JavaScript the form posts through
+      `startTransition` (React does not reset it, so a refused action keeps the ticked boxes); without it the page
+      rendered from the action's state ticks them again (`selectedIds`).
+      `bulkEditAction(prev, formData)` → `BulkState` (`FormState & { confirm?: { entries; transfers; all };
+      selectedIds? }`): `requireUser`; the target is the ticked ids, or with `scope=all` the `list` parsed with
+      `parseListParams` + `listFilters` (the user's today) + the selected wallet group — an invalid amount bound then
+      refuses ("Fix the amount filter first: …"). **Delete always asks first**: without `confirmed` it returns `confirm`
+      with `previewBulk`'s counts, shown in the bar as a `role="group"` "Confirm delete" (its heading takes focus): "Delete
+      12 entries and 3 transfers? Each transfer goes with both of its sides (6 rows). There is no undo: download a backup
+      on the Data page first if you may want them back." + "Go to Data", a danger "Delete 12 entries and 3 transfers"
+      (posts `confirmed=<entries>:<transfers>`) and Cancel (`intent=cancel`). The delete runs with those counts as
+      `expected`; a target changed since gets a new confirmation with "The selection has changed since you confirmed…".
+      Errors land on `op`, `categoryId`, `tagName`, `tagId` or the form message ("Tick at least one entry first, or choose
+      all matching.", the upper bound), values and the selection echoed; focus goes to the confirmation, the first
+      invalid control or the message. On success: `revalidatePath("/", "layout")` and a redirect to the list without
+      `select`, page 1, plus `done=<outcome>` (`encodeOutcome`: only numbers and ids, e.g. `c.4.42.0.0.3`). The page
+      decodes it (`decodeOutcome`) and shows **the result line** above the list (`BulkResult`, `role="status"`, takes
+      the focus on mount): "Moved 42 entries to Groceries; 3 transfers skipped.", "Moved 1 entry to Groceries; 2 were
+      already in it; 1 income entry skipped.", "Deleted 2 entries and 1 transfer (both sides of each transfer).",
+      "Added “trip” to 3 entries; 1 already had it; 2 entries skipped (already at 10 tags).", "Removed “trip” from 4
+      entries; 1 did not have it." (`describeOutcome`; names looked up by the page). The shortcuts (N, `[`, `]`, T) still
+      work while a row's checkbox has focus (`lib/shortcuts.ts` lets a checkbox through, except inside a modal).
     - **Empty states**: no wallets / no transactions at all (as before); a month with nothing in it and no other
       filter: "Nothing in December 2026." with "‹ November 2026" and "All time" buttons; otherwise "No matching
       transactions" + "Clear filters". The chip row shows whenever the user has any transaction.
@@ -1337,6 +1426,11 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - Expense / Income (create and edit, every variant): a Tags field after the note (see "Tags" → Screens).
   - Footer: "Keep open for another" checkbox (on success the form clears amount and note and stays open), Cancel,
     and the submit button ("Add expense", "Add transfer"; Enter submits). `?wallet=` / `?kind=` preselect.
+  - `?from=<transaction id>` ("Duplicate", dialog and full page; wins over `kind` / `wallet`): the form starts from that
+    entry of the user's — kind, wallet, category, amount, note and tags; for a transfer leg its transfer's From, To, Sent
+    and Received — with **today's** date (`duplicateInitial` in `transactions/form-options.ts`). An archived wallet or
+    category is not preselected (the form's usual default applies); Repeat stays Never (the rule is never copied).
+    Another user's or a missing id is ignored: the empty form shows.
   Server Actions, field names and services are unchanged; the form still posts `walletId`, `categoryId`, `amount`,
   `date`, `note` (and the transfer fields), so the pills are radio inputs with those names.
   - As built (step 6): one `EntryForm` (`components/transactions/entry-form.tsx`) with `variant: 'page' | 'dialog'`
@@ -1505,7 +1599,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   all named `currentPassword`. The `@modal` slot has a null `account/page.tsx`.
 - **/login** also shows "Forgot your password? Ask the administrator of this server to reset it." under the form,
   and with `?deleted=1` a status notice "Your account and all its data were deleted." above the heading.
-- **Route contract between features**: `/transactions/new?wallet=<id>&kind=expense|income|transfer`,
+- **Route contract between features**: `/transactions/new?wallet=<id>&kind=expense|income|transfer`, `/transactions/new?from=<id>`,
   `/transactions/<id>/edit`, `/transactions/transfers/<transferId>/edit`,
   `/transactions?wallet=<id>&month=YYYY-MM`, `/wallets/<id>?month=YYYY-MM`, `/wallets/new`, `/wallets/<id>/edit`,
   `/?month=YYYY-MM&currency=XXX`, `/categories?month=…&currency=…`. The transaction form pages accept
@@ -1660,8 +1754,9 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
 - `GET /api/export/backup` → `expenses-tracker-backup-YYYY-MM-DD.json`; `GET /api/export/transactions` → `…-transactions-YYYY-MM-DD.csv`.
   Both require a session (401 otherwise — route handlers are not covered by the `(app)` layout), are scoped to
   the signed-in user, and answer with `Content-Disposition: attachment` and `Cache-Control: no-store`.
-- The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category, from, to,
-  q) and `group` (a wallet group id, ignored when `wallet` is given) and exports **all** matching rows (no pagination). It
+- The CSV export accepts the same filter query parameters as `/transactions` (wallet, kind, category and tag — one
+  id or several, comma-separated —, min, max, from, to, q; an invalid amount bound answers 400 with the reason as
+  `{ error }`, and the list's link leaves such a bound out) and `group` (a wallet group id, ignored when `wallet` is given) and exports **all** matching rows (no pagination). It
   starts with one wallet row per name + currency for every wallet the exported rows use and, when no filter other than
   `wallet` / `group` is given, for every wallet in that scope (unused ones too). Same-named wallets of one currency
   share one wallet row (a CSV merges them): initial balances summed, archived only when all are (latest date), the
@@ -2153,8 +2248,10 @@ query (not one per row).
   The field's text survives a Transfer ↔ Expense switch and "Manage categories" (draft field `tags`), and **"Keep
   open for another" keeps the tags** for the next entry (amount and note are cleared).
 - **Day lists** (/transactions, wallet pages): the pills after the note (see /transactions → List).
-- **/transactions**: one tag filter, `?tag=<id>` (the Tag chip and the no-JS select; the strip, the day totals, the
-  count line, the month links, Clear and "Export CSV" follow it like the other filters).
+- **/transactions**: tag filter `?tag=<id>[,<id>…]` (any of them; the multi-select Tag chip and the no-JS multiple
+  select; the strip, the day totals, the count line, the month links, Clear and "Export CSV" follow it like the other
+  filters). The search also matches tag names. Bulk edit adds or removes a tag on many entries (see /transactions →
+  Selection mode).
 - **/categories**: the **Tags** card below the category cards (`TagSection`,
   `components/categories/tag-section.tsx`): heading "Tags · N tags" (focusable, a `role="status"` line under it), a
   line on what tags are (or, with none, how to make one), then a row per tag (`ExpandableRow`: "#", name, "N

@@ -7,6 +7,7 @@ import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { convertMinor, tableFor, type Conversion } from "@/lib/fx";
+import { amountConditions } from "./_filters";
 import { assertId, isPgId } from "./_validate";
 import { signedAmountSql } from "./wallets";
 
@@ -106,7 +107,18 @@ export function monthDayN(month: string, today: string): number {
   return month < current ? monthLength(month) : 0;
 }
 
-export type Narrow = { walletId?: number; groupId?: number; categoryId?: number; tagId?: number };
+export type Narrow = {
+  walletId?: number;
+  groupId?: number;
+  categoryId?: number;
+  tagId?: number;
+  /** Any of these categories / tags (the /transactions filters); validated ids. */
+  categoryIds?: number[];
+  tagIds?: number[];
+  /** Amount bounds in major units, as `TransactionFilters.minAmount` / `maxAmount`. */
+  minAmount?: string;
+  maxAmount?: string;
+};
 
 /**
  * Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. Exported for
@@ -118,11 +130,20 @@ export function currencyConditions(userId: number, currency: string | null, narr
   if (narrow.walletId !== undefined) conds.push(eq(transactions.walletId, narrow.walletId));
   else if (narrow.groupId !== undefined) conds.push(eq(wallets.groupId, narrow.groupId));
   if (narrow.categoryId !== undefined) conds.push(eq(transactions.categoryId, narrow.categoryId));
+  if (narrow.categoryIds !== undefined && narrow.categoryIds.length > 0) {
+    conds.push(inArray(transactions.categoryId, narrow.categoryIds));
+  }
   if (narrow.tagId !== undefined) {
     conds.push(
       sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${transactionTags.tagId} = ${narrow.tagId})`,
     );
   }
+  if (narrow.tagIds !== undefined && narrow.tagIds.length > 0) {
+    conds.push(
+      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${inArray(transactionTags.tagId, narrow.tagIds)})`,
+    );
+  }
+  conds.push(...amountConditions(narrow.minAmount, narrow.maxAmount));
   return conds;
 }
 
@@ -276,6 +297,11 @@ export async function getMonthTimeline(
     categoryId?: number;
     /** Only entries carrying this tag (the /transactions tag filter). */
     tagId?: number;
+    /** The /transactions filters: any of these categories, any of these tags, the amount range (major units). */
+    categoryIds?: number[];
+    tagIds?: number[];
+    minAmount?: string;
+    maxAmount?: string;
     convert?: ConvertOption;
   },
 ): Promise<MonthTimeline> {
@@ -286,6 +312,11 @@ export async function getMonthTimeline(
   if (opts.groupId !== undefined) narrow.groupId = assertId(opts.groupId, "groupId", "group");
   if (opts.categoryId !== undefined) narrow.categoryId = assertId(opts.categoryId, "categoryId", "category");
   if (opts.tagId !== undefined) narrow.tagId = assertId(opts.tagId, "tagId", "tag");
+  if (opts.categoryIds !== undefined) narrow.categoryIds = opts.categoryIds.map((id) => assertId(id, "categoryId", "category"));
+  if (opts.tagIds !== undefined) narrow.tagIds = opts.tagIds.map((id) => assertId(id, "tagId", "tag"));
+  narrow.minAmount = opts.minAmount;
+  narrow.maxAmount = opts.maxAmount;
+  amountConditions(opts.minAmount, opts.maxAmount); // validated up front (VALIDATION on `min` / `max`)
 
   const previous = shiftMonth(month, -1);
   const { convert } = opts;

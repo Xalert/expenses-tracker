@@ -2,9 +2,11 @@ import "server-only";
 import { and, desc, eq, gte, inArray, lte, ne, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, transactionTags, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
+import { categories, tags, transactions, transactionTags, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
 import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
+import { isGroupColor, type GroupColor } from "@/lib/group-colors";
+import { amountConditions } from "./_filters";
 import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
 import { loadEntryTags, normalizeTagList, setEntryTags } from "./tags";
 import { closedWalletMessage, getOwnedWalletRow, signedAmountSql } from "./wallets";
@@ -17,6 +19,8 @@ export type TransactionView = {
   currency: string;
   categoryId: number | null;
   categoryName: string | null;
+  /** The category's colour (a `GROUP_COLORS` key) or null: the dot before its name in the day lists. */
+  categoryColor: GroupColor | null;
   /** Always positive. */
   amountMinor: number;
   /** Negative for expense / transfer_out. */
@@ -37,16 +41,27 @@ export type TransactionFilters = {
   /** Only wallets of this group; ignored when `walletId` is set. */
   groupId?: number;
   kind?: "expense" | "income" | "transfer";
+  /** Entries of this category; combined with `categoryIds` (any of them matches). */
   categoryId?: number;
-  /** Only entries carrying this tag (an id of the user's; another user's matches nothing). */
+  /** Entries whose category is any of these (another user's id matches nothing). */
+  categoryIds?: number[];
+  /** Only entries carrying this tag (an id of the user's; another user's matches nothing); combined with `tagIds`. */
   tagId?: number;
+  /** Entries carrying any of these tags. */
+  tagIds?: number[];
+  /**
+   * Inclusive amount bounds in major units as typed ("12.50", "12,5"), compared with each entry in its own wallet's
+   * currency (src/lib/amount-filter.ts). Invalid, negative, or a maximum below the minimum → VALIDATION (`min` / `max`).
+   */
+  minAmount?: string;
+  maxAmount?: string;
   /** `YYYY-MM`: the month's first to last day. Ignored (but still validated) when `from` or `to` is given. */
   month?: string;
   /** Inclusive `YYYY-MM-DD`. */
   from?: string;
   /** Inclusive `YYYY-MM-DD`. */
   to?: string;
-  /** Case-insensitive substring match on the note. */
+  /** Case-insensitive substring of the note, the category name or one of the entry's tag names. */
   q?: string;
   /** Default 50, max 200. */
   limit?: number;
@@ -81,6 +96,7 @@ type Row = {
   currency: string;
   categoryId: number | null;
   categoryName: string | null;
+  categoryColor: string | null;
   amountMinor: number;
   date: string;
   note: string | null;
@@ -102,6 +118,7 @@ function baseQuery(db: DBOrTx, where: SQL | undefined) {
       currency: wallets.currency,
       categoryId: transactions.categoryId,
       categoryName: categories.name,
+      categoryColor: categories.color,
       amountMinor: transactions.amountMinor,
       date: transactions.date,
       note: transactions.note,
@@ -133,6 +150,7 @@ function toView(r: Row, tagNames: Map<number, string[]>): TransactionView {
     currency: r.currency,
     categoryId: r.categoryId,
     categoryName: r.categoryName,
+    categoryColor: isGroupColor(r.categoryColor) ? r.categoryColor : null,
     amountMinor: r.amountMinor,
     signedAmountMinor: negative ? -r.amountMinor : r.amountMinor,
     date: r.date,
@@ -178,15 +196,11 @@ export function filterConditions(userId: number, f: TransactionFilters): SQL {
     else if (f.kind === "expense" || f.kind === "income") conds.push(eq(transactions.kind, f.kind));
     else throw new ServiceError("VALIDATION", "Invalid kind filter.", "kind");
   }
-  if (f.categoryId !== undefined) {
-    conds.push(eq(transactions.categoryId, assertId(f.categoryId, "categoryId", "category")));
-  }
-  if (f.tagId !== undefined) {
-    const tagId = assertId(f.tagId, "tagId", "tag");
-    conds.push(
-      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${transactionTags.tagId} = ${tagId})`,
-    );
-  }
+  const categoryIds = idList(f.categoryId, f.categoryIds, "categoryId", "category");
+  if (categoryIds.length > 0) conds.push(inArray(transactions.categoryId, categoryIds));
+  const tagIds = idList(f.tagId, f.tagIds, "tagId", "tag");
+  if (tagIds.length > 0) conds.push(hasAnyTag(tagIds));
+  conds.push(...amountConditions(f.minAmount, f.maxAmount));
   if (f.month !== undefined) {
     if (!isValidMonth(f.month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
     if (f.from === undefined && f.to === undefined) {
@@ -203,8 +217,30 @@ export function filterConditions(userId: number, f: TransactionFilters): SQL {
     conds.push(lte(transactions.date, f.to));
   }
   const q = f.q?.trim();
-  if (q) conds.push(sql`${transactions.note} ilike ${`%${escapeLike(q)}%`} escape '\\'`);
+  if (q) {
+    // Note, category name or a tag name; transfer legs have neither of the last two, so they match on their note.
+    const pattern = `%${escapeLike(q)}%`;
+    conds.push(sql`(${transactions.note} ilike ${pattern} escape '\\'
+      or exists (select 1 from ${categories} c where c.id = ${transactions.categoryId} and c.name ilike ${pattern} escape '\\')
+      or exists (select 1 from ${transactionTags} tt join ${tags} tg on tg.id = tt.tag_id
+        where tt.transaction_id = ${transactions.id} and tg.name ilike ${pattern} escape '\\'))`);
+  }
   return and(...conds)!;
+}
+
+/** Most ids one list filter takes (the URL keeps at most this many, too). */
+export const MAX_FILTER_IDS = 100;
+
+/** `single` and `list` merged, each a valid id (VALIDATION on `field` otherwise), deduped. */
+function idList(single: number | undefined, list: number[] | undefined, field: string, label: string): number[] {
+  const all = [...(single === undefined ? [] : [single]), ...(list ?? [])];
+  if (all.length > MAX_FILTER_IDS) throw new ServiceError("VALIDATION", `Choose at most ${MAX_FILTER_IDS}.`, field);
+  return [...new Set(all.map((id) => assertId(id, field, label)))];
+}
+
+/** The entry carries at least one of `tagIds`. */
+function hasAnyTag(tagIds: number[]): SQL {
+  return sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${inArray(transactionTags.tagId, tagIds)})`;
 }
 
 /** Filtered, paginated transactions (date desc, id desc) plus the total matching count. */

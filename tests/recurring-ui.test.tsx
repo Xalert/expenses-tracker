@@ -83,6 +83,7 @@ const row = (over: Partial<TransactionView>): TransactionView => ({
   currency: "EUR",
   categoryId: 10,
   categoryName: "Housing",
+  categoryColor: null,
   amountMinor: 95_000,
   signedAmountMinor: -95_000,
   date: "2026-11-01",
