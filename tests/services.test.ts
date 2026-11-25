@@ -21,7 +21,7 @@ import {
   unarchiveWallet,
   updateWallet,
 } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -64,7 +64,8 @@ describe("categories", () => {
 describe("wallets", () => {
   it("creates wallets and computes balances", async () => {
     const w = await createWallet(alice.id, { name: "  Cash  ", currency: "eur", initialBalanceMinor: 10000 });
-    expect(w).toMatchObject({ name: "Cash", currency: "EUR", balanceMinor: 10000, transactionCount: 0, archivedAt: null });
+    expect(w).toMatchObject({ name: "Cash", currency: "EUR", initialBalanceMinor: 10000, transactionCount: 0, archivedAt: null });
+    expect(w).not.toHaveProperty("balanceMinor"); // a balance only with `balanceOn`
 
     await createTransaction(alice.id, income(w.id, alice.cat("Salary"), 5000));
     await createTransaction(alice.id, expense(w.id, alice.cat("Food"), 1250));
@@ -73,12 +74,13 @@ describe("wallets", () => {
     await createTransfer(alice.id, { fromWalletId: other.id, toWalletId: w.id, amountMinor: 500, date: "2026-03-12" });
 
     // 10000 + 5000 - 1250 - 2000 + 500
-    expect(await getWallet(alice.id, w.id)).toMatchObject({ balanceMinor: 12250, transactionCount: 4 });
-    expect(await getWallet(alice.id, other.id)).toMatchObject({ balanceMinor: 1500, transactionCount: 2 });
+    expect(await getWallet(alice.id, w.id, { balanceOn: EVERY_ENTRY })).toMatchObject({ balanceMinor: 12250, transactionCount: 4 });
+    expect(await getWallet(alice.id, other.id, { balanceOn: EVERY_ENTRY })).toMatchObject({ balanceMinor: 1500, transactionCount: 2 });
   });
 
   it("allows a negative initial balance and validates input", async () => {
-    expect((await createWallet(alice.id, { name: "Card", currency: "USD", initialBalanceMinor: -500 })).balanceMinor).toBe(-500);
+    const card = await createWallet(alice.id, { name: "Card", currency: "USD", initialBalanceMinor: -500 });
+    expect((await getWallet(alice.id, card.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(-500);
     await expectServiceError(() => createWallet(alice.id, { name: " ", currency: "EUR", initialBalanceMinor: 0 }), "VALIDATION", "name");
     await expectServiceError(() => createWallet(alice.id, { name: "X", currency: "ZZZ", initialBalanceMinor: 0 }), "VALIDATION", "currency");
     await expectServiceError(() => createWallet(alice.id, { name: "X", currency: "EUR", initialBalanceMinor: 1.5 }), "VALIDATION");
@@ -87,7 +89,8 @@ describe("wallets", () => {
   it("updates name and initial balance but never the currency", async () => {
     const w = await createWallet(alice.id, { name: "Cash", currency: "EUR", initialBalanceMinor: 0 });
     const updated = await updateWallet(alice.id, w.id, { name: "Pocket", initialBalanceMinor: 300, currency: "USD" } as never);
-    expect(updated).toMatchObject({ name: "Pocket", initialBalanceMinor: 300, balanceMinor: 300, currency: "EUR" });
+    expect(updated).toMatchObject({ name: "Pocket", initialBalanceMinor: 300, currency: "EUR" });
+    expect((await getWallet(alice.id, w.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(300);
   });
 
   it("lists active first then archived, by name", async () => {
@@ -254,8 +257,8 @@ describe("transfers", () => {
       from: { walletId: a.id, walletName: "A", currency: "EUR", amountMinor: 2500 },
       to: { walletId: b.id, walletName: "B", currency: "EUR", amountMinor: 2500 },
     });
-    expect((await getWallet(alice.id, a.id))?.balanceMinor).toBe(7500);
-    expect((await getWallet(alice.id, b.id))?.balanceMinor).toBe(2500);
+    expect((await getWallet(alice.id, a.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(7500);
+    expect((await getWallet(alice.id, b.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(2500);
 
     const legs = (await listTransactions(alice.id, { kind: "transfer" })).items;
     const out = legs.find((l) => l.kind === "transfer_out")!;
@@ -283,8 +286,8 @@ describe("transfers", () => {
     const t = await createTransfer(alice.id, { fromWalletId: eur.id, toWalletId: ron.id, amountMinor: 1000, receivedAmountMinor: 4975, date: "2026-03-05" });
     expect(t.from).toMatchObject({ currency: "EUR", amountMinor: 1000 });
     expect(t.to).toMatchObject({ currency: "RON", amountMinor: 4975 });
-    expect((await getWallet(alice.id, eur.id))?.balanceMinor).toBe(-1000);
-    expect((await getWallet(alice.id, ron.id))?.balanceMinor).toBe(4975);
+    expect((await getWallet(alice.id, eur.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(-1000);
+    expect((await getWallet(alice.id, ron.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(4975);
   });
 
   it("validates wallets", async () => {
@@ -309,9 +312,9 @@ describe("transfers", () => {
 
     const u = await updateTransfer(alice.id, t.id, { fromWalletId: a.id, toWalletId: c.id, amountMinor: 2000, receivedAmountMinor: 2150, date: "2026-03-06", note: "fx" });
     expect(u).toMatchObject({ id: t.id, date: "2026-03-06", note: "fx", from: { walletId: a.id, amountMinor: 2000 }, to: { walletId: c.id, currency: "USD", amountMinor: 2150 } });
-    expect((await getWallet(alice.id, a.id))?.balanceMinor).toBe(-2000);
-    expect((await getWallet(alice.id, b.id))?.balanceMinor).toBe(0);
-    expect((await getWallet(alice.id, c.id))?.balanceMinor).toBe(2150);
+    expect((await getWallet(alice.id, a.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(-2000);
+    expect((await getWallet(alice.id, b.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(0);
+    expect((await getWallet(alice.id, c.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(2150);
     const legs = (await listTransactions(alice.id)).items;
     expect(legs).toHaveLength(2);
     expect(legs.every((l) => l.date === "2026-03-06" && l.note === "fx")).toBe(true);
@@ -319,8 +322,8 @@ describe("transfers", () => {
     // back to same currency: received forced to equal sent
     const v = await updateTransfer(alice.id, t.id, { fromWalletId: b.id, toWalletId: a.id, amountMinor: 700, receivedAmountMinor: 1, date: "2026-03-07" });
     expect(v.to.amountMinor).toBe(700);
-    expect((await getWallet(alice.id, b.id))?.balanceMinor).toBe(-700);
-    expect((await getWallet(alice.id, a.id))?.balanceMinor).toBe(700);
+    expect((await getWallet(alice.id, b.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(-700);
+    expect((await getWallet(alice.id, a.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(700);
   });
 
   it("delete removes the transfer and both legs", async () => {
@@ -330,7 +333,7 @@ describe("transfers", () => {
     await deleteTransfer(alice.id, t.id);
     expect(await getTransfer(alice.id, t.id)).toBeNull();
     expect((await listTransactions(alice.id)).total).toBe(0);
-    expect((await getWallet(alice.id, a.id))?.balanceMinor).toBe(0);
+    expect((await getWallet(alice.id, a.id, { balanceOn: EVERY_ENTRY }))?.balanceMinor).toBe(0);
     await deleteWallet(alice.id, a.id); // now empty
   });
 });
@@ -354,7 +357,7 @@ describe("dashboard", () => {
     await archiveWallet(alice.id, old.id);
     await createTransfer(alice.id, { fromWalletId: eur2.id, toWalletId: usd.id, amountMinor: 1000, receivedAmountMinor: 1080, date: "2026-03-10" });
 
-    const d = await getDashboard(alice.id, { month: "2026-03" });
+    const d = await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY });
     expect(d.month).toBe("2026-03");
     expect(d.wallets.map((w) => w.name)).toEqual(["Bank", "Cash", "US"]);
     expect(d.totalsByCurrency).toEqual([
@@ -370,12 +373,12 @@ describe("dashboard", () => {
     expect(d.recent).toHaveLength(8);
     expect(d.recent[0].date).toBe("2026-03-31");
 
-    const feb = await getDashboard(alice.id, { month: "2026-02" });
+    const feb = await getDashboard(alice.id, { month: "2026-02", balanceOn: EVERY_ENTRY });
     expect(feb.totalsByCurrency[0]).toMatchObject({ currency: "EUR", incomeMinor: 0, expenseMinor: 99999 });
     expect(feb.expenseByCategory).toHaveLength(1);
 
-    await expectServiceError(() => getDashboard(alice.id, { month: "2026-13" }), "VALIDATION");
-    expect((await getDashboard(bob.id, { month: "2026-03" })).totalsByCurrency).toEqual([]);
+    await expectServiceError(() => getDashboard(alice.id, { month: "2026-13", balanceOn: EVERY_ENTRY }), "VALIDATION");
+    expect((await getDashboard(bob.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).totalsByCurrency).toEqual([]);
   });
 });
 
@@ -395,7 +398,7 @@ describe("cross-user isolation", () => {
     expect(await getTransfer(bob.id, atr.id)).toBeNull();
     expect((await listTransactions(bob.id)).total).toBe(0);
     expect((await listTransactions(bob.id, { walletId: aw.id })).total).toBe(0);
-    expect((await getDashboard(bob.id, { month: "2026-03" })).recent).toEqual([]);
+    expect((await getDashboard(bob.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).recent).toEqual([]);
 
     // wallet mutations
     await expectServiceError(() => updateWallet(bob.id, aw.id, { name: "pwn", initialBalanceMinor: 0 }), "NOT_FOUND");
@@ -416,7 +419,7 @@ describe("cross-user isolation", () => {
     await expectServiceError(() => createTransfer(bob.id, { fromWalletId: bw.id, toWalletId: aw.id, amountMinor: 1, date: "2026-03-05" }), "NOT_FOUND", "toWalletId");
 
     // alice's data is untouched
-    expect(await getWallet(alice.id, aw.id)).toMatchObject({ name: "Alice EUR", balanceMinor: 40, archivedAt: null });
+    expect(await getWallet(alice.id, aw.id, { balanceOn: EVERY_ENTRY })).toMatchObject({ name: "Alice EUR", balanceMinor: 40, archivedAt: null });
     expect((await getTransaction(alice.id, at.id))?.amountMinor).toBe(50);
     expect((await getTransfer(alice.id, atr.id))?.to.amountMinor).toBe(11);
   });

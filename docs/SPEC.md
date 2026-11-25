@@ -86,14 +86,19 @@ this file in the same change and call the deviation out in your final report.
   from the currency (`Intl.NumberFormat(..., {style:'currency', currency}).resolvedOptions().maximumFractionDigits`
   — JPY 0, EUR 2, KWD 3). Stored amounts are always **positive**; the sign comes from the transaction kind.
 - **Wallet** (a.k.a. account): belongs to one user and to exactly one **wallet group** (see "Wallet groups"), has a name, one ISO-4217 currency (immutable after
-  creation), and an initial balance. `balance = initial + Σ income + Σ transfer_in − Σ expense − Σ transfer_out`.
+  creation), and an initial balance. `balance = initial + Σ income + Σ transfer_in − Σ expense − Σ transfer_out`,
+  over the entries dated **on or before a day**. A wallet's balance, wherever it is shown as its current balance
+  (/wallets, the wallet page, the Overview's Wallets card for the current month, their totals and the converted
+  "Total in <currency>"), is the balance at the end of the **user's today** (`todayInZone(user.timeZone)`, passed in
+  by the caller): future-dated entries are not in it, and where they change it /wallets and the wallet page show
+  the "projected" balance beside it. A past month's Wallets card uses that month's last day instead.
   A wallet with transactions cannot be deleted, only archived (hidden from pickers and dashboard totals; its
   history stays visible). A wallet with no transactions can be deleted.
   - **Reconciling** a wallet: the user gives its actual balance (in the wallet's currency, may be negative) and a
     date (default today, never after the user's today). The difference = actual − the balance at the end of that
     date (initial + every entry dated on or before it, transfers included; later entries left out, as the wallet
     page's "projected" days). Positive → one **income** entry, negative → one **expense**, dated that day, of
-    `|difference|`, note "Balance adjustment", in the user's category "Balance adjustment" of that kind (matched
+    `|difference|`, with no note (the category names it), in the user's category "Balance adjustment" of that kind (matched
     ignoring case; created when missing; an archived one is used as it is and stays archived). Zero → nothing is
     recorded. It is an ordinary entry (editable, deletable, counted in the month's figures); the initial balance is
     never changed. Refused for an archived wallet or one in an archived group, as any new entry.
@@ -428,7 +433,7 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
-`actualBalance`, `color`, `today`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries).
+`actualBalance`, `color`, `today`, `balanceOn`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries).
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -471,16 +476,26 @@ uncontrolled forms after an action, hence `values` + `defaultValue`. For one-cli
 
 ```ts
 // wallets.ts
-type WalletView = { id; name; currency; initialBalanceMinor; balanceMinor; transactionCount; archivedAt: Date | null; createdAt: Date }
-listWallets(userId, opts?: { includeArchived?: boolean }): WalletView[]        // archived excluded by default; active first, then by name (case-insensitive)
+type WalletView = { id; groupId; groupName; groupPosition; groupArchived; name; currency; initialBalanceMinor;
+                    transactionCount /* every entry, future-dated included */; archivedAt: Date | null; createdAt: Date }
+type WalletWithBalance = WalletView & {
+  balanceOn: string;          // YYYY-MM-DD the balance is at the end of
+  balanceMinor;               // initial + every entry dated ≤ balanceOn, transfers included
+  laterChangeMinor;           // net of the entries dated after balanceOn (0 if none): balance + it = the "projected" one
+}
+listWallets(userId, opts?: { includeArchived?: boolean; groupId?: number }): WalletView[]   // archived excluded by default; active first, then by name (case-insensitive)
+listWallets(userId, opts: { …; balanceOn: string }): WalletWithBalance[]                     // with balances at the end of that day
 getWallet(userId, walletId): WalletView | null                                 // archived wallets included
+getWallet(userId, walletId, { balanceOn }): WalletWithBalance | null
+//   There is no balance without `balanceOn` (the type has none), so a page has to choose the day: the user's today
+//   (`todayInZone`) for a current balance. An invalid `balanceOn` → VALIDATION (field `balanceOn`).
 createWallet(userId, { name, currency, initialBalanceMinor }): WalletView      // name trimmed 1–60 chars; currency upper-cased + validated; initial may be negative
 updateWallet(userId, walletId, { name, initialBalanceMinor }): WalletView     // currency is immutable
 archiveWallet(userId, walletId): WalletView / unarchiveWallet(userId, walletId): WalletView
 deleteWallet(userId, walletId): void                                           // CONFLICT if it has transactions
 
 // reconcile.ts
-BALANCE_ADJUSTMENT = "Balance adjustment"                                      // the category name and the entry's note
+BALANCE_ADJUSTMENT = "Balance adjustment"                                      // the category name (the entry has no note)
 getWalletBalanceOn(userId, walletId, date, db?): number | null                 // initial + entries dated ≤ date; null if not owned
 listWalletClosingBalances(userId, walletId, through): { initialBalanceMinor; closings: [date, closingMinor][] } | null
 //   every date ≤ through that has entries, ascending, with the balance at its end (the reconcile form's live preview;
@@ -559,10 +574,13 @@ deleteTransfer(userId, transferId): void                            // removes t
 // (receivedAmountMinor ignored); different currency ⇒ receivedAmountMinor required and > 0 (field receivedAmount).
 
 // dashboard.ts
-getDashboard(userId, opts: { month: string /* YYYY-MM, required (the caller's current month); invalid → VALIDATION */ }): {
+getDashboard(userId, opts: { month: string /* YYYY-MM, required (the caller's current month); invalid → VALIDATION */;
+                              balanceOn: string /* YYYY-MM-DD, required: today for the current month, else the month's last day */;
+                              groupId?: number }): {
   month: string;
-  wallets: WalletView[];                                                     // active only
+  wallets: WalletWithBalance[];                                              // active only, balances at the end of balanceOn
   totalsByCurrency: { currency; balanceMinor; incomeMinor; expenseMinor }[]; // one row per currency of an active wallet, sorted by code;
+                                                                             // balance = the sum of those wallets' balances at balanceOn;
                                                                              // income/expense for the month on active wallets, transfers excluded
   expenseByCategory: { currency; categoryId; categoryName; amountMinor }[];  // for the month on active wallets, largest first
   recent: TransactionView[];                                                 // latest 8, all wallets (archived included)
@@ -614,9 +632,6 @@ getWalletMonth(userId, walletId, month, { today }): {          // null when the 
 getCategoryMonthAmounts(userId, { month; currency; groupId?; convert? }): { amounts: Map<categoryId, number>; missingCurrencies: string[] }
 //   expense + income per category in the month (archived wallets included); with convert every currency converted
 //   per category, date and currency at that date's rate, without it only wallets in `currency` (/categories)
-getWalletBalancesOn(userId, date, { groupId? }): Map<walletId, number>
-//   each wallet's balance at the end of `date`: initial + every entry dated on or before it, transfers included
-//   (archived wallets too); invalid date → VALIDATION. The Overview's Wallets card for a past month
 // exchange-rates.ts (provider rates, in the database; see "Exchange rates")
 getDailyRates(from, to, now?): DailyRates | null      // + `incomplete` when part could not be fetched now
 getConversion(userId, from, to, now?): Conversion     // getDailyRates + the user's manual rates
@@ -952,10 +967,12 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     with a note naming it (`walletsTotalNotes` / `monthConversionNotes`; `missingCurrencies` from the month
     services) and an "Enter a rate for KWD" link to `/rates` (`ConversionNotes`, `ratesNeeded`: the target currency
     itself when it is the one without a rate).
-    - **Wallets card for a past month**: the balances at the end of that month's last day (`getWalletBalancesOn`;
+    - **Wallets card for a past month**: the balances at the end of that month's last day (`getDashboard` with
+      `balanceOn` = that day;
       "Balances at the end of 31 Oct 2026" under the heading) converted at that day's rates (`tableFor(conv,
-      lastDay)`, the latest business day on or before it). The current month keeps today's balances and today's
-      (latest) rates. The month change column is the month's in − out either way.
+      lastDay)`, the latest business day on or before it). The current month keeps today's balances (`balanceOn` =
+      today: future-dated entries left out, the same number as /wallets and the wallet page; no "projected" hint
+      here) and today's (latest) rates. The month change column is the month's in − out either way.
     - **Notes**: "Rates of 6 Nov 2026 · <source>"; during an outage "Exchange rates could not be updated: rates
       from 6 Nov 2026 · <source>" (and for the month figures "…: rates from 6 Nov 2026 stand in for later days.");
       "KWD: your own rate." when a wallet was converted with the user's own rate; with no provider table at all but
@@ -1172,9 +1189,10 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   with All and two or more groups the cards sit under one heading per group (by position, with the group's colour
   dot), and a "Groups" card (order, rename / colour, archive, delete, "New group") plus, with All, a closed "Archived
   groups" section close the page. Active wallets grouped by currency: a group heading
-  (code, currency name, group total) over a grid of cards — name, entry count, balance, this month's change
-  (coloured), and a small line of the balance through the month (flat and muted when nothing changed). Cards link
-  to `/wallets/<id>`. Below, an "Archived" list (name, currency, entry count, balance, an Unarchive button).
+  (code, currency name, group total) over a grid of cards — name, entry count, balance today, this month's change
+  (coloured), "€… projected after later entries" when future-dated entries change it, and a small line of the
+  balance through the month (flat and muted when nothing changed). Cards link to `/wallets/<id>`. Below, an
+  "Archived" list (name, currency, entry count, balance today, an Unarchive button).
 - **/wallets/new**, **/wallets/[id]/edit** (dialog) — name; currency (new only): buttons for the pinned common
   currencies plus a "type a code" field with suggestions over the full list, and a line saying it cannot be changed
   later; starting balance (the currency's symbol/code beside a large input, may be negative; hint as now). Edit
@@ -1190,26 +1208,31 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   (`/transactions?wallet=<id>&month=…`). Archived wallets show a notice instead of the add buttons.
 - **Wallet screens, as built (step 5):**
   - **/wallets** (`page.tsx`, `components/wallets/wallet-cards.tsx`): `PageHeader` "Wallets" with the primary
-    "+ New wallet" pill. Groups follow `listUserCurrencies` (active wallets, by code): an `<h2>` with the code
-    (15px/800) and `currencyName` (muted), the group's total balance on the right (`text-expense` when negative),
+    "+ New wallet" pill. The wallets come from `listWallets(…, { balanceOn: today })`: every balance on the page is
+    the balance at the end of the user's today. Groups follow `listUserCurrencies` (active wallets, by code): an
+    `<h2>` with the code (15px/800) and `currencyName` (muted), the group's total balance (the sum of its cards'
+    balances) on the right (`text-expense` when negative),
     then a `<ul>` grid `repeat(auto-fill, minmax(min(100%, 320px), 1fr))`. A card is one link to `/wallets/<id>`:
     name, `entryCountLabel` ("27 entries" / "1 entry" / "No entries yet"), the balance (28px/800, `text-expense` when
     negative), `changeLabel` of `getWalletMonth(…, currentMonth).inMinor − outMinor` ("+€2,890.90 this month" in
-    `text-income`, negative in `text-expense`, "No change this month" muted), and a 120×40 `aria-hidden` SVG
+    `text-income`, negative in `text-expense`, "No change this month" muted), when the wallet's future-dated entries
+    change its balance (`laterChangeMinor` ≠ 0) "€487.66 projected after later entries" (13px, muted;
+    `projectedLabel`), and a 120×40 `aria-hidden` SVG
     polyline (`sparklinePoints`: the opening balance, then each day's closing so far, spread over the whole width and
     scaled to their own min / max; `text-income` / `text-expense` by the change, `text-foreground` when the month
     moved but netted to zero, and a flat middle line in `text-border-strong` when no day moved the balance).
     **Archived**: a muted `<h2>`, then one card of rows — the name (a link), "EUR · 18 entries · hidden from Overview
-    and pickers", the balance (muted) and an Unarchive secondary pill (`unarchiveWalletAction`, no confirm). No
+    and pickers" (plus " · €… projected after later entries" as on a card; the same in "Archived groups"), the
+    balance (muted) and an Unarchive secondary pill (`unarchiveWalletAction`, no confirm). No
     wallets: the empty state as before; only archived ones: "All your wallets are archived…" above the Archived list.
     `WalletCard` / `WalletRow` were removed.
   - **/wallets/[id]** (`[id]/page.tsx`, `components/wallets/{wallet-month-chart,wallet-menu}.tsx`): a breadcrumb
     `<nav aria-label="Breadcrumb"><ol>` "Wallets / <name>" (`aria-current="page"`). The header card (20px radius):
     `<h1>` name (22px/800), the currency pill (`bg-surface-raised`, `title` = currency name), an "Archived" pill
-    when archived; the balance at the end of today (`getWalletBalanceOn(…, today)`: entries dated later left out;
-    36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started with <initial balance>", and,
-    when entries dated after today change it, "€… projected after the entries dated later" (`WalletView.balanceMinor`,
-    which counts every entry). On the right: Expense / Income / Transfer secondary pills with the kind dot
+    when archived; the balance at the end of today (`getWallet(…, { balanceOn: today })`: entries dated later left
+    out, the same number as on /wallets and the Overview; 36px, 44px from `sm`, /800, `text-expense` when negative);
+    "Balance today · started with <initial balance>", and, when entries dated after today change it, "€… projected
+    after the entries dated later" (`balanceMinor + laterChangeMinor`). On the right: Expense / Income / Transfer secondary pills with the kind dot
     (`bg-expense-dot` / `bg-income` / `bg-transfer`) linking to `/transactions/new?wallet=<id>&kind=…&returnTo=<this
     page>` (the dialog ignores `returnTo`; the no-JS full page returns here), and the "⋯" button
     (`aria-haspopup="menu"`, "More actions for <name>") opening a `Popover role="menu"`: "Edit wallet" (link to

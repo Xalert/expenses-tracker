@@ -20,7 +20,7 @@ import { listCategories } from "@/server/categories";
 import { toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
 import { countRecurringForWallet } from "@/server/recurring";
-import { getWalletBalanceOn, listWalletClosingBalances } from "@/server/reconcile";
+import { listWalletClosingBalances } from "@/server/reconcile";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
 import { reconcileWalletAction } from "../actions";
@@ -51,11 +51,13 @@ const KIND_PILLS = [
 export default async function WalletPage({ params, searchParams }: Props) {
   const user = await requireUser();
   const walletId = parseWalletId((await params).id);
-  const wallet = walletId ? await getWallet(user.id, walletId) : null;
+  const today = todayInZone(user.timeZone);
+  // The balance at the end of today, as on /wallets and the Overview: entries dated later are "projected" on this
+  // page (the day headers), so they are left out, and a reconciliation as of today makes it exactly the balance typed.
+  const wallet = walletId ? await getWallet(user.id, walletId, { balanceOn: today }) : null;
   if (!wallet) notFound();
 
   const sp = await searchParams;
-  const today = todayInZone(user.timeZone);
   const maxMonth = today.slice(0, 7);
   const requested = typeof sp.month === "string" && isValidMonth(sp.month) ? sp.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
@@ -70,10 +72,8 @@ export default async function WalletPage({ params, searchParams }: Props) {
   const pageHref = isCurrentMonth ? self : `${self}?month=${month}`;
   const reconcileHref = `${self}?${isCurrentMonth ? "" : `month=${month}&`}reconcile=1`;
   const reconcileOpen = !hidden && sp.reconcile === "1";
-  // The balance at the end of today: entries dated later are "projected" on this page (the day headers), so they
-  // are left out here too, and a reconciliation as of today makes this exactly the balance typed.
-  const balanceToday = (await getWalletBalanceOn(user.id, wallet.id, today)) ?? wallet.balanceMinor;
-  const projectedMinor = wallet.balanceMinor;
+  const balanceToday = wallet.balanceMinor;
+  const projectedMinor = wallet.balanceMinor + wallet.laterChangeMinor;
   const reconcileData = reconcileOpen ? await listWalletClosingBalances(user.id, wallet.id, today) : null;
   const money = (minor: number, opts?: { signed?: boolean }) => formatMoney(minor, wallet.currency, opts);
   const { items, total } = await listTransactions(user.id, { walletId: wallet.id, month, limit: MONTH_LIMIT });

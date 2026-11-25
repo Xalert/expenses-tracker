@@ -48,10 +48,10 @@ describe("reconcileWallet", () => {
       walletId: w.id,
       amountMinor: 1_240,
       date: TODAY,
-      note: "Balance adjustment",
+      note: null, // the category names it
       categoryName: "Balance adjustment",
     });
-    expect((await getWallet(user.id, w.id))!.balanceMinor).toBe(96_760);
+    expect((await getWallet(user.id, w.id, { balanceOn: TODAY }))!.balanceMinor).toBe(96_760);
     expect(await adjustmentCategories()).toEqual([expect.objectContaining({ kind: "expense", archivedAt: null })]);
   });
 
@@ -94,7 +94,7 @@ describe("reconcileWallet", () => {
     const w = await wallet("EUR", -10_000);
     const r = await reconcile(w.id, -12_550);
     expect(r).toMatchObject({ trackedBalanceMinor: -10_000, differenceMinor: -2_550 });
-    expect((await getWallet(user.id, w.id))!.balanceMinor).toBe(-12_550);
+    expect((await getWallet(user.id, w.id, { balanceOn: TODAY }))!.balanceMinor).toBe(-12_550);
     const up = await reconcile(w.id, 3_000);
     expect(up.transaction).toMatchObject({ kind: "income", amountMinor: 15_550 });
   });
@@ -188,7 +188,7 @@ describe("reconcileWallet", () => {
     const w = await wallet();
     const [a, b] = await Promise.all([reconcile(w.id, 95_000), reconcile(w.id, 95_000)]);
     expect([a.differenceMinor, b.differenceMinor].sort()).toEqual([-5_000, 0]);
-    expect((await getWallet(user.id, w.id))!.balanceMinor).toBe(95_000);
+    expect((await getWallet(user.id, w.id, { balanceOn: TODAY }))!.balanceMinor).toBe(95_000);
   });
 });
 

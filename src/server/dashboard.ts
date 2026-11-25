@@ -7,16 +7,20 @@ import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { listTransactions, type TransactionView } from "./transactions";
 import { walletInOpenGroupSql } from "./wallet-groups";
-import { listWallets, type WalletView } from "./wallets";
+import { assertDate } from "./_validate";
+import { listWallets, type WalletWithBalance } from "./wallets";
 
 export type CurrencyTotals = { currency: string; balanceMinor: number; incomeMinor: number; expenseMinor: number };
 export type CategorySpend = { currency: string; categoryId: number; categoryName: string; amountMinor: number };
 
 export type Dashboard = {
   month: string;
-  /** Active wallets only. */
-  wallets: WalletView[];
-  /** One row per currency held in an active wallet (sorted by code); income/expense are for `month`, transfers excluded. */
+  /** Active wallets only, with their balances at the end of `balanceOn`. */
+  wallets: WalletWithBalance[];
+  /**
+   * One row per currency held in an active wallet (sorted by code): the balance is the sum of those wallets' balances
+   * at the end of `balanceOn`; income/expense are for `month`, transfers excluded.
+   */
   totalsByCurrency: CurrencyTotals[];
   /** Expenses in `month` on active wallets, per currency + category, largest first. */
   expenseByCategory: CategorySpend[];
@@ -26,17 +30,21 @@ export type Dashboard = {
 
 export const RECENT_COUNT = 8;
 
-/** `month` is required: the caller decides which month is current (the user's today, `todayInZone`). */
+/**
+ * `month` and `balanceOn` are required: the caller decides which month is current and the day the balances are at
+ * the end of — the user's today (`todayInZone`) for the current month, the month's last day for a past one.
+ */
 export async function getDashboard(
   userId: number,
-  opts: { month: string; groupId?: number },
+  opts: { month: string; balanceOn: string; groupId?: number },
 ): Promise<Dashboard> {
   const month = opts.month;
   if (!isValidMonth(month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
+  const balanceOn = assertDate(opts.balanceOn, "balanceOn");
   const { from, to } = monthRange(month);
   const db = await getDb();
 
-  const activeWallets = await listWallets(userId, { groupId: opts.groupId });
+  const activeWallets = await listWallets(userId, { groupId: opts.groupId, balanceOn });
 
   const totals = new Map<string, CurrencyTotals>();
   for (const w of activeWallets) {

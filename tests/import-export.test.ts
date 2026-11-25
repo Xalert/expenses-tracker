@@ -11,7 +11,7 @@ import { createTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { createWalletGroup, listWalletGroups } from "@/server/wallet-groups";
 import { archiveWallet, createWallet, listWallets } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -70,7 +70,7 @@ async function newUser(email: string) {
 type WalletState = { name: string; currency: string; initial: number; balance: number; archived: boolean; count: number };
 
 async function walletState(userId: number): Promise<WalletState[]> {
-  return (await listWallets(userId, { includeArchived: true }))
+  return (await listWallets(userId, { includeArchived: true, balanceOn: EVERY_ENTRY }))
     .map((w) => ({
       name: w.name,
       currency: w.currency,
@@ -366,7 +366,7 @@ describe("CSV round trip", () => {
       { name: "Cash", currency: "EUR", archived: false, group: "Personal", described: false },
       { name: "Tokyo", currency: "JPY", archived: false, group: "Personal", described: false },
     ]);
-    const ws = await listWallets(alice.id);
+    const ws = await listWallets(alice.id, { balanceOn: EVERY_ENTRY });
     expect(ws.find((w) => w.currency === "EUR")?.balanceMinor).toBe(-1_250);
     expect(ws.find((w) => w.currency === "JPY")?.balanceMinor).toBe(-1_500);
   });
@@ -430,8 +430,8 @@ describe("archived wallets", () => {
     const { old } = await seedAlice();
     const bob = await newUser("bob@example.com");
     await runImport(bob.id, await backupText(alice.id));
-    const copy = (await listWallets(bob.id, { includeArchived: true })).find((w) => w.name === "Old card")!;
-    const orig = (await listWallets(alice.id, { includeArchived: true })).find((w) => w.id === old.id)!;
+    const copy = (await listWallets(bob.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.name === "Old card")!;
+    const orig = (await listWallets(alice.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.id === old.id)!;
     expect(copy.archivedAt).not.toBeNull();
     expect(copy.balanceMinor).toBe(orig.balanceMinor);
     expect(copy.transactionCount).toBe(orig.transactionCount);
@@ -819,7 +819,7 @@ describe("CSV wallet rows and groups", () => {
     expect(await snapshot()).toEqual(before);
     return p;
   };
-  const wallet = async (name: string) => (await listWallets(alice.id, { includeArchived: true })).find((w) => w.name === name);
+  const wallet = async (name: string) => (await listWallets(alice.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).find((w) => w.name === name);
   const groupNames = async () => (await listWalletGroups(alice.id)).map((g) => g.name).sort();
 
   it("creates wallets with the initial balance, group and archived date of their wallet rows", async () => {

@@ -3,7 +3,7 @@ import { cn } from "@/lib/cn";
 import { currencyName } from "@/lib/currencies";
 import { formatMoney } from "@/lib/money";
 import { changeLabel, entryCountLabel, isFlat, sparklinePoints } from "@/lib/wallet-chart";
-import type { WalletView } from "@/server/wallets";
+import type { WalletWithBalance } from "@/server/wallets";
 import { unarchiveWalletAction } from "@/app/(app)/wallets/actions";
 import { ActionButton } from "./action-button";
 
@@ -44,9 +44,22 @@ export function BalanceSparkline({ month }: { month: WalletCardMonth }) {
   );
 }
 
-/** One active wallet: name, entry count, balance, this month's change and the balance line; links to its page. */
-export function WalletTile({ wallet, month }: { wallet: WalletView; month: WalletCardMonth }) {
+/**
+ * The "projected" hint for a wallet with future-dated entries (the balance shown is today's and they are not in it),
+ * as on the wallet page; null when they change nothing.
+ */
+export function projectedLabel(wallet: WalletWithBalance): string | null {
+  if (wallet.laterChangeMinor === 0) return null;
+  return `${formatMoney(wallet.balanceMinor + wallet.laterChangeMinor, wallet.currency)} projected after later entries`;
+}
+
+/**
+ * One active wallet: name, entry count, balance today, this month's change, the "projected" hint when it has
+ * future-dated entries, and the balance line; links to its page.
+ */
+export function WalletTile({ wallet, month }: { wallet: WalletWithBalance; month: WalletCardMonth }) {
   const change = month.changeMinor;
+  const projected = projectedLabel(wallet);
   return (
     <li className="min-w-0">
       <Link
@@ -81,13 +94,14 @@ export function WalletTile({ wallet, month }: { wallet: WalletView; month: Walle
           >
             {changeLabel(change, wallet.currency)}
           </span>
+          {projected && <span className="text-[13px] text-muted-foreground tabular-nums">{projected}</span>}
         </span>
       </Link>
     </li>
   );
 }
 
-/** A currency's heading row (code, name, the total of its active wallets) over the grid of its wallet cards. */
+/** A currency's heading row (code, name, the total of its active wallets' balances today) over its wallet cards. */
 export function WalletGroup({
   currency,
   wallets,
@@ -96,7 +110,7 @@ export function WalletGroup({
   as: Heading = "h2",
 }: {
   currency: string;
-  wallets: WalletView[];
+  wallets: WalletWithBalance[];
   months: Map<number, WalletCardMonth>;
   /** Keeps heading ids unique when the same currency is listed under several groups. */
   idPrefix?: string;
@@ -131,7 +145,7 @@ export function WalletGroup({
 }
 
 /** The Archived section: a muted heading over rows (name, currency · entries · hidden…, balance, Unarchive). */
-export function ArchivedWallets({ wallets }: { wallets: WalletView[] }) {
+export function ArchivedWallets({ wallets }: { wallets: WalletWithBalance[] }) {
   return (
     <section aria-labelledby="wallets-archived" className="flex flex-col gap-3">
       <h2 id="wallets-archived" className="px-1 text-sm font-bold text-muted-foreground">
@@ -150,6 +164,7 @@ export function ArchivedWallets({ wallets }: { wallets: WalletView[] }) {
               <p className="text-xs text-muted-foreground">
                 {w.currency} · {w.transactionCount === 0 ? "no entries" : entryCountLabel(w.transactionCount)} · hidden from
                 Overview and pickers
+                {projectedLabel(w) && ` · ${projectedLabel(w)}`}
               </p>
             </div>
             <span className="ml-auto font-bold text-muted-foreground tabular-nums">

@@ -12,7 +12,7 @@ import { WalletsCard } from "@/components/dashboard/overview-lists";
 import { DayStrip } from "@/components/transactions/day-strip";
 import { exportCsvHref, listHref, parseListParams } from "@/components/transactions/list-params";
 import type { MonthTimeline } from "@/server/insights";
-import type { WalletView } from "@/server/wallets";
+import type { WalletWithBalance } from "@/server/wallets";
 
 describe("ConvertSwitch", () => {
   it("links both views, marks the current one and links the rates page", () => {
@@ -47,8 +47,8 @@ describe("ConversionNotes", () => {
   });
 });
 
-const walletView = (over: Partial<WalletView>): WalletView =>
-  ({ id: 1, name: "Cash", currency: "EUR", balanceMinor: 1000, initialBalanceMinor: 0, archivedAt: null, ...over }) as WalletView;
+const walletView = (over: Partial<WalletWithBalance>): WalletWithBalance =>
+  ({ id: 1, name: "Cash", currency: "EUR", balanceOn: "2026-10-31", balanceMinor: 1000, laterChangeMinor: 0, initialBalanceMinor: 0, archivedAt: null, ...over }) as WalletWithBalance;
 
 describe("WalletsCard", () => {
   it("for a past month says the balances are of that month's end, and links a missing rate", () => {

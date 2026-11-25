@@ -49,7 +49,7 @@ describe("reconcileWalletAction", () => {
     expect(state.message).toMatch(/^Added an expense of €12\.40 on .+ in “Balance adjustment”\. The balance on that day is now €987\.60\.$/);
     expect(state.values).toEqual({ date: today() });
     expect(next.revalidated).toEqual([["/", "layout"]]);
-    expect((await getWallet(user.id, w.id))!.balanceMinor).toBe(98_760);
+    expect((await getWallet(user.id, w.id, { balanceOn: today() }))!.balanceMinor).toBe(98_760);
   });
 
   it("parses in the wallet's currency: whole yen, three-decimal dinars, negatives", async () => {
@@ -61,7 +61,7 @@ describe("reconcileWalletAction", () => {
     expect(tooFine.fieldErrors?.actualBalance).toMatch(/whole amount in JPY/);
     const kwd = await createWallet(user.id, { name: "Dinar", currency: "KWD", initialBalanceMinor: 0 });
     await reconcileWalletAction(kwd.id, {}, fd({ actualBalance: "-1.234", date: today() }));
-    expect((await getWallet(user.id, kwd.id))!.balanceMinor).toBe(-1_234);
+    expect((await getWallet(user.id, kwd.id, { balanceOn: today() }))!.balanceMinor).toBe(-1_234);
   });
 
   it("says when the balance already matches and records nothing", async () => {
