@@ -27,16 +27,18 @@ this file in the same change and call the deviation out in your final report.
   sets it and runs `next build` / `next start`, so they work in any shell, Windows `cmd` included.
 - Tests live in `tests/*.test.ts(x)`. `tests/helpers.ts` gives `useFreshDb()` (async: truncates every app table of the
   file's in-memory PGlite, restarting identities, installs it via `setDb` and returns it) and `await makeUser(db, email)` (user + default categories, `cat(name)` → category id).
-- End-to-end tests live in `e2e/*.spec.ts` (Playwright, Chromium; `playwright.config.ts`). `scripts/e2e.mjs` starts
+- End-to-end tests live in `e2e/*.spec.ts` (Playwright: Chromium, Firefox, WebKit; `playwright.config.ts`). `scripts/e2e.mjs` starts
   `compose.e2e.yaml` (project `expenses-tracker-e2e`, `127.0.0.1:5434`, tmpfs) unless `E2E_DATABASE_URL` is set,
   builds (unless `E2E_SKIP_BUILD=1`), copies `.next/static` and `public/` into the standalone output as the
   Dockerfile does, runs `playwright test` (its `webServer` starts `node .next/standalone/server.js` with
   `EXCHANGE_RATES=false`) and runs `compose down -v` afterwards, also on failure. The config refuses a database whose
   name lacks `e2e` (or on port 5433); `e2e/global-setup.ts` empties it first. Seeding goes through the services
   (`e2e/support/seed.ts`, `server-only` stubbed by `e2e/tsconfig.json`), one fresh user per test; a session is a
-  `sessions` row plus the `et_session` cookie. Projects: `desktop` 1280px (all but `@phone-only`), `phone` 375px
-  with touch (`@phone` and `@phone-only`). The `consoleErrors` fixture fails a test on any console error or uncaught
-  page error unless it lists the pattern in `allowConsoleErrors`. vitest only includes `tests/**`.
+  `sessions` row plus the `et_session` cookie. Projects: `desktop` 1280px (all but `@phone-only`) in Chromium, with
+  the same tests as `desktop-firefox` and `desktop-webkit`; `phone` 375px with touch (`@phone` and `@phone-only`) in
+  Chromium, and the same as `phone-webkit`. The `consoleErrors` fixture fails a test on any console error or uncaught
+  page error unless it lists the pattern in `allowConsoleErrors`; in WebKit it also ignores the "Fetch API cannot
+  load …?_rsc=… due to access control checks." rejection of a Next.js prefetch that a `page.goto` cancelled. vitest only includes `tests/**`.
 
 - **Development database.** `compose.dev.yaml` runs `postgres:17-alpine` (user, password and database
   `expenses`; port `127.0.0.1:5433`; named volume `expenses-dev-pg`; an init script creates a second database

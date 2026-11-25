@@ -21,7 +21,11 @@ test.describe("wallet groups", () => {
     await page.goto("/wallets");
     await hydrated(page);
     const groups = page.getByRole("region", { name: /^Groups · 3 groups/ });
-    const names = () => groups.getByRole("listitem").getByRole("button").filter({ hasText: /wallet/ }).allInnerTexts();
+    // The same region, found through its heading: in Playwright's Firefox (1.65, build 1572) a multi-element query
+    // (allInnerTexts) under a region located by its accessible name makes the next query crash the content process
+    // (SIGSEGV), even on a static one-section page.
+    const list = page.getByRole("region").filter({ has: page.getByRole("heading", { name: /^Groups · 3 groups/ }) });
+    const names = () => list.getByRole("listitem").getByRole("button").filter({ hasText: /wallet/ }).allInnerTexts();
     expect((await names()).map((n) => n.split("\n")[0])).toEqual(["Personal", "Work", "Travel"]);
 
     // Move Travel up: a plain form post.
