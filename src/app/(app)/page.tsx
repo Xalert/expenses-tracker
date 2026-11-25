@@ -1,3 +1,4 @@
+import { BudgetsCard } from "@/components/dashboard/budgets-card";
 import { MonthChart } from "@/components/dashboard/month-chart";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
@@ -24,6 +25,7 @@ import {
   toneOf,
   walletsTotalNotes,
 } from "@/lib/overview";
+import { getMonthBudgets, listBudgets } from "@/server/budgets";
 import { getDashboard } from "@/server/dashboard";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import {
@@ -162,6 +164,22 @@ export default async function OverviewPage({ searchParams }: Props) {
   const previousName = monthName(previousMonth);
   const { noSpendDays: noSpend, topCategory } = insights;
 
+  // Budgets: account-wide, in each budget's own currency over every wallet (not this page's switches); in a group
+  // scope only a line says so. The conversion for the month figures serves them when there is one.
+  const hasBudgets = (await listBudgets(user.id)).length > 0;
+  const allHeld = hasBudgets && !selected ? new Set((await listWallets(user.id, { includeArchived: true })).map((w) => w.currency)) : null;
+  const budgets =
+    hasBudgets && !selected
+      ? await getMonthBudgets(user.id, {
+          month,
+          today,
+          convert:
+            allHeld && allHeld.size > 1
+              ? (convert ?? (await getConversion(user.id, monthRange(month).from, monthRange(month).to)))
+              : undefined,
+        })
+      : null;
+
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <section
@@ -245,6 +263,8 @@ export default async function OverviewPage({ searchParams }: Props) {
           sub={`${previousName} had ${noSpend.previousDays} of ${noSpend.previousOutOf}`}
         />
       </div>
+
+      {hasBudgets && <BudgetsCard budgets={budgets} href={overviewHref(month, null, maxMonth, "/categories")} />}
 
       <div className="grid gap-4 sm:gap-5 lg:grid-cols-2">
         <WalletsCard

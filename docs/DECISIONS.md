@@ -171,6 +171,27 @@ Added 2026-11-18 (closing the category gaps):
 | *(2026-11-18)* Every category list is ordered in one place, in JS: `sortCategories` / `compareCategoryNames` (`src/lib/category-order.ts`: expense first, active before archived, then the name lower-cased compared by code point, then id); the services sort after the query, and `pickTopCategory`, the spending split and the dashboard's per-category list break ties with the same name rule | Chosen over `COLLATE "C"` on `lower(name)`: Postgres' `lower()` itself depends on the database's ctype for non-ASCII letters, so only JS gives the same order on every instance (and PGlite); category lists are small. Not `localeCompare` either (runtime- and locale-dependent) | planner |
 | *(2026-11-18)* After a kind change the row's new card announces it and takes the focus (its heading at once, then the row's button once the refreshed list has it), told by the old card through a window event | The two cards are separate components; focus left on the old card's heading pointed at a list the row was no longer in | planner |
 
+### Budgets and category colours
+
+| Decision | Why | Decided by |
+|---|---|---|
+| (2026-11-25) A budget is one amount for every month, with no history; a past month is compared with the current amount | Simple to set and to read; a history of amounts is a feature nobody asked for yet | planner |
+| (2026-11-25) Budgets are for expense categories only, plus one optional overall budget; the currency is one the user holds a wallet in (archived wallets included); the typed amount goes through `parseAmount(value, currency)` | Income has no "limit"; a currency without a wallet would be a typo | planner |
+| (2026-11-25) Progress is always in the budget's own currency over every wallet, each day's spending converted at that day's rate as in the "All in" views (a currency without a rate left out and named); it ignores the page's currency and "All in / only" switches | A budget means one figure; it must not change when the user flips a view switch | planner |
+| (2026-11-25) Budgets are account-wide: with a wallet group selected their progress is not shown, one line says they cover all groups | Showing a group's spending against an account-wide limit would be wrong; a per-group budget is a known gap | planner |
+| (2026-11-25) Removing a category removes its budget (FK cascade, said in the removal confirmation); transfers never count | A budget of a category that no longer exists means nothing | planner |
+| (2026-11-25) Archiving a category keeps its budget, and its row still shows the meter; the budget can still be changed | Archiving is undone with one click and loses nothing elsewhere either; an archived category can still have entries that month | built |
+| (2026-11-25) Switching an expense category to income removes its budget in the same DB transaction (`budgetRemoved`), and the row says so before the click and in the success message | The kind change is only possible while nothing uses the category, so nothing worth keeping is lost; refusing the change instead would add a step for no gain | built |
+| (2026-11-25) The overall budget is the first row of the expense card ("Overall budget · all spending"), and a category's budget is set in the row's existing editor, under the rename / colour form | The brief asked for the existing inline editor; one place for everything about a category | built |
+| (2026-11-25) The meter: "€120.00 of €300.00", "€180.00 left" / "€20.00 over" (danger colour), a neutral fill (`--muted-foreground`, `--danger` once over) and, for the current month, a tick at day N ÷ days with "40% spent · day 10 of 30" under it. The bar is `aria-hidden`; the text says the same | The tick against the fill answers "am I ahead of the month?" without a second colour; a green "on track" fill would read as income | built |
+| (2026-11-25) Over means above the limit; reaching it exactly says "Limit reached"; the percentage is rounded down | "100% spent" should not show while there is still a cent left | built |
+| (2026-11-25) The Overview's Budgets card sits between the four insight cards and Wallets / Latest: the overall budget and the three category budgets with the largest share spent (ties in the category order), with a link to /categories ("All budgets (N more)" when some are not shown) | Leaves the existing four cards as they were; "closest to or over the limit" = largest share | built |
+| (2026-11-25) `getMonthBudgets` takes `convert` from the page: the page's own conversion when it has one (Overview, /categories in "All in"), else `getConversion` for the month when the user holds more than one currency | One conversion per request, no network call for a single-currency account; services never read the clock | built |
+| (2026-11-25) Backup: optional `budgets[]` (`category` by name, absent for overall) and an optional `color` per category, version 1. Import only adds: a missing budget is created, an existing one kept (notice `budgets-kept` when it differs); a colour only on categories the import creates. The budget currency need not be held | The contract of the manual rates and groups ("import adds, never changes"); a budget does not depend on a wallet | planner |
+| (2026-11-25) A category can have a colour from the wallet-group palette (`GROUP_COLORS`), picked in the row editor (the shared `ColorChoice`, now in `src/components/ui`, with 44px targets for categories; the group forms keep their 32px) and shown as a round dot before the name on /categories, in the entry form's category pills and in the Overview's Budgets card. Not on transaction rows | Another change was touching the transaction rows at the same time; the picker and the dots are where categories are chosen and managed | planner |
+| (2026-11-25) The spending split keeps its rank ramp; a category's own colour is never used in the split. The row's ramp swatch is now a small square (as in the split's legend) and the category colour a round dot, so the two never read as the same thing | The palette has a red and an amber that sit next to the ramp's terracotta and orange: used in the split they would be confused with another category's ramp step, and a split of six arbitrary colours would lose the "largest = strongest" reading | built |
+| (2026-11-25) The rename form became "name + colour + Save": the success message is "Renamed to …" when the name changed, else "Saved …" | One form per row keeps the editor short; the old "Rename" label no longer fit | built |
+
 ### Import and export
 
 | Decision | Why | Decided by |
@@ -598,7 +619,17 @@ New features beyond these have not been chosen yet.
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
 - **Manual exchange rates are not in the CSV** (only in the JSON backup since 2026-11-18): a CSV moves entries, not
-  rates.
+  rates. The same holds for budgets and category colours (2026-11-25).
+- **Budgets (2026-11-25): no per-group budget, no history, no rollover.** A budget covers every wallet group, so in a
+  group scope its progress is hidden rather than shown for that group; changing the amount rewrites past months'
+  comparison too; unspent money does not carry over. No notification when a budget is exceeded (the app has no
+  notifications), and no budget for income.
+- **A budget whose currency's last wallet was deleted** keeps working (its progress converts as usual), but saving it
+  again is refused until a wallet in that currency exists or another currency is chosen; the form still shows its
+  currency so the user sees why.
+- **Category colours are not on transaction rows** (`day-list`, `transaction-list`), nor in the /transactions
+  category filter or the dashboard's per-category lists; the dot is on /categories, the entry form's pills and the
+  Overview's Budgets card only.
 - **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
   refusal ("The upload failed…" in the panel); browsers always send the header for a `FormData` body.
 - *(superseded 2026-11-09 by Postgres)* **The migration to wallet groups is tested on synthetic databases only**; it has not been run on a copy of the
@@ -916,3 +947,11 @@ New features beyond these have not been chosen yet.
   ninth on another wallet at the same time shared the newly created category), not by a test: the service test runs
   on PGlite, which has one connection and so runs them one after the other. Checked in Chromium only (desktop and the 375px phone project, light and dark by screenshot);
   the live preview's announcement (`aria-live`) was not heard with a screen reader.
+- **Budgets and category colours (2026-11-25)** were checked with unit / render / action tests, the backup round
+  trip, two e2e tests (setting a budget and seeing it on /categories and the Overview, a refused amount kept; picking
+  a colour with the keyboard and seeing the dot in the entry form) and by eye: screenshots of /categories (closed and
+  with a row open) and the Overview on the demo data at 375px and 1280px in both schemes. Not checked: the meter
+  with live provider rates (the screenshots ran with `EXCHANGE_RATES=false`, so RON and USD showed as "not counted"),
+  a screen reader reading the meter inside a row button (its text is long: the counts, the amount and the budget
+  lines are all part of the button's name), and two people setting the same category's first budget at the same
+  moment (the unique-violation retry is not exercised by a test).

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui";
 import { BigAmount } from "@/components/ui/big-amount";
 import { CalendarIcon } from "@/components/ui/picker-icons";
+import { GroupDot } from "@/components/wallets/group-dot";
 import { cn } from "@/lib/cn";
 import { addDays, formatDate } from "@/lib/dates";
 import { initialFormState, type FormState } from "@/lib/form";
@@ -38,7 +39,8 @@ export type WalletOption = {
   groupName?: string;
 };
 /** `archived`: only offered where an entry already uses it (the name then carries "(archived)"). */
-export type CategoryOption = { id: number; name: string; kind: "expense" | "income"; archived?: boolean };
+/** `color`: the category's colour (a `GROUP_COLORS` key), shown as a dot in its pill. */
+export type CategoryOption = { id: number; name: string; kind: "expense" | "income"; archived?: boolean; color?: string | null };
 
 export type EntryInitialValues = {
   kind: EntryKind;
@@ -477,7 +479,17 @@ export function EntryForm({
                   name="categoryId"
                   aria-labelledby={pid("categoryId-label")}
                   required
-                  options={kindCategories.map((c) => ({ value: String(c.id), label: c.name }))}
+                  options={kindCategories.map((c) => ({
+                    value: String(c.id),
+                    label: c.color ? (
+                      <>
+                        <GroupDot color={c.color} className="mr-1.5" />
+                        {c.name}
+                      </>
+                    ) : (
+                      c.name
+                    ),
+                  }))}
                   defaultValue={categoryId}
                   onChange={setCategoryId}
                   error={err.categoryId}

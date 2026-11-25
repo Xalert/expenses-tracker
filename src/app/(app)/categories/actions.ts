@@ -2,8 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { isValidCurrency } from "@/lib/currencies";
 import { isServiceError } from "@/lib/errors";
 import { formValues, serviceErrorState, type FormState } from "@/lib/form";
+import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
+import { removeBudget, setBudget } from "@/server/budgets";
 import {
   archiveCategory,
   changeCategoryKind,
@@ -13,7 +16,7 @@ import {
   renameCategory,
   unarchiveCategory,
 } from "@/server/categories";
-import { nameField, parseCategoryId, parseCategoryKind, parseReplacement } from "./form-input";
+import { colorField, nameField, parseBudgetTarget, parseCategoryId, parseCategoryKind, parseReplacement } from "./form-input";
 
 const NOT_FOUND_STATE: FormState = { message: "Category not found. It may have been removed already." };
 
@@ -50,14 +53,76 @@ export async function renameCategoryAction(
   const values = formValues(formData);
   const categoryId = parseCategoryId(categoryIdArg);
   if (!categoryId) return { ...NOT_FOUND_STATE, values };
+  const before = await getCategory(user.id, categoryId);
+  if (!before) {
+    revalidateCategories();
+    return { ...NOT_FOUND_STATE, values };
+  }
   let name: string;
   try {
-    name = (await renameCategory(user.id, categoryId, { name: nameField(formData) })).name;
+    name = (await renameCategory(user.id, categoryId, { name: nameField(formData), color: colorField(formData) })).name;
   } catch (err) {
     return serviceErrorState(err, values);
   }
   revalidateCategories();
-  return { ok: true, message: `Renamed to “${name}”.` };
+  return { ok: true, message: name === before.name ? `Saved “${name}”.` : `Renamed to “${name}”.` };
+}
+
+/** The error for a typed amount that is not one in `currency` (whole for JPY, up to its decimals otherwise). */
+function amountError(currency: string): string {
+  const decimals = currencyDecimals(currency);
+  return decimals === 0
+    ? `Enter a whole amount in ${currency} (no decimals).`
+    : `Enter a valid amount in ${currency} (up to ${decimals} decimals).`;
+}
+
+/**
+ * Bind the target: a category id, or null for the overall budget. Fields `amount` (typed, parsed with `parseAmount` in
+ * the chosen currency) and `currency`. Creates or replaces the budget. Stays on /categories.
+ */
+export async function setBudgetAction(targetArg: number | null, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const values = formValues(formData);
+  const target = parseBudgetTarget(targetArg);
+  if (target === undefined) return { ...NOT_FOUND_STATE, values };
+  const currencyRaw = formData.get("currency");
+  const currency = typeof currencyRaw === "string" ? currencyRaw.trim().toUpperCase() : "";
+  if (!isValidCurrency(currency)) return { fieldErrors: { currency: "Choose a currency." }, values };
+  const rawAmount = formData.get("amount");
+  const amount = typeof rawAmount === "string" ? rawAmount.trim() : "";
+  if (!amount) return { fieldErrors: { amount: "Enter an amount." }, values };
+  const amountMinor = parseAmount(amount, currency);
+  if (amountMinor === null) return { fieldErrors: { amount: amountError(currency) }, values };
+  if (amountMinor <= 0) return { fieldErrors: { amount: "Enter an amount greater than zero." }, values };
+  const category = target === null ? null : await getCategory(user.id, target);
+  if (target !== null && !category) {
+    revalidateCategories();
+    return { ...NOT_FOUND_STATE, values };
+  }
+  let saved: Awaited<ReturnType<typeof setBudget>>;
+  try {
+    saved = await setBudget(user.id, { categoryId: target, currency, amountMinor });
+  } catch (err) {
+    if (isServiceError(err) && err.code === "NOT_FOUND") revalidateCategories();
+    return serviceErrorState(err, values);
+  }
+  revalidateCategories();
+  const limit = `${formatMoney(saved.amountMinor, saved.currency)} a month`;
+  return { ok: true, message: category ? `Budget for “${category.name}”: ${limit}.` : `Overall budget: ${limit}.` };
+}
+
+/** Bind the target (a category id, or null for the overall budget); no form fields. Stays on /categories. */
+export async function removeBudgetAction(targetArg: number | null): Promise<FormState> {
+  const user = await requireUser();
+  const target = parseBudgetTarget(targetArg);
+  if (target === undefined) return NOT_FOUND_STATE;
+  const category = target === null ? null : await getCategory(user.id, target);
+  await removeBudget(user.id, target);
+  revalidateCategories();
+  return {
+    ok: true,
+    message: target === null ? "Removed the overall budget." : `Removed the budget for “${category?.name ?? "the category"}”.`,
+  };
 }
 
 /** Bind the category id. Field `kind`: the kind to switch to (refused while the category has transactions). */
@@ -72,16 +137,19 @@ export async function changeCategoryKindAction(
   if (!categoryId) return { ...NOT_FOUND_STATE, values };
   const kind = parseCategoryKind(formData.get("kind"));
   if (!kind) return { fieldErrors: { kind: "Choose expense or income." }, values };
-  let name: string;
+  let changed: Awaited<ReturnType<typeof changeCategoryKind>>;
   try {
-    name = (await changeCategoryKind(user.id, categoryId, { kind })).name;
+    changed = await changeCategoryKind(user.id, categoryId, { kind });
   } catch (err) {
     // It gained transactions since the page was rendered: refresh the counts so the row explains why.
     if (isServiceError(err) && err.code === "CONFLICT") revalidateCategories();
     return serviceErrorState(err, values);
   }
   revalidateCategories();
-  return { ok: true, message: `“${name}” is now an ${kind} category.` };
+  return {
+    ok: true,
+    message: `“${changed.name}” is now an ${kind} category.${changed.budgetRemoved ? " Its budget was removed." : ""}`,
+  };
 }
 
 /** Archive (`archived` true) or unarchive a category; no form fields. Stays on /categories. */
