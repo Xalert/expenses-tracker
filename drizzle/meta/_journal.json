@@ -50,6 +50,13 @@
       "when": 1794998090076,
       "tag": "0006_sessions-devices",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795601608862,
+      "tag": "0007_budgets-recurring-tags",
+      "breakpoints": true
     }
   ]
 }

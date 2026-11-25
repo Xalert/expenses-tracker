@@ -9,11 +9,15 @@ import { seedDefaultGroup } from "@/server/wallet-groups";
 let shared: Promise<DB> | undefined;
 
 const APP_TABLES = [
+  "budgets",
   "categories",
   "exchange_rate_days",
   "exchange_rates",
   "manual_exchange_rates",
+  "recurring_transactions",
   "sessions",
+  "tags",
+  "transaction_tags",
   "transactions",
   "transfers",
   "users",

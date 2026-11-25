@@ -25,6 +25,10 @@ const DEMO_COUNTS = {
   exchange_rates: 0,
   exchange_rate_days: 0,
   manual_exchange_rates: 0,
+  budgets: 0,
+  recurring_transactions: 0,
+  tags: 0,
+  transaction_tags: 0,
 };
 
 async function counts(db: DB) {
@@ -39,11 +43,21 @@ describe("maintenance", () => {
 
   it("lists the app tables but not the migrations table", async () => {
     expect(await appTables(db)).toEqual([
+      "budgets",
       "categories",
       "exchange_rate_days",
       "exchange_rates",
       "manual_exchange_rates",
-      "sessions", "transactions", "transfers", "users", "wallet_groups", "wallets"]);
+      "recurring_transactions",
+      "sessions",
+      "tags",
+      "transaction_tags",
+      "transactions",
+      "transfers",
+      "users",
+      "wallet_groups",
+      "wallets",
+    ]);
   });
 
   it("wipes every row in one truncate and restarts the identity counters", async () => {
