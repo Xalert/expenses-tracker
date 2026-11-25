@@ -199,6 +199,7 @@ data in `expenses`), `make build`, `make migration` (`db:generate`), `make docke
 | `npm run db:seed` | add the demo user and sample data to `DATABASE_URL`'s database if missing (idempotent) |
 | `DATABASE_URL=<url> npm run user:reset-password -- <user ID or email> [--stdin]` | set a random (printed) or piped-in password and delete that user's sessions; needs `DATABASE_URL` on the command and refuses the real `expenses` database |
 | `npm run db:reset -- --demo` / `--clean` | real database: delete every row, then seed the demo data / leave it empty; asks first |
+| `node scripts/generate-icons.mjs` | re-render the home-screen icons in `public/` (`icons/`, `apple-touch-icon.png`) from the brand mark with Playwright's Chromium; run it after changing `src/components/brand.tsx` (keep the glyph in the script in step) and commit the PNGs |
 
 ## Releasing
 

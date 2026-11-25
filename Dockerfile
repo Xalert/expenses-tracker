@@ -8,10 +8,13 @@
 #
 # Pure JavaScript, so one build works for linux/amd64 and linux/arm64 (buildx --platform linux/amd64,linux/arm64).
 
-ARG NODE_IMAGE=node:24-bookworm-slim
+# ---- base: the one Node image every stage starts from ------------------------------------------------------
+# A literal FROM (not a build argument) so Dependabot (.github/dependabot.yml) can read and bump it; it cannot
+# resolve `FROM ${ARG}`. The floating major tag picks up Node 24 and Debian patches on every rebuild.
+FROM node:24-bookworm-slim AS base
 
 # ---- deps: install node_modules from the lockfile only (cached until package*.json change) ----------------
-FROM ${NODE_IMAGE} AS deps
+FROM base AS deps
 WORKDIR /app
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 COPY package.json package-lock.json ./
@@ -21,7 +24,7 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --no-fund --ignore-scripts
 
 # ---- build: next build -> .next/standalone ----------------------------------------------------------------
-FROM ${NODE_IMAGE} AS build
+FROM base AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -44,7 +47,7 @@ RUN npm run build \
  && cd .next/standalone/node_modules && rm -rf sharp @img detect-libc semver
 
 # ---- runner: only the standalone server, as a non-root user ----------------------------------------------
-FROM ${NODE_IMAGE} AS runner
+FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
