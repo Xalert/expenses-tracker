@@ -132,7 +132,12 @@ function PopoverPanel({
       onDismissRef.current(true);
     }
     function onOutside(e: Event) {
-      if (!inside(e.target)) onDismissRef.current(false);
+      if (inside(e.target)) return;
+      // Focus landing on a container of the popover (e.g. the Dialog's panel) is not leaving it: WebKit moves focus
+      // there when the focused element inside is removed (a day cell replaced by the next month's), and that must not
+      // close the picker. A click there still does (pointerdown).
+      if (e.type === "focusin" && e.target instanceof Node && anchor.current && e.target.contains(anchor.current)) return;
+      onDismissRef.current(false);
     }
 
     document.addEventListener("keydown", onKeyDown);

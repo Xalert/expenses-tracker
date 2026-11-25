@@ -192,6 +192,23 @@ test.describe("the Add dialog (N shortcut)", () => {
 });
 
 test.describe("date picker", () => {
+  // WebKit does not focus a clicked button, so focus stayed on a day cell that the month change removed; it then moved
+  // to the Add dialog's panel and the picker closed itself.
+  test("inside the Add dialog, changing month or opening the month view keeps the picker open", async ({ signedIn: page, user }) => {
+    await wallets(user.id);
+    await page.goto("/transactions");
+    const dialog = await openAddDialogWithN(page);
+    const picker = page.getByRole("dialog", { name: "Choose a date" });
+    await dialog.getByRole("combobox", { name: "Choose another date" }).click();
+    await picker.getByRole("button", { name: /^Previous month, / }).click();
+    await picker.getByRole("button", { name: /^Previous month, / }).click();
+    await expect(picker).toBeVisible();
+    await picker.getByRole("button", { name: /, choose a month$/ }).click();
+    await expect(picker.getByRole("group", { name: /^Months of / })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(picker.getByRole("grid")).toBeVisible();
+  });
+
   test("Other date: the month view's Back to days returns focus to a day, Escape steps back first", async ({ signedIn: page, user }) => {
     await wallets(user.id);
     await page.goto("/transactions/new");

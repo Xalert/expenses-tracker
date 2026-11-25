@@ -247,7 +247,11 @@ export function CalendarPanel({
             <button
               type="button"
               className={pickerNavButton}
-              onClick={() => showMonth(prevMonth, false)}
+              onClick={(e) => {
+                // WebKit does not focus a clicked button: keep focus here, not on a day cell the change removes.
+                e.currentTarget.focus();
+                showMonth(prevMonth, false);
+              }}
               disabled={!canPrev}
               aria-label={`Previous month, ${formatMonth(prevMonth)}`}
             >
@@ -265,7 +269,11 @@ export function CalendarPanel({
             <button
               type="button"
               className={pickerNavButton}
-              onClick={() => showMonth(nextMonth, false)}
+              onClick={(e) => {
+                // WebKit does not focus a clicked button: keep focus here, not on a day cell the change removes.
+                e.currentTarget.focus();
+                showMonth(nextMonth, false);
+              }}
               disabled={!canNext}
               aria-label={`Next month, ${formatMonth(nextMonth)}`}
             >
