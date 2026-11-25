@@ -1,5 +1,5 @@
 // The user's own exchange rates (src/server/manual-rates.ts), how the converted month figures use them, the
-// converted /categories amounts, and the Overview's past-month wallet balances. No network: `fetch` is stubbed.
+// converted /categories amounts. No network: `fetch` is stubbed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB } from "@/db";
 import { users } from "@/db/schema";
@@ -8,10 +8,9 @@ import { manualRates } from "@/db/schema";
 import { ServiceError } from "@/lib/errors";
 import type { DailyRates } from "@/lib/fx";
 import { getConversion, resetExchangeRatesCache } from "@/server/exchange-rates";
-import { getCategoryMonthAmounts, getMonthInsights, getWalletBalancesOn } from "@/server/insights";
+import { getCategoryMonthAmounts, getMonthInsights } from "@/server/insights";
 import { deleteManualRate, listManualRates, manualRatesFor, setManualRate } from "@/server/manual-rates";
 import { createTransaction } from "@/server/transactions";
-import { createTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
@@ -177,23 +176,5 @@ describe("getCategoryMonthAmounts (/categories, All in <currency>)", () => {
     expect(plain.amounts.get(alice.cat("Food"))).toBe(1000);
     expect(plain.amounts.has(alice.cat("Transport"))).toBe(false);
     expect((await getCategoryMonthAmounts(bob.id, { month: "2026-03", currency: "EUR", convert: { rates } })).amounts.size).toBe(0);
-  });
-});
-
-describe("getWalletBalancesOn (the Overview's Wallets card for a past month)", () => {
-  it("is the balance at the end of that day: initial balance plus every entry up to it, transfers included", async () => {
-    const eur = await wallet(alice, "EUR", 10000);
-    const usd = await wallet(alice, "USD", 0);
-    await spend(alice, eur, 1000, "2026-03-31");
-    await spend(alice, eur, 500, "2026-04-01"); // after the day
-    await createTransfer(alice.id, { fromWalletId: eur, toWalletId: usd, amountMinor: 2000, receivedAmountMinor: 2500, date: "2026-03-15" });
-    const b = await getWalletBalancesOn(alice.id, "2026-03-31");
-    expect(b.get(eur)).toBe(10000 - 1000 - 2000);
-    expect(b.get(usd)).toBe(2500);
-    const earlier = await getWalletBalancesOn(alice.id, "2026-03-01");
-    expect(earlier.get(eur)).toBe(10000);
-    expect(earlier.get(usd)).toBe(0);
-    expect((await getWalletBalancesOn(bob.id, "2026-03-31")).size).toBe(0);
-    await expectServiceError(() => getWalletBalancesOn(alice.id, "2026-13-01"), "VALIDATION");
   });
 });

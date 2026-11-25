@@ -10,7 +10,7 @@ import { todayInZone } from "@/lib/dates";
 import { getGroupScope } from "@/lib/group-scope";
 import { getWalletMonth, listUserCurrencies } from "@/server/insights";
 import type { WalletGroupView } from "@/server/wallet-groups";
-import { listWallets, type WalletView } from "@/server/wallets";
+import { listWallets, type WalletWithBalance } from "@/server/wallets";
 
 export const metadata: Metadata = { title: "Wallets" };
 
@@ -18,13 +18,14 @@ export default async function WalletsPage() {
   const user = await requireUser();
   const { groups, archivedGroups, selected } = await getGroupScope();
   const groupId = selected?.id;
-  const all = await listWallets(user.id, { includeArchived: true, groupId });
+  const today = todayInZone(user.timeZone);
+  // Balances today, as on the wallet page and the Overview: future-dated entries are only in the "projected" hint.
+  const all = await listWallets(user.id, { includeArchived: true, groupId, balanceOn: today });
   // Wallets of an archived group are listed with their group under "Archived groups", not with the others.
   const inArchivedGroup = all.filter((w) => w.groupArchived);
   const shown = all.filter((w) => !w.groupArchived);
   const active = shown.filter((w) => w.archivedAt === null);
   const archived = shown.filter((w) => w.archivedAt !== null);
-  const today = todayInZone(user.timeZone);
   const month = today.slice(0, 7);
 
   const months = new Map<number, WalletCardMonth>();
@@ -98,7 +99,7 @@ function CurrencySections({
   months,
   groups,
 }: {
-  wallets: WalletView[];
+  wallets: WalletWithBalance[];
   currencies: string[];
   months: Map<number, WalletCardMonth>;
   groups: WalletGroupView[] | null;

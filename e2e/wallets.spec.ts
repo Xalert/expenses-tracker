@@ -14,6 +14,32 @@ test("the wallet page shows the balance after each day, and a projected one for 
   await expect(page.getByText("Balance after €937.66 · projected", { exact: true })).toBeVisible();
 });
 
+test("a wallet with a future-dated entry shows the same balance on /wallets, its page and the Overview @phone", async ({ signedIn: page, user }) => {
+  const today = todayISO();
+  const bank = await seedWallet(user.id, { name: "Bank", currency: "EUR", initialBalanceMinor: 100_000 });
+  await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Food", amountMinor: 1_234, note: "today" });
+  // Far enough ahead to fall after today in any month; it is "projected", not in the balance.
+  await seedEntry(user.id, { walletId: bank.id, kind: "expense", category: "Bills", amountMinor: 5_000, date: addDays(today, 40), note: "rent" });
+
+  await page.goto("/wallets");
+  const card = page.getByRole("link", { name: /^Bank/ });
+  await expect(card).toContainText("Balance €987.66");
+  await expect(card).toContainText("€937.66 projected after later entries");
+  await expect(page.getByRole("region", { name: /^EUR/ }).getByText("Total in EUR:")).toHaveCount(1);
+  await expect(page.getByRole("region", { name: /^EUR/ }).getByRole("paragraph").first()).toHaveText("Total in EUR: €987.66");
+  await expectNoHorizontalOverflow(page);
+
+  await card.click();
+  await expect(page).toHaveURL(new RegExp(`/wallets/${bank.id}$`));
+  await expect(page.getByRole("region", { name: "Bank", exact: true }).getByRole("paragraph").first()).toHaveText("€987.66");
+  await expect(page.getByText("€937.66 projected after the entries dated later")).toBeVisible();
+
+  await page.goto("/");
+  const row = page.getByRole("region", { name: "Wallets" }).getByRole("link", { name: /^Bank/ });
+  await expect(row).toContainText("€987.66");
+  await expect(row).not.toContainText("€937.66");
+});
+
 test.describe("reconcile balance", () => {
   test("reconcile from the ⋯ menu: the preview, the adjustment entry and the typed balance @phone", async ({ signedIn: page, user }) => {
     const today = todayISO();

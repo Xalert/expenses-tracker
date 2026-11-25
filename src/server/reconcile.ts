@@ -7,7 +7,7 @@ import { assertDate, isPgId } from "./_validate";
 import { getTransaction, type TransactionView } from "./transactions";
 import { closedWalletMessage, signedAmountSql } from "./wallets";
 
-/** The name of the category a reconciliation files its entry under, and the entry's note. */
+/** The name of the category a reconciliation files its entry under (the entry itself has no note: the category names it). */
 export const BALANCE_ADJUSTMENT = "Balance adjustment";
 
 export type ReconcileResult = {
@@ -119,9 +119,9 @@ async function adjustmentCategory(tx: DBOrTx, userId: number, kind: CategoryKind
  * really held at the end of `date` (`YYYY-MM-DD`, not after `today`, the user's today from the caller); the difference
  * from the tracked balance at the end of that day (`getWalletBalanceOn`) is recorded as one ordinary entry dated that
  * day: income when positive, expense when negative, in the "Balance adjustment" category of that kind (created when
- * missing), note "Balance adjustment". A zero difference records nothing. Refused like any new entry for an archived
- * wallet or one in an archived group (VALIDATION); another user's wallet is NOT_FOUND. The wallet row is locked for
- * the read and the write, so two submissions cannot both add the difference.
+ * missing), with no note (the category names it). A zero difference records nothing. Refused like any new entry for
+ * an archived wallet or one in an archived group (VALIDATION); another user's wallet is NOT_FOUND. The wallet row is
+ * locked for the read and the write, so two submissions cannot both add the difference.
  */
 export async function reconcileWallet(
   userId: number,
@@ -173,7 +173,7 @@ export async function reconcileWallet(
         categoryId: category.id,
         amountMinor: Math.abs(differenceMinor),
         date,
-        note: BALANCE_ADJUSTMENT,
+        note: null,
         transferId: null,
       })
       .returning({ id: transactions.id });

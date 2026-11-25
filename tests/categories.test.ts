@@ -17,7 +17,7 @@ import { createTransaction, getTransaction, listTransactions } from "@/server/tr
 import { createTransfer, getTransfer } from "@/server/transfers";
 import { archiveWallet, createWallet } from "@/server/wallets";
 import { isUniqueViolation } from "@/server/_validate";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 let db: DB;
 let alice: Awaited<ReturnType<typeof makeUser>>;
@@ -180,7 +180,7 @@ describe("renameCategory", () => {
     const r = await renameCategory(alice.id, alice.cat("Food"), { name: "  Eating  out " });
     expect(r).toEqual({ id: alice.cat("Food"), name: "Eating out", kind: "expense", archivedAt: null, color: null });
     expect((await getTransaction(alice.id, t.id))?.categoryName).toBe("Eating out");
-    expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
+    expect((await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: alice.cat("Food"), categoryName: "Eating out", amountMinor: 1500 },
     ]);
   });
@@ -250,7 +250,7 @@ describe("deleteCategory", () => {
     const other = await createTransaction(alice.id, expense(w.id, alice.cat("Bills"), 70, "2026-03-05"));
     const tr = await createTransfer(alice.id, { fromWalletId: w.id, toWalletId: w2.id, amountMinor: 40, date: "2026-03-06", note: "move" });
 
-    expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
+    expect((await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: food, categoryName: "Food", amountMinor: 1500 },
       { currency: "EUR", categoryId: groceries, categoryName: "Groceries", amountMinor: 250 },
       { currency: "EUR", categoryId: alice.cat("Bills"), categoryName: "Bills", amountMinor: 70 },
@@ -269,7 +269,7 @@ describe("deleteCategory", () => {
     expect(await usage(alice.id)).toMatchObject({ "expense:Groceries": 3, "expense:Bills": 1 });
     expect((await usage(alice.id))["expense:Food"]).toBeUndefined();
     expect((await listTransactions(alice.id, { categoryId: groceries })).total).toBe(3);
-    expect((await getDashboard(alice.id, { month: "2026-03" })).expenseByCategory).toEqual([
+    expect((await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY })).expenseByCategory).toEqual([
       { currency: "EUR", categoryId: groceries, categoryName: "Groceries", amountMinor: 1750 },
       { currency: "EUR", categoryId: alice.cat("Bills"), categoryName: "Bills", amountMinor: 70 },
     ]);

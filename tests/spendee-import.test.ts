@@ -9,7 +9,7 @@ import { buildBackup, buildTransactionsCsv } from "@/server/export";
 import { previewImport, runImport, type ImportPreview } from "@/server/import";
 import { createTransaction } from "@/server/transactions";
 import { createWallet, listWallets } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 // Synthetic Spendee exports in the shape of the real thing: `;`-separated, every cell quoted, CRLF, no BOM,
 // signed amounts, `YYYY-MM-DD HH:MM:SS` dates, trailing First name / Last name columns.
@@ -194,7 +194,7 @@ describe("Spendee rows", () => {
       { kind: "income", amountMinor: 1235, date: "2019-05-05", note: "cashback" },
       { kind: "expense", amountMinor: 725, date: "2019-05-06", note: null },
     ]);
-    const [wallet] = await listWallets(alice.id);
+    const [wallet] = await listWallets(alice.id, { balanceOn: EVERY_ENTRY });
     // Independently: income 5000 + 12.35, expenses 30 + 30.50 + 24.58 + 10 + 7.25 = 102.33.
     expect(wallet).toMatchObject({ name: "Personal Account", currency: "RON", initialBalanceMinor: 0, balanceMinor: 501235 - 10233 });
     const names = (await listCategories(alice.id)).map((c) => `${c.kind}:${c.name}`);
@@ -340,8 +340,8 @@ describe("Spendee rows", () => {
       transactions: s.transactions.filter((x) => x.userId === alice.id),
     });
     expect(onlyAlice(after)).toEqual(onlyAlice(before));
-    const bobWallet = (await listWallets(bob.id))[0];
-    expect(bobWallet.balanceMinor).toBe((await listWallets(alice.id))[0].balanceMinor);
+    const bobWallet = (await listWallets(bob.id, { balanceOn: EVERY_ENTRY }))[0];
+    expect(bobWallet.balanceMinor).toBe((await listWallets(alice.id, { balanceOn: EVERY_ENTRY }))[0].balanceMinor);
     expect(bobWallet.id).not.toBe((await listWallets(alice.id))[0].id);
   });
 });

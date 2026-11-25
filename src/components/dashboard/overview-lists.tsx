@@ -5,7 +5,7 @@ import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { shortDateLabel } from "@/lib/overview";
 import type { TransactionView } from "@/server/transactions";
-import type { WalletView } from "@/server/wallets";
+import type { WalletWithBalance } from "@/server/wallets";
 import { ConversionNotes } from "./conversion";
 
 const cardClass = "min-w-0 rounded-[18px] border border-border bg-surface py-2";
@@ -70,7 +70,7 @@ export function WalletsCard({
   viewSwitch,
   asOf,
 }: {
-  wallets: WalletView[];
+  wallets: WalletWithBalance[];
   /** Month change per wallet id. */
   changes: Map<number, number>;
   hrefFor(walletId: number): string;

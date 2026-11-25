@@ -18,7 +18,7 @@ import {
 } from "@/server/import";
 import { createTransaction } from "@/server/transactions";
 import { createWallet, listWallets } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 // Synthetic exports in the shape of Spendee's current per-wallet export: one file per wallet, `,`-separated,
 // LF, cells quoted only when needed, UTC timestamps with an offset, 8-decimal amounts, transfers as two rows.
@@ -528,7 +528,7 @@ describe("importing several files at once", () => {
     expect(r).toMatchObject({ imported: true, transactionsToAdd: 6, transfersToAdd: 2 });
     expect((await entriesOf(alice.id)).find((e) => e.note === "late")?.date).toBe("2026-09-01");
     // Independently: income − expenses ± transfers, per wallet, in minor units.
-    const balance = Object.fromEntries((await listWallets(alice.id)).map((w) => [w.name, w.balanceMinor]));
+    const balance = Object.fromEntries((await listWallets(alice.id, { balanceOn: EVERY_ENTRY })).map((w) => [w.name, w.balanceMinor]));
     expect(balance).toEqual({
       "Savings €": 100000 - 30000 - 1250 + 4510,
       Joint: 30000 - 8393 - 8393,

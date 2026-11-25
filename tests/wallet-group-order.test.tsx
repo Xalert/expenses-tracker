@@ -30,7 +30,7 @@ import {
   unarchiveWalletGroup,
 } from "@/server/wallet-groups";
 import { createWallet, listWallets, updateWallet } from "@/server/wallets";
-import { makeUser, useFreshDb } from "./helpers";
+import { EVERY_ENTRY, makeUser, useFreshDb } from "./helpers";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/wallets",
@@ -179,7 +179,7 @@ describe("archive", () => {
     expect((await listWallets(alice.id)).map((w) => w.name)).toEqual(["Home"]);
     const all = await listWallets(alice.id, { includeArchived: true });
     expect(all.find((w) => w.id === shop.id)).toMatchObject({ groupArchived: true, archivedAt: null });
-    const dash = await getDashboard(alice.id, { month: "2026-03" });
+    const dash = await getDashboard(alice.id, { month: "2026-03", balanceOn: EVERY_ENTRY });
     expect(dash.wallets.map((w) => w.name)).toEqual(["Home"]);
     expect(dash.totalsByCurrency).toEqual([{ currency: "EUR", balanceMinor: 1000, incomeMinor: 0, expenseMinor: 0 }]);
     // The entries stay where history is shown, as for an archived wallet.
@@ -440,7 +440,7 @@ describe("rendering", () => {
     await archiveWalletGroup(alice.id, biz.id);
     await archiveWalletGroup(alice.id, empty.id);
     const groups = (await listWalletGroups(alice.id)).filter((g) => g.archivedAt !== null);
-    const wallets = (await listWallets(alice.id, { includeArchived: true })).filter((w) => w.groupArchived);
+    const wallets = (await listWallets(alice.id, { includeArchived: true, balanceOn: EVERY_ENTRY })).filter((w) => w.groupArchived);
     const html = renderToStaticMarkup(<ArchivedGroups groups={groups} wallets={wallets} />);
     expect(html).toMatch(/^<details/);
     expect(html).not.toMatch(/^<details[^>]* open/);

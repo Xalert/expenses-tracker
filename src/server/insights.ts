@@ -7,7 +7,7 @@ import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { convertMinor, tableFor, type Conversion } from "@/lib/fx";
-import { assertDate, assertId, isPgId } from "./_validate";
+import { assertId, isPgId } from "./_validate";
 import { signedAmountSql } from "./wallets";
 
 // Per-currency month figures for the redesigned Overview, wallet page and charts. Every figure is for ONE currency
@@ -587,30 +587,4 @@ export async function getCategoryMonthAmounts(
     amounts.set(r.categoryId, (amounts.get(r.categoryId) ?? 0) + value);
   }
   return { amounts, missingCurrencies: sorted(missing) };
-}
-
-/**
- * The balance of each of the user's wallets at the end of `date` (initial balance + every entry dated on or before
- * it, transfers included), by wallet id: the Overview's Wallets card for a past month. Archived wallets included.
- */
-export async function getWalletBalancesOn(
-  userId: number,
-  date: string,
-  opts: { groupId?: number } = {},
-): Promise<Map<number, number>> {
-  const day = assertDate(date);
-  const groupId = opts.groupId === undefined ? undefined : assertId(opts.groupId, "groupId", "group");
-  const rows = await (await getDb())
-    .select({
-      id: wallets.id,
-      balanceMinor: sql<number>`${wallets.initialBalanceMinor} + coalesce(sum(${signedAmountSql}), 0)`.mapWith(Number),
-    })
-    .from(wallets)
-    .leftJoin(
-      transactions,
-      and(eq(transactions.walletId, wallets.id), eq(transactions.userId, userId), lte(transactions.date, day)),
-    )
-    .where(and(eq(wallets.userId, userId), groupId === undefined ? undefined : eq(wallets.groupId, groupId)))
-    .groupBy(wallets.id);
-  return new Map(rows.map((r) => [r.id, r.balanceMinor]));
 }
