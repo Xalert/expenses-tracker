@@ -297,6 +297,7 @@ describe("DayList on a wallet page", () => {
     transferId: null,
     counterparty: null,
     recurringId: null,
+    tags: [],
   });
 
   it("shows the aside (Balance after) instead of the net and leaves the wallet name out", () => {

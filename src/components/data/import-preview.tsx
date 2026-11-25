@@ -34,7 +34,8 @@ export function hasSomethingToImport(p: ImportPreview): boolean {
       p.categoriesToCreate.length +
       p.manualRatesToAdd +
       p.recurringToAdd +
-      p.budgetsToAdd >
+      p.budgetsToAdd +
+      p.tagsToCreate.length >
     0
   );
 }
@@ -66,6 +67,7 @@ export function previewDifferences(previewed: ImportPreview, result: ImportPrevi
     [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
     [result.recurringToAdd, previewed.recurringToAdd, "repeating entry", "repeating entries"],
     [result.budgetsToAdd, previewed.budgetsToAdd, "budget", "budgets"],
+    [result.tagsToCreate.length, previewed.tagsToCreate.length, "new tag", "new tags"],
   ];
   return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
 }
@@ -168,6 +170,17 @@ export function PreviewCard({
                 <strong className="font-semibold text-foreground">{c.name}</strong>
                 {/* The kind only when the same name is created as both (e.g. Spendee's unpaired "Transfer"). */}
                 {categoryNote((categoryKinds.get(c.name.toLowerCase())?.size ?? 0) > 1 ? c.kind : null, c.archived === true)}
+              </span>
+            ))}
+          </p>
+        )}
+        {p.tagsToCreate.length > 0 && (
+          <p className="text-sm break-words text-muted-foreground">
+            New tags:{" "}
+            {p.tagsToCreate.map((t, i) => (
+              <span key={i}>
+                {i > 0 && ", "}
+                <strong className="font-semibold text-foreground">{t}</strong>
               </span>
             ))}
           </p>
@@ -408,6 +421,7 @@ export function ImportSuccess({ result: r, previewed }: { result: ImportPreview;
           {r.groupsToCreate.length > 0 && ` Created ${plural(r.groupsToCreate.length, "group", "groups")}.`}
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
+          {r.tagsToCreate.length > 0 && ` Created ${plural(r.tagsToCreate.length, "tag", "tags")}.`}
           {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
           {r.recurringToAdd > 0 && ` Added ${plural(r.recurringToAdd, "repeating entry", "repeating entries")}.`}
           {r.budgetsToAdd > 0 && ` Added ${plural(r.budgetsToAdd, "budget", "budgets")}.`}

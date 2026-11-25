@@ -221,7 +221,7 @@ Added 2026-11-18 (closing the category gaps):
 | An unpaired Spendee transfer row blocks the import by default, with an opt-in to import such rows as income / expense in a `Transfer` category | Usually it means a wallet's file was left out; the opt-in avoids a dead end when the other wallet no longer exists | planner |
 | Spendee timestamps that carry a UTC offset are converted to the importing browser's time zone to pick the date | Spendee exports UTC; taking the UTC date would put late-evening entries on the wrong day (and sometimes the wrong month) | planner |
 | (2026-11-18) The Spendee import dates timestamps in **the account's time zone** when it has one, else the browser's (as before), else UTC; the time-zone notice says which zone and where it came from ("your account's time zone, …" / "this browser's time zone, … (set one in Account settings …)" / "UTC (…)") | Closes the "re-import from another zone" gap: with an account zone the dates no longer depend on the browser, so the same files re-imported from anywhere are all duplicates. The account's zone is read by `previewImport` / `runImport` themselves, not passed by the action, so the preview and the write cannot disagree | planner |
-| Spendee labels are appended to the note | The app has no labels; this keeps the information and makes it searchable instead of dropping it silently | planner |
+| Spendee labels are appended to the note | The app has no labels; this keeps the information and makes it searchable instead of dropping it silently. *(2026-11-25: kept so after tags were added, deliberately; see "Tags")* | planner |
 | A backup cannot be combined with other files in one import | Its wallets are identified by position in the file, which cannot be merged with other sources | planner |
 | `previewImport` / `runImport` take either one file's text (as before) or a list of `{ name, text }`; the existing tests were left unchanged | No mechanical migration of ~60 call sites; one file and a one-element list behave the same | built |
 | Spendee transfers are paired on the `Note` cell without labels; the transfer gets the outgoing row's labels, or the incoming row's when the outgoing has none | Labels are per row in Spendee and may differ between the two sides; pairing should not fail over them | built |
@@ -496,6 +496,36 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
 | `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
+### Tags
+
+Decided and built 2026-11-25 (SPEC "Tags"). The tables came with migration `0007`, written beforehand by the planner.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| Tags go on expenses and income; transfers are not tagged in this version, and repeating rules carry no tags | Keeps the first version to one kind of row; see Known gaps | planner |
+| A tag name is trimmed, 1–40 characters, unique per user ignoring case, without commas; at most 10 tags per entry; a tag is created the first time it is used | Commas separate tags in the form field and the CSV cell; no separate "create tag" step to learn | planner |
+| `src/server/tags.ts` lists (with use counts), renames (onto an existing name = merge, one DB transaction) and deletes (the entries stay); entry create / update replace the entry's set in the entry's DB transaction; `TransactionView.tags` is loaded without a query per row | One place for the rules; a merge is what a user renaming "Work" to "work trips" (existing) means | planner |
+| The entry form's Tags field works without JavaScript (a comma-separated text input) and keeps the Add sheet one row taller | Every form in the app works without scripts; the Add sheet must stay short on phones | planner |
+| Day-list rows show tags as small pills after the note, the rest as "+N" | Readable at 375px | planner |
+| /transactions filters by one tag (`?tag=<id>`), as a chip and in the no-JS form; strip, totals, export and month links follow it | Several tags come with a later package that reworks the filters | planner |
+| Tag management is a "Tags" card on /categories (count linking to the entries, rename and delete inline); no new route | Tags sit next to categories in the user's mind; the menu stays short | planner |
+| **Deliberate:** Spendee labels stay appended to the note, they do not become tags | The note is part of an entry's duplicate identity: moving labels out of it would make files already imported import again | planner |
+| Native CSV: an optional `tags` column; tags are not part of the duplicate identity and a skipped duplicate gains no tags | "Import adds, never changes"; old files import as before | planner |
+| Backup: each entry's optional `tags` and an optional top-level list of the account's tags (unused ones survive); version stays 1; import only adds | Lossless round trip without a version bump | planner |
+| The demo seeds three tags on a few entries | Shows the feature on `dev:demo` | planner |
+| Merging keeps the **other** tag's spelling (renaming "work" to "OFFICE" when "Office" exists gives "Office") | The existing tag is the one the user already sees everywhere; the action says "Merged “work” into “Office”." | built |
+| The suggestions in the entry form are toggle pills under the text input (the user's tags, the chosen ones first, then by use, narrowed by the name typed after the last comma, at most 8), shown once the field is focused and then left visible | No combobox to make accessible in three engines; WebKit does not focus a clicked button, so hiding on blur would swallow the click | built |
+| Picking a suggestion replaces the half-typed name only when that name is part of the picked tag ("hol" → "holiday 2026"); a different new name typed before stays | Otherwise a deliberately new tag would be lost by clicking a suggestion | built |
+| "Keep open for another" keeps the tags for the next entry (amount and note are cleared, Repeat goes back to Never) | Tags are usually shared by a run of entries (a holiday's expenses) | built |
+| The first entry of an "Add with Repeat" gets the tags; the rule's later entries do not | The rule carries no tags (planner); the entry typed is still an ordinary entry | built |
+| A `tags` cell on a CSV transfer row is a problem, not ignored; also on wallet and category rows | Same as a category on a transfer row; silently dropping data is worse than asking | built |
+| The CSV `tags` column is the last one; the export writes the names sorted, joined by ", "; the formula guard covers the whole cell | Keeps the header order the Statement Importer's writer follows (a prefix); one cell is one spreadsheet value | built |
+| A tag only skipped (duplicate) rows name is not created by an import; a backup's top-level list is created even when unused | "Import adds, never changes": a re-import adds nothing, not even a tag; the list exists so unused tags survive | built |
+| The backup's top-level list is `tags: [{ name }]` (objects, not strings) | Room for a later field (a colour) without another shape | built |
+| The Tags card counts all time and every wallet group; "Show its N entries" opens `/transactions?month=all&tag=<id>` | The count is about the tag, not the month on /categories | built |
+| The open tag row puts the name first and the entries link next to Delete | Opening a row focuses its first control, which must be the name (as the category rows) | built |
+| An unknown `?tag=` (deleted, or another user's) reads "Unknown tag" in the chip and matches nothing | The URL stays honest about what is filtered; Clear removes it | built |
+
 ### Recurring entries
 
 Decided and built 2026-11-25 (SPEC "Recurring entries"). The table and `transactions.recurring_id` came with migration
@@ -658,6 +688,10 @@ New features beyond these have not been chosen yet.
   registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
+- **Tags (2026-11-25): transfers cannot be tagged, repeating rules carry no tags** (only the first entry of an "Add
+  with Repeat" gets them), and /transactions filters by **one** tag at a time (several come with the filters rework).
+  Tags have no colour and no page of their own; the Overview and /reports have no per-tag figures; the old
+  `TransactionList` (not the day lists) shows no tags. The Statement Importer does not write the CSV `tags` column.
 - **Recurring transfers** *(2026-11-25)*: repeating entries are expenses and income only; a monthly move to savings
   is still entered by hand.
 - **A rule's upcoming occurrences are not shown ahead of time** *(2026-11-25)*: the wallet page's "projected" days
@@ -745,6 +779,14 @@ New features beyond these have not been chosen yet.
   when it does).
 
 ### Not verified
+
+- **Tags (2026-11-25).** Checked: service, import / export, action and render tests on PGlite; `e2e/tags.spec.ts` in
+  all five projects (Chromium, Firefox, WebKit desktop; Chromium and WebKit phone), including the no-JS form;
+  screenshots of the Add dialog with the Tags field, the day list with pills, the Tag chip, a filtered list and the
+  Tags card at 375px and 1280px in light and dark, looked at by eye. Not checked: a screen reader on the suggestion
+  pills and the row names ("Tags: …"), a real phone keyboard over the Add sheet while the suggestions open, case
+  folding of non-ASCII names where JavaScript's `toLowerCase` and Postgres `lower()` disagree (the database's index
+  decides; the importer maps names back with SQL `lower()`), and the query time of the tag filter on a large account.
 
 - **/reports (2026-11-25).** Checked: service and render tests on PGlite, `e2e/reports.spec.ts` and
   `e2e/layout.spec.ts` (headless Chromium, 375px and 1280px, both schemes, manual rates only), screenshots at 375px

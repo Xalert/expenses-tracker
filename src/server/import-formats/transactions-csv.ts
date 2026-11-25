@@ -3,6 +3,7 @@ import type { CategoryKind } from "@/db/schema";
 import { unescapeFormula } from "@/lib/csv";
 import { isValidDate } from "@/lib/dates";
 import { parseAmount } from "@/lib/money";
+import { splitTagInput } from "@/lib/tags";
 import { normalizeName, normalizeNote } from "../_validate";
 import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
 import {
@@ -14,6 +15,7 @@ import {
   normalizeCategoryName,
   normalizeWalletName,
   readCsvTable,
+  readTagNames,
   specBuilder,
   walletKey,
   type ImportFormat,
@@ -29,11 +31,11 @@ export const transactionsCsvFormat: ImportFormat = {
 };
 
 const REQUIRED_COLUMNS = ["date", "type", "wallet", "currency", "amount"] as const;
-const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount", "group", "archived", "kind"] as const;
+const OPTIONAL_COLUMNS = ["category", "note", "to_wallet", "to_currency", "to_amount", "group", "archived", "kind", "tags"] as const;
 /** Cells a `wallet` row must leave empty (it describes a wallet, not money moving). */
-const NOT_ON_WALLET_ROWS = ["category", "note", "to_wallet", "to_currency", "to_amount"] as const;
+const NOT_ON_WALLET_ROWS = ["category", "note", "to_wallet", "to_currency", "to_amount", "tags"] as const;
 /** Cells a `category` row must leave empty (it describes a category). */
-const NOT_ON_CATEGORY_ROWS = ["wallet", "currency", "amount", "note", "to_wallet", "to_currency", "to_amount", "group"] as const;
+const NOT_ON_CATEGORY_ROWS = ["wallet", "currency", "amount", "note", "to_wallet", "to_currency", "to_amount", "group", "tags"] as const;
 type Column = (typeof REQUIRED_COLUMNS)[number] | (typeof OPTIONAL_COLUMNS)[number];
 
 /** `YYYY-MM-DD` or `DD.MM.YYYY` (what European spreadsheets write back) → ISO, else null. */
@@ -56,7 +58,7 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       `${REQUIRED_COLUMNS.join(", ")} (and optionally ${OPTIONAL_COLUMNS.join(", ")}).`,
   });
   if (!table) return out;
-  const { walletFor, categoryFor } = specBuilder(out);
+  const { walletFor, categoryFor, tagFor } = specBuilder(out);
   const walletLabel = (i: number) => `“${out.wallets[i].name}” (${out.wallets[i].currency})`;
 
   /** The `group` cell names the group of the row's wallet (used when the import creates it); one group per wallet. */
@@ -187,6 +189,7 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
 
     if (type === "transfer") {
       if (textCell("category").trim()) problem("category", "Transfers have no category; leave it empty.");
+      if (textCell("tags").trim()) problem("tags", "Transfers cannot have tags; leave it empty.");
       const toName = check(
         () => normalizeWalletName(textCell("to_wallet")),
         (m) => problem("to_wallet", m === "Enter a name." ? "Required for a transfer: the receiving wallet." : m),
@@ -231,6 +234,10 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       continue;
     }
 
+    // Tags: names separated by commas inside the cell (the formula guard applies to the cell as a whole).
+    const tagCell = readTagNames(splitTagInput(textCell("tags")));
+    if ("problem" in tagCell) problem("tags", tagCell.problem);
+
     let categoryName: string | undefined;
     if (type) {
       categoryName = check(
@@ -249,6 +256,7 @@ function parseTransactionsCsv(fileText: string): ParsedFile {
       date: date!,
       note: note!,
       loc: { line },
+      ...("names" in tagCell && tagCell.names.length > 0 ? { tags: tagCell.names.map(tagFor) } : {}),
     });
   }
   return out;

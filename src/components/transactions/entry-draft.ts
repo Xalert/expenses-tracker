@@ -14,6 +14,7 @@ export const DRAFT_FIELDS = [
   "toWalletId",
   "date",
   "note",
+  "tags",
 ] as const;
 
 export type DraftField = (typeof DRAFT_FIELDS)[number];

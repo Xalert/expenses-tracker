@@ -9,6 +9,7 @@ import { currencyDecimals, parseAmount } from "@/lib/money";
 import { MAX_RECURRING_INTERVAL } from "@/lib/recurrence";
 import { normalizeName, normalizeNote } from "../_validate";
 import { MAX_GROUP_NAME_LENGTH } from "../wallet-groups";
+import { normalizeTagName } from "../tags";
 import {
   categoryKey,
   check,
@@ -16,6 +17,8 @@ import {
   fmtCount,
   normalizeCategoryName,
   normalizeWalletName,
+  readTagNames,
+  specBuilder,
   walletKey,
   type ImportFormat,
   type ParsedFile,
@@ -230,8 +233,22 @@ function parseBackup(body: string): ParsedFile {
     });
   }
 
+  // Tags: the account's list (optional; kept so unused tags survive), then each entry's names. One tag per name
+  // ignoring case, the first spelling wins.
+  const { tagFor } = specBuilder(out);
+  data.tags?.forEach((t, i) => {
+    const name = check(() => normalizeTagName(t.name), (m) => problem(`tags[${i}].name`, m));
+    if (name !== undefined) out.tags[tagFor(name)].listed = true;
+  });
+
   data.transactions.forEach((t, i) => {
     const p = `transactions[${i}]`;
+    let tagIdx: number[] | undefined;
+    if (t.tags?.length) {
+      const read = readTagNames(t.tags);
+      if ("problem" in read) problem(`${p}.tags`, read.problem);
+      else tagIdx = read.names.map(tagFor);
+    }
     const wallet = walletRef(`${p}.walletId`, t.walletId);
     let category = categoryIndex.get(t.categoryId);
     if (category === undefined) problem(`${p}.categoryId`, `No category with id ${t.categoryId} in this file.`);
@@ -258,6 +275,7 @@ function parseBackup(body: string): ParsedFile {
       note,
       loc: { path: p },
       ...(recurring === undefined ? {} : { recurring }),
+      ...(tagIdx?.length ? { tags: tagIdx } : {}),
     });
   });
 

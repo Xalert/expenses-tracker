@@ -2,18 +2,30 @@ import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { budgets, categories, manualRates, recurringTransactions, transactions, transfers, walletGroups, wallets } from "@/db/schema";
+import {
+  budgets,
+  categories,
+  manualRates,
+  recurringTransactions,
+  tags,
+  transactions,
+  transfers,
+  walletGroups,
+  wallets,
+} from "@/db/schema";
 import { BACKUP_APP, BACKUP_VERSION, type Backup } from "@/lib/backup-format";
 import { isGroupColor } from "@/lib/group-colors";
 import { CONTEXT_KIND, CONTEXT_VERSION, type ContextExport } from "@/lib/context-format";
 import { escapeFormula, toCsv } from "@/lib/csv";
 import { minorToInputValue } from "@/lib/money";
+import { joinTags, sortTagNames } from "@/lib/tags";
+import { loadAllEntryTags, loadEntryTags } from "./tags";
 import { filterConditions, type TransactionFilters } from "./transactions";
 
 /**
  * Column order of the transactions CSV (export writes exactly these; import requires the first five). `group`,
- * `archived` and `kind` (category rows) were added later and are optional on import, so older files still import
- * unchanged.
+ * `archived`, `kind` (category rows) and `tags` (an entry's tags, ", "-separated) were added later and are optional
+ * on import, so older files still import unchanged; new columns go last.
  */
 export const CSV_COLUMNS = [
   "date",
@@ -29,6 +41,7 @@ export const CSV_COLUMNS = [
   "group",
   "archived",
   "kind",
+  "tags",
 ] as const;
 
 /** Read-only transactions of the exports see one consistent snapshot. */
@@ -107,6 +120,8 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
       .where(eq(budgets.userId, userId))
       .orderBy(asc(budgets.id));
     const categoryNameOf = new Map(categoryRows.map((c) => [c.id, c.name]));
+    const tagRows = await tx.select({ name: tags.name }).from(tags).where(eq(tags.userId, userId)).orderBy(asc(tags.id));
+    const tagsOf = await loadAllEntryTags(tx, userId);
 
     const walletRef = new Map(walletRows.map((w, i) => [w.id, i + 1]));
     const currencyOf = new Map(walletRows.map((w) => [w.id, w.currency]));
@@ -147,7 +162,10 @@ export async function buildBackup(userId: number, now: Date = new Date()): Promi
         amount: minorToInputValue(t.amountMinor, currencyOf.get(t.walletId)!),
         note: t.note,
         ...(t.recurringId !== null && ruleRef.has(t.recurringId) ? { recurringId: ruleRef.get(t.recurringId)! } : {}),
+        ...(tagsOf.has(t.id) ? { tags: tagsOf.get(t.id)! } : {}),
       })),
+      // Every tag of the account, unused ones too, by name (ignoring case).
+      tags: sortTagNames(tagRows.map((t) => t.name)).map((name) => ({ name })),
       transfers: transferRows.map((t) => ({
         date: t.date,
         note: t.note,
@@ -266,6 +284,7 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
 
     const matching = await tx
       .select({
+        id: transactions.id,
         kind: transactions.kind,
         walletId: transactions.walletId,
         categoryId: transactions.categoryId,
@@ -278,6 +297,10 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
       .where(where)
       .orderBy(asc(transactions.date), asc(transactions.id));
 
+    const tagsOf = await loadEntryTags(
+      tx,
+      matching.filter((r) => r.transferId === null).map((r) => r.id),
+    );
     const needTransfers = matching.some((r) => r.transferId !== null);
     const transferById = needTransfers ? new Map((await listTransferRows(userId, tx)).map((t) => [t.id, t])) : new Map();
 
@@ -306,6 +329,7 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
           text(groupOfKey.get(keyOf(w))),
           "",
           "",
+          text(joinTags(tagsOf.get(r.id) ?? [])),
         ]);
         continue;
       }
@@ -330,12 +354,13 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
         text(groupOfKey.get(keyOf(from))),
         "",
         "",
+        "",
       ]);
     }
 
     // Wallet rows (type `wallet`) first: initial balance in `amount`, group, archived date. Every wallet the rows use;
     // with no filter other than the wallet / group scope, every wallet in that scope too (unused ones included).
-    const scopeOnly = !filters.kind && !filters.categoryId && !filters.month && !filters.from && !filters.to && !filters.q;
+    const scopeOnly = !filters.kind && !filters.categoryId && !filters.tagId && !filters.month && !filters.from && !filters.to && !filters.q;
     const inScope = (w: (typeof walletRows)[number]) =>
       filters.walletId !== undefined ? w.id === filters.walletId : filters.groupId === undefined || w.groupId === filters.groupId;
     // In a CSV a wallet *is* its name + currency, so same-named wallets of one currency share one wallet row: the
@@ -366,13 +391,14 @@ export async function buildTransactionsCsv(userId: number, filters: CsvExportFil
         text(groupOfKey.get(keyOf(main))),
         archived ? archived.toISOString().slice(0, 10) : "",
         "",
+        "",
       ];
     });
     // Category rows (type `category`) next: one per archived category the exported rows use, with its kind and the
     // date it was archived, so an import that creates it archives it too. Active categories need no row.
     const categoryLines = categoryRows
       .filter((c) => c.archivedAt !== null && usedCategories.has(c.id))
-      .map((c) => ["", "category", "", "", "", text(c.name), "", "", "", "", "", c.archivedAt!.toISOString().slice(0, 10), c.kind]);
+      .map((c) => ["", "category", "", "", "", text(c.name), "", "", "", "", "", c.archivedAt!.toISOString().slice(0, 10), c.kind, ""]);
     return toCsv([[...CSV_COLUMNS], ...walletLines, ...categoryLines, ...entryRows]);
   }, SNAPSHOT);
 }

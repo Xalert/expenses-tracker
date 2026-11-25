@@ -27,8 +27,8 @@ const DEMO_COUNTS = {
   manual_exchange_rates: 0,
   budgets: 4,
   recurring_transactions: 2,
-  tags: 0,
-  transaction_tags: 0,
+  tags: 3,
+  transaction_tags: 10,
 };
 
 async function counts(db: DB) {

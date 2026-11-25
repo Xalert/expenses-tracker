@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/db";
-import { categories, transactions, wallets } from "@/db/schema";
+import { categories, transactions, transactionTags, wallets } from "@/db/schema";
 import { compareCategoryNames } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange, shiftMonth } from "@/lib/dates";
@@ -106,7 +106,7 @@ export function monthDayN(month: string, today: string): number {
   return month < current ? monthLength(month) : 0;
 }
 
-export type Narrow = { walletId?: number; groupId?: number; categoryId?: number };
+export type Narrow = { walletId?: number; groupId?: number; categoryId?: number; tagId?: number };
 
 /**
  * Conditions for this user's rows on wallets of `currency` (null: every currency), optionally narrowed. Exported for
@@ -118,6 +118,11 @@ export function currencyConditions(userId: number, currency: string | null, narr
   if (narrow.walletId !== undefined) conds.push(eq(transactions.walletId, narrow.walletId));
   else if (narrow.groupId !== undefined) conds.push(eq(wallets.groupId, narrow.groupId));
   if (narrow.categoryId !== undefined) conds.push(eq(transactions.categoryId, narrow.categoryId));
+  if (narrow.tagId !== undefined) {
+    conds.push(
+      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${transactionTags.tagId} = ${narrow.tagId})`,
+    );
+  }
   return conds;
 }
 
@@ -269,6 +274,8 @@ export async function getMonthTimeline(
     /** Only wallets of this group; ignored when `walletId` is set. */
     groupId?: number;
     categoryId?: number;
+    /** Only entries carrying this tag (the /transactions tag filter). */
+    tagId?: number;
     convert?: ConvertOption;
   },
 ): Promise<MonthTimeline> {
@@ -278,6 +285,7 @@ export async function getMonthTimeline(
   if (opts.walletId !== undefined) narrow.walletId = assertId(opts.walletId, "walletId", "wallet");
   if (opts.groupId !== undefined) narrow.groupId = assertId(opts.groupId, "groupId", "group");
   if (opts.categoryId !== undefined) narrow.categoryId = assertId(opts.categoryId, "categoryId", "category");
+  if (opts.tagId !== undefined) narrow.tagId = assertId(opts.tagId, "tagId", "tag");
 
   const previous = shiftMonth(month, -1);
   const { convert } = opts;

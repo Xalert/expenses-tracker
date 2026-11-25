@@ -21,6 +21,8 @@ export type ListParams = {
   wallet?: number;
   kind?: ListKind;
   category?: number;
+  /** `?tag=<id>`: entries carrying that tag. One tag for now. */
+  tag?: number;
   from?: string;
   to?: string;
   q?: string;
@@ -53,6 +55,7 @@ export function parseListParams(sp: SearchParams): ListParams {
     wallet: id(first(sp.wallet)),
     kind: kind === "expense" || kind === "income" || kind === "transfer" ? kind : undefined,
     category: id(first(sp.category)),
+    tag: id(first(sp.tag)),
     from: isValidDate(from) ? from : undefined,
     to: isValidDate(to) ? to : undefined,
     q: q || undefined,
@@ -90,12 +93,12 @@ function monthIsFilter(p: ListParams, thisMonth: string): boolean {
 
 /** Any filter set besides the default month (the currency, the view and the page are not filters). */
 export function hasFilters(p: ListParams, thisMonth: string): boolean {
-  return Boolean(monthIsFilter(p, thisMonth) || p.wallet || p.kind || p.category || p.from || p.to || p.q);
+  return Boolean(monthIsFilter(p, thisMonth) || hasNonDateFilters(p) || p.from || p.to);
 }
 
-/** Filters other than the month / date range (wallet, type, category, search). */
+/** Filters other than the month / date range (wallet, type, category, tag, search). */
 export function hasNonDateFilters(p: ListParams): boolean {
-  return Boolean(p.wallet || p.kind || p.category || p.q);
+  return Boolean(p.wallet || p.kind || p.category || p.tag || p.q);
 }
 
 /** The service filters for these params (no paging): the default month is applied when nothing else is given. */
@@ -105,6 +108,7 @@ export function listFilters(p: ListParams, thisMonth: string): TransactionFilter
     walletId: p.wallet,
     kind: p.kind,
     categoryId: p.category,
+    tagId: p.tag,
     month: view.type === "month" ? view.month : undefined,
     from: p.from,
     to: p.to,
@@ -120,6 +124,7 @@ export function listHref(p: ListParams, overrides: Partial<ListParams> = {}): st
   if (merged.wallet) qs.set("wallet", String(merged.wallet));
   if (merged.kind) qs.set("kind", merged.kind);
   if (merged.category) qs.set("category", String(merged.category));
+  if (merged.tag) qs.set("tag", String(merged.tag));
   if (merged.from) qs.set("from", merged.from);
   if (merged.to) qs.set("to", merged.to);
   if (merged.q) qs.set("q", merged.q);

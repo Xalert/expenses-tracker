@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { CategorySection } from "@/components/categories/category-section";
 import { SpendingSplitCard } from "@/components/categories/spending-split";
+import { TagSection } from "@/components/categories/tag-section";
+import { listTags } from "@/server/tags";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
 import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { CurrencySwitch, PageHeader } from "@/components/ui";
@@ -156,6 +158,8 @@ export default async function CategoriesPage({ searchParams }: Props) {
             segments={[]}
           />
         </div>
+        {/* Tags cut across categories and are managed here too (no route of their own); counts are all time. */}
+        <TagSection tags={await listTags(user.id)} />
       </div>
     </>
   );

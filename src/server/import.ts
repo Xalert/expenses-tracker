@@ -6,12 +6,16 @@ import {
   categories,
   manualRates,
   recurringTransactions,
+  tags,
   transactions,
+  transactionTags,
   transfers,
   walletGroups,
   wallets,
   type CategoryKind,
 } from "@/db/schema";
+import { tagKey } from "@/lib/tags";
+import { ensureTagIds } from "./tags";
 import { parseCsv, stripBom } from "@/lib/csv";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_ROWS } from "@/lib/constants";
 import { resolveTimeZone } from "@/lib/dates";
@@ -125,6 +129,11 @@ export type ImportPreview = {
    * or existing). A budget the account already has is kept as it is, never replaced.
    */
   budgetsToAdd: number;
+  /**
+   * Tags the account lacks (by name, ignoring case) that the import creates: those an added entry carries (CSV `tags`,
+   * backup entry `tags`) and, from a backup, every tag of its `tags` list.
+   */
+  tagsToCreate: string[];
   /** The first `MAX_PROBLEMS_SHOWN` problems, in file order (with `file` set when there are several files). */
   problems: ImportProblem[];
   problemCount: number;
@@ -304,8 +313,18 @@ export function parseImportFiles(
     parsed.wallets.forEach((w, k) => mergeWalletDetails(combined, walletMap[k], w, tag));
     const categoryMap = parsed.categories.map((c) => merger.categoryFor(c.kind, c.name));
     parsed.categories.forEach((c, k) => mergeCategoryDetails(combined, categoryMap[k], c, tag));
+    const tagMap = parsed.tags.map((t) => merger.tagFor(t.name));
+    parsed.tags.forEach((t, k) => {
+      if (t.listed) combined.tags[tagMap[k]].listed = true;
+    });
     combined.entries.push(
-      ...parsed.entries.map((e) => ({ ...e, wallet: walletMap[e.wallet], category: categoryMap[e.category], loc: tag(e.loc) })),
+      ...parsed.entries.map((e) => ({
+        ...e,
+        wallet: walletMap[e.wallet],
+        category: categoryMap[e.category],
+        ...(e.tags ? { tags: e.tags.map((i) => tagMap[i]) } : {}),
+        loc: tag(e.loc),
+      })),
     );
     combined.transfers.push(
       ...parsed.transfers.map((t) => ({ ...t, from: walletMap[t.from], to: walletMap[t.to], loc: tag(t.loc) })),
@@ -448,6 +467,8 @@ type Plan = {
   budgetsToAdd: BudgetSpec[];
   /** Non-blocking notes from planning (e.g. rates the account already had for a date). */
   notices: ImportNotice[];
+  /** File tag indexes the account lacks that the import creates (used by an added entry, or listed by a backup). */
+  tagsToCreate: number[];
   entriesToAdd: EntrySpec[];
   transfersToAdd: TransferSpec[];
   duplicateTransactions: number;
@@ -767,6 +788,18 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     transfersToAdd.push(t);
   }
 
+  // Tags: matched by name ignoring case; a missing one is created when an entry the import adds carries it, or when a
+  // backup lists it. A duplicate entry adds nothing, not even its tags (import adds, never changes).
+  const existingTagIds = new Map<string, number>();
+  if (parsed.tags.length > 0) {
+    for (const t of await tx.select({ id: tags.id, name: tags.name }).from(tags).where(eq(tags.userId, userId))) {
+      existingTagIds.set(tagKey(t.name), t.id);
+    }
+  }
+  const neededTags = new Set<number>(parsed.tags.flatMap((t, i) => (t.listed ? [i] : [])));
+  for (const e of entriesToAdd) for (const i of e.tags ?? []) neededTags.add(i);
+  const tagsToCreate = [...neededTags].filter((i) => !existingTagIds.has(parsed.tags[i].key)).sort((a, b) => a - b);
+
   // Report problems in file order (entries and transfers are interleaved in a CSV).
   const sortedProblems = sortByLocation(problems);
 
@@ -784,6 +817,7 @@ async function planImport(tx: DBOrTx, userId: number, parsed: ParsedFile, opts: 
     recurringToCreate,
     budgetsToAdd,
     notices,
+    tagsToCreate,
     entriesToAdd,
     transfersToAdd,
     duplicateTransactions,
@@ -832,6 +866,7 @@ function summarize({ file: parsed, files }: ParsedSelection, plan: Plan | null):
     recurringToAdd: plan?.recurringToCreate.length ?? 0,
     duplicateRecurring: plan ? plan.recurringTargets.length - plan.recurringToCreate.length : 0,
     budgetsToAdd: plan?.budgetsToAdd.length ?? 0,
+    tagsToCreate: (plan?.tagsToCreate ?? []).map((i) => parsed.tags[i].name),
     problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map(publicLocation),
     problemCount: problems.length,
     notices: [...parsed.notices, ...(plan?.notices ?? [])].map(publicLocation),
@@ -972,8 +1007,19 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
     recurringIds[i] = created.id;
   }
 
+  // Tags: the ones to create (unused ones a backup lists too) and those the added entries carry, by name.
+  const tagNames = new Set<number>(plan.tagsToCreate);
+  for (const e of plan.entriesToAdd) for (const i of e.tags ?? []) tagNames.add(i);
+  const tagIdOf = await ensureTagIds(
+    userId,
+    [...tagNames].map((i) => parsed.tags[i].name),
+    tx,
+  );
+
   for (const chunk of chunks(plan.entriesToAdd)) {
-    await tx
+    // Identity values are assigned in VALUES order within one INSERT, so the ascending ids line up with `chunk`.
+    const ids = (
+      await tx
       .insert(transactions)
       .values(
         chunk.map((e) => ({
@@ -988,7 +1034,16 @@ async function writePlan(tx: DBOrTx, userId: number, parsed: ParsedFile, plan: P
           recurringId: e.recurring === undefined ? null : recurringIds[e.recurring],
           createdAt: now,
         })),
-      );
+      )
+      .returning({ id: transactions.id })
+    )
+      .map((r) => r.id)
+      .sort((a, b) => a - b);
+    if (ids.length !== chunk.length) throw new Error("Transaction insert returned an unexpected number of rows.");
+    const links = chunk.flatMap((e, j) =>
+      [...new Set((e.tags ?? []).map((i) => tagIdOf.get(parsed.tags[i].name)!))].map((tagId) => ({ transactionId: ids[j], tagId })),
+    );
+    for (const part of chunks(links, CHUNK * 5)) await tx.insert(transactionTags).values(part);
   }
 
   for (const chunk of chunks(plan.transfersToAdd, CHUNK / 2)) {

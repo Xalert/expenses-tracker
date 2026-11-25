@@ -33,7 +33,8 @@ import { getGroupScope } from "@/lib/group-scope";
 import { formatMonth, monthRange, shiftMonth, todayInZone } from "@/lib/dates";
 import { monthConversionNotes, ratesHref, ratesNeeded, resolveOverviewCurrency } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
-import { toCategoryOptions, toWalletOptions } from "./form-options";
+import { toCategoryOptions, toTagOptions, toWalletOptions } from "./form-options";
+import { listTags } from "@/server/tags";
 import { getConversion, RATES_SOURCE } from "@/server/exchange-rates";
 import { getMonthTimeline, listUserCurrencies, pickDefaultCurrency } from "@/server/insights";
 import { listDayTotals, listTransactions } from "@/server/transactions";
@@ -110,6 +111,7 @@ export default async function TransactionsPage({
         currency,
         walletId: walletFilter?.id,
         categoryId: params.category,
+        tagId: params.tag,
         groupId,
         convert,
       });
@@ -187,6 +189,9 @@ export default async function TransactionsPage({
     groups.length >= 2,
   );
   const categoryOptions = toCategoryOptions(categories);
+  const tagList = await listTags(user.id);
+  const tagFilterOptions = tagList.map((t) => ({ id: t.id, name: t.name }));
+  const editTagOptions = toTagOptions(tagList);
 
   // Single-month view: the neighbouring months, for the end-of-list row and the [ / ] keys (not for a day or range).
   const months =
@@ -274,6 +279,7 @@ export default async function TransactionsPage({
           thisMonth={thisMonth}
           wallets={walletOptions}
           categories={categoryOptions}
+          tags={tagFilterOptions}
           exportHref={total > 0 ? exportCsvHref(params, thisMonth, groupId) : null}
           showClear={filtered}
         />
@@ -281,7 +287,13 @@ export default async function TransactionsPage({
       {anyAtAll && (
         // Without JavaScript the popover chips cannot open: a plain GET form replaces them.
         <noscript>
-          <NoScriptFilters params={params} thisMonth={thisMonth} wallets={walletOptions} categories={categoryOptions} />
+          <NoScriptFilters
+            params={params}
+            thisMonth={thisMonth}
+            wallets={walletOptions}
+            categories={categoryOptions}
+            tags={tagFilterOptions}
+          />
         </noscript>
       )}
 
@@ -296,7 +308,13 @@ export default async function TransactionsPage({
       {empty ? (
         <Card>{empty}</Card>
       ) : (
-        <InlineEditProvider wallets={editWalletOptions} categories={categoryOptions} today={today} returnTo={currentHref}>
+        <InlineEditProvider
+          wallets={editWalletOptions}
+          categories={categoryOptions}
+          tags={editTagOptions}
+          today={today}
+          returnTo={currentHref}
+        >
           <DayList items={items} totals={totals} today={today} returnTo={currentHref} />
         </InlineEditProvider>
       )}

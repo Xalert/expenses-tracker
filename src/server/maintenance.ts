@@ -140,16 +140,16 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
     await tx({ walletId: eurBank.id, kind: "expense", category: "Groceries", amountMinor: 6420, date: day(month, 3), note: "Weekly shop" });
     await tx({ walletId: eurBank.id, kind: "expense", category: "Groceries", amountMinor: 5875, date: day(month, 10), note: "Weekly shop" });
     await tx({ walletId: eurBank.id, kind: "expense", category: "Groceries", amountMinor: 7130, date: day(month, 17) });
-    await tx({ walletId: eurCash.id, kind: "expense", category: "Food", amountMinor: 1450, date: day(month, 4), note: "Lunch with Ana" });
+    await tx({ walletId: eurCash.id, kind: "expense", category: "Food", amountMinor: 1450, date: day(month, 4), note: "Lunch with Ana", tags: ["friends"] });
     await tx({ walletId: eurCash.id, kind: "expense", category: "Food", amountMinor: 380, date: day(month, 8), note: "Coffee" });
     await tx({ walletId: eurCash.id, kind: "expense", category: "Transport", amountMinor: 4900, date: day(month, 1), note: "Monthly transit pass" });
     await tx({ walletId: usd.id, kind: "expense", category: "Bills", amountMinor: 1599, date: day(month, 12), note: "Streaming subscription" });
-    await tx({ walletId: ron.id, kind: "expense", category: "Food", amountMinor: 8650, date: day(month, 14), note: "Dinner in Cluj" });
-    await tx({ walletId: ron.id, kind: "expense", category: "Transport", amountMinor: 3200, date: day(month, 15), note: "Taxi" });
+    await tx({ walletId: ron.id, kind: "expense", category: "Food", amountMinor: 8650, date: day(month, 14), note: "Dinner in Cluj", tags: ["Cluj trip", "friends"] });
+    await tx({ walletId: ron.id, kind: "expense", category: "Transport", amountMinor: 3200, date: day(month, 15), note: "Taxi", tags: ["Cluj trip"] });
   }
   for (const month of [lastMonth, thisMonth]) {
     await tx({ walletId: studio.id, kind: "income", category: "Extra Income", amountMinor: 350000, date: day(month, 9), note: "Client invoice" });
-    await tx({ walletId: studio.id, kind: "expense", category: "Bills", amountMinor: 4900, date: day(month, 11), note: "Software licences" });
+    await tx({ walletId: studio.id, kind: "expense", category: "Bills", amountMinor: 4900, date: day(month, 11), note: "Software licences", tags: ["reimbursable"] });
     await tx({ walletId: studio.id, kind: "expense", category: "Housing", amountMinor: 60000, date: day(month, 3), note: "Coworking desk" });
   }
   await tx({ walletId: usd.id, kind: "income", category: "Extra Income", amountMinor: 75000, date: day(lastMonth, 20), note: "Freelance invoice #12" });
