@@ -87,6 +87,14 @@ this file in the same change and call the deviation out in your final report.
   creation), and an initial balance. `balance = initial + Σ income + Σ transfer_in − Σ expense − Σ transfer_out`.
   A wallet with transactions cannot be deleted, only archived (hidden from pickers and dashboard totals; its
   history stays visible). A wallet with no transactions can be deleted.
+  - **Reconciling** a wallet: the user gives its actual balance (in the wallet's currency, may be negative) and a
+    date (default today, never after the user's today). The difference = actual − the balance at the end of that
+    date (initial + every entry dated on or before it, transfers included; later entries left out, as the wallet
+    page's "projected" days). Positive → one **income** entry, negative → one **expense**, dated that day, of
+    `|difference|`, note "Balance adjustment", in the user's category "Balance adjustment" of that kind (matched
+    ignoring case; created when missing; an archived one is used as it is and stays archived). Zero → nothing is
+    recorded. It is an ordinary entry (editable, deletable, counted in the month's figures); the initial balance is
+    never changed. Refused for an archived wallet or one in an archived group, as any new entry.
 - **Category** ("transaction type"): per user, has a `kind` (`expense` | `income`). Seeded on registration:
   expense → Food, Groceries, Bills, Transport, Housing; income → Salary, Refund, Extra Income.
   The defaults are only a starting point: users add, rename, archive and remove categories freely at `/categories`,
@@ -411,7 +419,8 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `username`, `email`,
-`firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`.
+`firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
+`actualBalance`.
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -461,6 +470,20 @@ createWallet(userId, { name, currency, initialBalanceMinor }): WalletView      /
 updateWallet(userId, walletId, { name, initialBalanceMinor }): WalletView     // currency is immutable
 archiveWallet(userId, walletId): WalletView / unarchiveWallet(userId, walletId): WalletView
 deleteWallet(userId, walletId): void                                           // CONFLICT if it has transactions
+
+// reconcile.ts
+BALANCE_ADJUSTMENT = "Balance adjustment"                                      // the category name and the entry's note
+getWalletBalanceOn(userId, walletId, date, db?): number | null                 // initial + entries dated ≤ date; null if not owned
+listWalletClosingBalances(userId, walletId, through): { initialBalanceMinor; closings: [date, closingMinor][] } | null
+//   every date ≤ through that has entries, ascending, with the balance at its end (the reconcile form's live preview;
+//   `balanceOnDate` in src/lib/reconcile.ts reads any day from it)
+reconcileWallet(userId, walletId, { actualBalanceMinor, date }, { today }):
+  { trackedBalanceMinor; actualBalanceMinor; differenceMinor; transaction: TransactionView | null; categoryCreated: boolean }
+//   the rule under Domain rules → Reconciling. NOT_FOUND (no field) for a missing / another user's wallet; VALIDATION
+//   (no field) for an archived wallet or group, field `actualBalance` (not a safe integer, or a difference beyond it),
+//   field `date` (invalid, or after `today`: "Choose today or an earlier date."). One DB transaction: the wallet row
+//   is locked FOR UPDATE, the balance read, the category found or created (insert … on conflict do nothing, then
+//   read; read FOR SHARE like createTransaction) and the entry inserted, so two submissions cannot both add it.
 
 // categories.ts
 type CategoryView = { id; name; kind: 'expense' | 'income'; archivedAt: Date | null }
@@ -1170,17 +1193,40 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - **/wallets/[id]** (`[id]/page.tsx`, `components/wallets/{wallet-month-chart,wallet-menu}.tsx`): a breadcrumb
     `<nav aria-label="Breadcrumb"><ol>` "Wallets / <name>" (`aria-current="page"`). The header card (20px radius):
     `<h1>` name (22px/800), the currency pill (`bg-surface-raised`, `title` = currency name), an "Archived" pill
-    when archived; the balance (36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started
-    with <initial balance>". On the right: Expense / Income / Transfer secondary pills with the kind dot
+    when archived; the balance at the end of today (`getWalletBalanceOn(…, today)`: entries dated later left out;
+    36px, 44px from `sm`, /800, `text-expense` when negative); "Balance today · started with <initial balance>", and,
+    when entries dated after today change it, "€… projected after the entries dated later" (`WalletView.balanceMinor`,
+    which counts every entry). On the right: Expense / Income / Transfer secondary pills with the kind dot
     (`bg-expense-dot` / `bg-income` / `bg-transfer`) linking to `/transactions/new?wallet=<id>&kind=…&returnTo=<this
     page>` (the dialog ignores `returnTo`; the no-JS full page returns here), and the "⋯" button
     (`aria-haspopup="menu"`, "More actions for <name>") opening a `Popover role="menu"`: "Edit wallet" (link to
-    `/wallets/<id>/edit`, the dialog), Archive (confirm) or Unarchive, and "Delete wallet" (confirm, danger text)
-    when `transactionCount === 0`; each `role="menuitem"`, 44px tall. Opening focuses the first item; Up / Down
+    `/wallets/<id>/edit`, the dialog), "Reconcile balance" (link to this page with `reconcile=1`, keeping `?month=`;
+    not offered for an archived wallet or one in an archived group), Archive (confirm) or Unarchive, and "Delete
+    wallet" (confirm, danger text) when `transactionCount === 0`; each `role="menuitem"`, 44px tall. Opening focuses the first item; Up / Down
     wrap, Home / End jump (`nextMenuIndex`); Escape and Tab close as any `Popover`; Archive / Unarchive close the
     menu on success, Delete redirects to `/wallets`. The page renders `<AddButton href="/transactions/new?wallet=<id>"
     />` unless archived. Archived: a muted notice ("… Unarchive it from the ⋯ menu to use it again.") replaces the
     three pills, and the shell's default Add button stays.
+    **Reconcile balance** (`components/wallets/reconcile-form.tsx`, `reconcileWalletAction` bound to the wallet on the
+    server): with `?reconcile=1` (ignored for an archived wallet or group) a `<section>` "Reconcile balance"
+    (`bg-surface-open`, 16px radius) opens in the header card under the header row. A line explains that the
+    difference becomes one entry in "Balance adjustment", dated that day, editable like any other. Fields: "Actual
+    balance" (`actualBalance`, `inputMode="decimal"`, hint "In EUR, up to 2 decimals. May be negative (use −).") and
+    "As of the end of" (`DatePicker` `date`, default and `max` = the user's today). Under them a polite live line:
+    "Tracked balance at the end of today: €987.66." (or "of 10 Nov 2026") and, once the amount parses, "This adds an
+    expense of €12.40." / "This adds income of €5.00." / "The balance already matches. Nothing will be added."; the
+    tracked balance for any date comes from `listWalletClosingBalances` (loaded only while the panel is open) through
+    `balanceOnDate`. Buttons: Close (a link to the page without `reconcile`) and "Record adjustment" (primary,
+    "Recording…" while pending); stacked full width on phones. Opening focuses the balance input (also when the menu
+    item is chosen with the panel already open); Close and Escape (not while the date picker is open) go back with
+    `router.replace` and focus the ⋯ button (`id="wallet-menu-<id>"`). The action follows the usual pattern
+    (`parseReconcile`: an empty or unparseable amount → `fieldErrors.actualBalance`, a bad date → `fieldErrors.date`,
+    values echoed; the fields remount on every result and focus the first invalid one), calls `reconcileWallet` with
+    `todayInZone(user.timeZone)`, revalidates `("/", "layout")` and returns `{ ok: true, message, values: { date } }`:
+    the panel stays open with a `role="status"` confirmation ("Added an expense of €12.40 on 25 Nov 2026 in “Balance
+    adjustment”. The balance on that day is now €975.26." / "The balance already matches €50.00 on 25 Nov 2026.
+    Nothing was added.") and empty fields; for a date outside the month shown it adds a link "Show October 2026".
+    Without JavaScript the form posts and the page renders the confirmation (the date is then today).
     **Month chart** (inside the header card, under a divider): "Balance through November 2026" and the
     `MonthSwitcher` (`basePath=/wallets/<id>`; `?month=` invalid → current, later than the current month → clamped to
     it). `WalletMonthChart`: legend Balance · Out · In (its `title` says the scales differ), a 160px (220px from

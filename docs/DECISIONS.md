@@ -66,6 +66,14 @@ section holds what replaced it.
 | Archived wallets are hidden from pickers and dashboard totals; an existing entry may stay on one when edited, new entries are refused | History stays intact and editable without reviving the wallet | built |
 | Dates are `YYYY-MM-DD` strings with no time or time zone | An expense belongs to a calendar day; avoids day-shift bugs | planner |
 | Transfer legs carry a copy of the transfer's note | So the note search on the transactions list finds transfers | built |
+| (2026-11-25) "Reconcile balance" on the wallet page: the user types the wallet's actual balance (in its currency, through `parseAmount`, may be negative) and a date (default today, never later); the difference from the tracked balance at the end of that day is recorded as one entry dated that day: income when positive, an expense when negative, in a category "Balance adjustment" of that kind (created when missing), note "Balance adjustment". A zero difference records nothing and says the balance already matches | A tracked balance drifts from the real one (a forgotten coffee, a bank fee); hunting for the missing entry is slow | planner |
+| (2026-11-25) Reconciling records an entry rather than changing the initial balance | An entry is visible, dated, editable and deletable and does not rewrite history; it is an ordinary entry and counts in the month's figures like any other | planner |
+| (2026-11-25) Reconciling an archived wallet, or one in an archived group, is refused as for any new entry; one service (`reconcileWallet`, `userId` first) reads the balance and writes the entry in one DB transaction with the wallet row locked (`FOR UPDATE`), so two submissions cannot both add the difference | Same rule as every new entry; a double submit must not double the correction | planner |
+| (2026-11-25) The interface is a panel on the wallet page opened from the ⋯ menu, with no new route; it shows live what saving will record and, after saving, a confirmation of what was added | Reconciling is occasional and belongs to one wallet | planner |
+| (2026-11-25) The wallet page's big balance is now the balance at the end of today: entries dated later are left out, with a line "€… projected after the entries dated later" when they change it. It used to include every entry, under the label "Balance today" | The page already calls days after today "projected", and reconciling as of today compares with the balance at the end of today; with the old figure the page would not show the balance typed while a future-dated entry exists. /wallets and the Overview still show the balance including future-dated entries (see Known gaps) | built |
+| (2026-11-25) An archived "Balance adjustment" category is used as it is and stays archived; the name is matched ignoring case, within the entry's kind only | Reconciling never fails on it and never changes the user's category settings; the entry keeps it when edited, as any entry with an archived category | built |
+| (2026-11-25) The reconcile panel is open while the URL has `?reconcile=1` (the ⋯ menu item links there; Close and Escape go back to the page and return focus to the ⋯ button); the action is bound on the server and passed down | A real URL works without JavaScript, and the preview's data (every day's closing balance up to today, `listWalletClosingBalances`) is only loaded while the panel is open. A Server Action bound inside the client component hung on a no-JavaScript post in the e2e test | built |
+| (2026-11-25) After saving, the panel stays open with the confirmation ("Added an expense of €12.40 on 25 Nov 2026 in “Balance adjustment”. The balance on that day is now €975.26.") and empty fields; for a date in another month than the one shown, it links to that month | The confirmation is what the brief asks for; the entry is otherwise not visible when it falls in another month | built |
 | Another user's row behaves exactly like a missing row | No information leak about what exists | built |
 
 ### Accounts and sign-in
@@ -587,6 +595,14 @@ New features beyond these have not been chosen yet.
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
+- **Balances with future-dated entries differ between pages (2026-11-25).** The wallet page's big balance is the
+  balance at the end of today (future-dated entries left out, shown as "projected"); the /wallets cards and the
+  Overview's Wallets card still use `WalletView.balanceMinor`, which includes every entry. With a future-dated entry
+  the two show different numbers. Not changed with the reconcile work, which stays on the wallet page.
+- **Reconcile without JavaScript** can only use today's date (the date picker needs scripts), and the ⋯ menu that
+  leads to it needs scripts too: `/wallets/<id>?reconcile=1` works without them.
+- **The reconcile row lock covers two reconciliations only:** an ordinary new entry (`createTransaction`) does not lock
+  the wallet row, so one saved in the same instant can land between the balance read and the adjustment.
 
 ### Statement importer gaps
 
@@ -847,3 +863,8 @@ New features beyond these have not been chosen yet.
 - **Dependabot (2026-11-25) has not run.** `.github/dependabot.yml` was checked only against the documented options
   (and parsed as YAML): not whether the groups come out as intended (`next` and `eslint-config-next` in one PR), the
   cooldown, or the Docker entry finding `FROM node:24-bookworm-slim` and which tag it proposes.
+- **Reconcile balance (2026-11-25).** The wallet row lock (`FOR UPDATE OF wallets`) was checked once by hand on
+  Postgres 17 (eight reconciliations of one wallet at once: one recorded the difference, seven found it matched; a
+  ninth on another wallet at the same time shared the newly created category), not by a test: the service test runs
+  on PGlite, which has one connection and so runs them one after the other. Checked in Chromium only (desktop and the 375px phone project, light and dark by screenshot);
+  the live preview's announcement (`aria-live`) was not heard with a screen reader.
