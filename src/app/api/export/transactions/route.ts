@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { parseListParams } from "@/components/transactions/list-params";
 import { getCurrentUser } from "@/lib/auth";
-import { todayISO } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { buildTransactionsCsv } from "@/server/export";
 import { attachmentHeaders, unauthorized } from "../_shared";
 
@@ -30,6 +30,6 @@ export async function GET(request: NextRequest) {
     q: params.q,
   });
   return new Response(csv, {
-    headers: attachmentHeaders(`expenses-tracker-transactions-${todayISO()}.csv`, "text/csv; charset=utf-8"),
+    headers: attachmentHeaders(`expenses-tracker-transactions-${todayInZone(user.timeZone)}.csv`, "text/csv; charset=utf-8"),
   });
 }

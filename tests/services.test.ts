@@ -375,8 +375,7 @@ describe("dashboard", () => {
     expect(feb.expenseByCategory).toHaveLength(1);
 
     await expectServiceError(() => getDashboard(alice.id, { month: "2026-13" }), "VALIDATION");
-    expect((await getDashboard(bob.id)).totalsByCurrency).toEqual([]);
-    expect((await getDashboard(bob.id)).month).toMatch(/^\d{4}-\d{2}$/);
+    expect((await getDashboard(bob.id, { month: "2026-03" })).totalsByCurrency).toEqual([]);
   });
 });
 

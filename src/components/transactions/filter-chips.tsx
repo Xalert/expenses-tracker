@@ -246,6 +246,7 @@ function MonthPanel({
     <div className="flex flex-col gap-2">
       <MonthGrid
         value={shown}
+        thisMonth={thisMonth}
         focusMonth={base}
         autoFocus
         onSelect={(m) => {

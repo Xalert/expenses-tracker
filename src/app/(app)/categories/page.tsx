@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { exchangeRatesEnabled } from "@/lib/config";
 import { getGroupScope } from "@/lib/group-scope";
 import { spendingSplit } from "@/lib/category-split";
-import { currentMonth, isValidMonth, monthRange, todayISO } from "@/lib/dates";
+import { isValidMonth, monthRange, todayInZone } from "@/lib/dates";
 import {
   monthConversionNotes,
   overviewHref,
@@ -31,7 +31,8 @@ export default async function CategoriesPage({ searchParams }: Props) {
   const params = await searchParams;
   const { selected } = await getGroupScope();
   const groupId = selected?.id;
-  const maxMonth = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const maxMonth = today.slice(0, 7);
   const requested = typeof params.month === "string" && isValidMonth(params.month) ? params.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
 
@@ -57,7 +58,7 @@ export default async function CategoriesPage({ searchParams }: Props) {
   const split = currency ? spendingSplit(all) : null;
   const activeCurrencies = await listUserCurrencies(user.id, { groupId });
   const showSwitch = currency !== null && (activeCurrencies.length > 1 || !activeCurrencies.includes(currency));
-  const lastDate = month === maxMonth ? todayISO() : monthRange(month).to;
+  const lastDate = month === maxMonth ? today : monthRange(month).to;
   const missing = converted?.missingCurrencies ?? [];
   const toRates = ratesHref(overviewHref(month, explicit ? currency : null, maxMonth, "/categories", view));
   const notes =

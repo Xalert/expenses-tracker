@@ -148,7 +148,10 @@ export function EntryForm({
   wallets: WalletOption[];
   categories: CategoryOption[];
   initial: EntryInitialValues;
-  /** The server's today (`todayISO()`), for the Today / Yesterday pills; passed in so SSR and the browser agree. */
+  /**
+   * The user's today (`todayInZone(user.timeZone)` on the server), for the Today / Yesterday pills and the date
+   * picker; passed in so it is in the account's zone and SSR and the browser agree.
+   */
   today: string;
   transactionAction?: Action;
   transferAction?: Action;
@@ -543,6 +546,7 @@ export function EntryForm({
               <DatePicker
                 id={pid("date")}
                 name="date"
+                today={today}
                 required
                 value={date}
                 onChange={setDate}

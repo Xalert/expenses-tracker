@@ -3,7 +3,7 @@ import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { categories, transactions, wallets } from "@/db/schema";
 import { compareCategoryNames } from "@/lib/category-order";
-import { currentMonth,isValidMonth, monthRange } from "@/lib/dates";
+import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { listTransactions, type TransactionView } from "./transactions";
 import { walletInOpenGroupSql } from "./wallet-groups";
@@ -26,11 +26,12 @@ export type Dashboard = {
 
 export const RECENT_COUNT = 8;
 
+/** `month` is required: the caller decides which month is current (the user's today, `todayInZone`). */
 export async function getDashboard(
   userId: number,
-  opts: { month?: string; groupId?: number } = {},
+  opts: { month: string; groupId?: number },
 ): Promise<Dashboard> {
-  const month = opts.month ?? currentMonth();
+  const month = opts.month;
   if (!isValidMonth(month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
   const { from, to } = monthRange(month);
   const db = await getDb();

@@ -4,9 +4,12 @@ import { MonthSwitcher } from "@/components/dashboard/month-switcher";
 import { CalendarPanel, DatePicker } from "@/components/ui/date-picker";
 import { MonthGrid } from "@/components/ui/month-grid";
 
+/** The user's today, from the server; the components never read the clock. */
+const TODAY = "2026-11-25";
+
 describe("DatePicker (closed)", () => {
   it("renders the formatted date on the trigger and the ISO value in a hidden input", () => {
-    const html = renderToStaticMarkup(<DatePicker id="date" name="date" required defaultValue="2026-11-05" />);
+    const html = renderToStaticMarkup(<DatePicker today={TODAY} id="date" name="date" required defaultValue="2026-11-05" />);
     expect(html).toContain('<input type="hidden" name="date" value="2026-11-05"/>');
     expect(html).toContain("5 Nov 2026");
     expect(html).toContain('id="date"');
@@ -17,20 +20,20 @@ describe("DatePicker (closed)", () => {
   });
 
   it("attaches a field error the way <Input> does", () => {
-    const html = renderToStaticMarkup(<DatePicker id="date" name="date" defaultValue="2026-11-05" error="Pick a date." />);
+    const html = renderToStaticMarkup(<DatePicker today={TODAY} id="date" name="date" defaultValue="2026-11-05" error="Pick a date." />);
     expect(html).toContain('aria-invalid="true"');
     expect(html).toContain('aria-describedby="date-error"');
   });
 
   it("with allowEmpty and no value shows the placeholder, no clear button and posts nothing", () => {
-    const html = renderToStaticMarkup(<DatePicker id="filter-from" name="from" allowEmpty defaultValue="" />);
+    const html = renderToStaticMarkup(<DatePicker today={TODAY} id="filter-from" name="from" allowEmpty defaultValue="" />);
     expect(html).toContain("Pick a date");
     expect(html).not.toContain("Clear date");
     expect(html).not.toContain('name="from"');
   });
 
   it("with allowEmpty and a value shows the clear button", () => {
-    const html = renderToStaticMarkup(<DatePicker id="filter-to" name="to" allowEmpty defaultValue="2026-02-01" />);
+    const html = renderToStaticMarkup(<DatePicker today={TODAY} id="filter-to" name="to" allowEmpty defaultValue="2026-02-01" />);
     expect(html).toContain('aria-label="Clear date"');
     expect(html).toContain('name="to" value="2026-02-01"');
     expect(html).toContain("1 Feb 2026");
@@ -39,6 +42,7 @@ describe("DatePicker (closed)", () => {
   it("controlled: posts `value`, and `display` / `aria-label` / `triggerClassName` restyle the trigger", () => {
     const html = renderToStaticMarkup(
       <DatePicker
+        today={TODAY}
         id="date"
         name="date"
         value="2026-11-07"
@@ -56,7 +60,7 @@ describe("DatePicker (closed)", () => {
   });
 
   it("treats an invalid default as empty", () => {
-    const html = renderToStaticMarkup(<DatePicker id="d" name="d" allowEmpty defaultValue="2026-02-30" />);
+    const html = renderToStaticMarkup(<DatePicker today={TODAY} id="d" name="d" allowEmpty defaultValue="2026-02-30" />);
     expect(html).toContain("Pick a date");
     expect(html).not.toContain('name="d"');
   });
@@ -64,26 +68,41 @@ describe("DatePicker (closed)", () => {
 
 describe("MonthGrid", () => {
   it("marks the selected month, disables months past the max and keeps one month in the Tab order", () => {
-    const html = renderToStaticMarkup(<MonthGrid value="2026-03" maxMonth="2026-11" onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<MonthGrid value="2026-03" thisMonth="2026-11" maxMonth="2026-11" onSelect={() => {}} />);
     expect(html).toContain("2026");
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
     expect(html).toMatch(/aria-pressed="true" aria-label="March 2026"/);
     expect(html).toMatch(/disabled="" aria-pressed="false" aria-label="December 2026"/);
     expect(html.match(/tabindex="0"/g)).toHaveLength(1);
   });
+
+  it("marks the passed current month, and starts on its year without a value", () => {
+    const html = renderToStaticMarkup(<MonthGrid value={null} thisMonth="2027-01" onSelect={() => {}} />);
+    expect(html).toContain(">2027<");
+    expect(html.match(/aria-current="date"/g)).toHaveLength(1);
+    expect(html).toMatch(/aria-current="date" aria-label="January 2027"/);
+    expect(html).toMatch(/tabindex="0"[^>]*aria-label="January 2027"/);
+  });
 });
 
 describe("CalendarPanel", () => {
   it("the day view has no way back (it is the start) and offers the month view from the label", () => {
-    const html = renderToStaticMarkup(<CalendarPanel value="2026-03-05" allowEmpty={false} onPick={() => {}} />);
+    const html = renderToStaticMarkup(<CalendarPanel value="2026-03-05" today={TODAY} allowEmpty={false} onPick={() => {}} />);
     expect(html).toContain('role="grid"');
     expect(html).toContain("choose a month");
     expect(html).not.toContain("Back to days");
   });
 
+  it("marks the passed today (not the clock's) and opens on its month when there is no value", () => {
+    const html = renderToStaticMarkup(<CalendarPanel value="" today="2027-01-01" allowEmpty onPick={() => {}} />);
+    expect(html.match(/aria-current="date"/g)).toHaveLength(1);
+    expect(html).toMatch(/tabindex="0"[^>]*aria-current="date"/);
+    expect(html).toContain("January 2027");
+  });
+
   it("the month view has a labelled button back to the days of the month it came from", () => {
     const html = renderToStaticMarkup(
-      <CalendarPanel value="2026-03-05" allowEmpty={false} onPick={() => {}} initialView="months" />,
+      <CalendarPanel value="2026-03-05" today={TODAY} allowEmpty={false} onPick={() => {}} initialView="months" />,
     );
     expect(html).not.toContain('role="grid"');
     expect(html).toMatch(/<button type="button"[^>]*>(?:(?!<\/button>).)*Back to days<span class="sr-only">, March 2026<\/span><\/button>/);

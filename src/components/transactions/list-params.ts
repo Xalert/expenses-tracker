@@ -6,7 +6,7 @@
 // instead of the default "All in EUR"); neither is a filter.
 
 import { isValidCurrency } from "@/lib/currencies";
-import { currentMonth, formatDate, formatMonth, isValidDate, isValidMonth } from "@/lib/dates";
+import { formatDate, formatMonth, isValidDate, isValidMonth } from "@/lib/dates";
 // Type-only: this module also runs in the browser (the chip row).
 import type { TransactionFilters } from "@/server/transactions";
 
@@ -77,7 +77,7 @@ export type ListView =
   | { type: "all" }
   | { type: "range"; from?: string; to?: string };
 
-export function resolveView(p: ListParams, thisMonth: string = currentMonth()): ListView {
+export function resolveView(p: ListParams, thisMonth: string): ListView {
   if (p.from || p.to) return { type: "range", from: p.from, to: p.to };
   if (p.month === "all") return { type: "all" };
   return { type: "month", month: p.month ?? thisMonth };
@@ -89,7 +89,7 @@ function monthIsFilter(p: ListParams, thisMonth: string): boolean {
 }
 
 /** Any filter set besides the default month (the currency, the view and the page are not filters). */
-export function hasFilters(p: ListParams, thisMonth: string = currentMonth()): boolean {
+export function hasFilters(p: ListParams, thisMonth: string): boolean {
   return Boolean(monthIsFilter(p, thisMonth) || p.wallet || p.kind || p.category || p.from || p.to || p.q);
 }
 
@@ -99,7 +99,7 @@ export function hasNonDateFilters(p: ListParams): boolean {
 }
 
 /** The service filters for these params (no paging): the default month is applied when nothing else is given. */
-export function listFilters(p: ListParams, thisMonth: string = currentMonth()): TransactionFilters {
+export function listFilters(p: ListParams, thisMonth: string): TransactionFilters {
   const view = resolveView(p, thisMonth);
   return {
     walletId: p.wallet,
@@ -134,7 +134,7 @@ export function listHref(p: ListParams, overrides: Partial<ListParams> = {}): st
  * The list showing `month` (the current one leaves `month` out of the URL; `"all"` = all time), keeping the other
  * filters and the currency, dropping `from` / `to` and the page.
  */
-export function monthHref(p: ListParams, month: string, thisMonth: string = currentMonth()): string {
+export function monthHref(p: ListParams, month: string, thisMonth: string): string {
   return listHref(p, { month: month === thisMonth ? undefined : month, from: undefined, to: undefined, page: 1 });
 }
 
@@ -142,7 +142,7 @@ export function monthHref(p: ListParams, month: string, thisMonth: string = curr
  * A day bar of the strip for `month`: narrows the list to that day (`from=to=<date>`), keeping the month in the URL
  * so clearing the day returns to it. `date` null = back to the whole month.
  */
-export function dayHref(p: ListParams, month: string, date: string | null, thisMonth: string = currentMonth()): string {
+export function dayHref(p: ListParams, month: string, date: string | null, thisMonth: string): string {
   return listHref(p, {
     month: month === thisMonth ? undefined : month,
     from: date ?? undefined,
@@ -156,7 +156,7 @@ export function dayHref(p: ListParams, month: string, date: string | null, thisM
  * The month the list shows is always written out — the export route itself defaults to all time. `groupId` (the
  * selected wallet group) adds `group=<id>`; the service ignores it when a wallet filter is set.
  */
-export function exportCsvHref(p: ListParams, thisMonth: string = currentMonth(), groupId?: number): string {
+export function exportCsvHref(p: ListParams, thisMonth: string, groupId?: number): string {
   const view = resolveView(p, thisMonth);
   const qs = listHref(p, {
     month: view.type === "month" ? view.month : undefined,
@@ -177,7 +177,7 @@ function shortDate(date: string, year: string): string {
 }
 
 /** The month chip's text: "November 2026", "All time", "5 Nov – 12 Nov", "5 Nov", "From 5 Nov", "Until 12 Nov". */
-export function viewLabel(view: ListView, thisMonth: string = currentMonth()): string {
+export function viewLabel(view: ListView, thisMonth: string): string {
   if (view.type === "all") return "All time";
   if (view.type === "month") return formatMonth(view.month);
   const year = thisMonth.slice(0, 4);

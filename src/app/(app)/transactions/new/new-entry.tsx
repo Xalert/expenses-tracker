@@ -1,6 +1,7 @@
 import { EntryForm, type EntryKind } from "@/components/transactions/entry-form";
 import { Card, EmptyState, LinkButton } from "@/components/ui";
-import { todayISO } from "@/lib/dates";
+import type { CurrentUser } from "@/lib/auth";
+import { todayInZone } from "@/lib/dates";
 import { getGroupScope } from "@/lib/group-scope";
 import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
@@ -16,17 +17,18 @@ export type SearchParams = Record<string, string | string[] | undefined>;
  * and supplies the heading.
  */
 export async function NewEntry({
-  userId,
+  user,
   searchParams,
   returnTo,
   variant = "page",
 }: {
-  userId: number;
+  user: Pick<CurrentUser, "id" | "timeZone">;
   searchParams: SearchParams;
   returnTo: string;
   /** "dialog" from the intercepted route: no card, and a save closes the dialog instead of redirecting. */
   variant?: "page" | "dialog";
 }) {
+  const userId = user.id;
   const wallets = await walletOptions(userId);
 
   if (wallets.length === 0) {
@@ -48,7 +50,7 @@ export async function NewEntry({
   const groupFirst = selected ? (await listWallets(userId, { groupId: selected.id }))[0]?.id : undefined;
   const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : groupFirst;
 
-  const today = todayISO();
+  const today = todayInZone(user.timeZone);
   return (
     <EntryForm
       variant={variant}

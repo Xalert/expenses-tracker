@@ -167,8 +167,9 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
     (when it differs from the display name), then the email (when there is one), one per line, then Sign out. Long
     values truncate with an ellipsis and a tooltip; between them and Sign out, an **Account settings** link to
     `/account`.
-- **Time zone.** An account may have an IANA time zone (`users.time_zone`); it is used only to date Spendee's UTC
-  timestamps on import (Import / export → Spendee). Valid means: `Intl.DateTimeFormat` accepts it and its canonical
+- **Time zone.** An account may have an IANA time zone (`users.time_zone`). It decides what **"today"** is for that
+  user everywhere (see "Today" below), and it dates Spendee's UTC timestamps on import (Import / export → Spendee).
+  Valid means: `Intl.DateTimeFormat` accepts it and its canonical
   name (`resolvedOptions().timeZone`) is in `Intl.supportedValuesOf("timeZone")` or is `UTC` — offsets such as
   `+02:00` and `Etc/GMT+5` are refused; at most 100 characters; stored in the canonical spelling (`europe/bucharest`
   → `Europe/Bucharest`, `Etc/UTC` → `UTC`). It is set automatically: the `/register` and `/login` forms post a
@@ -177,11 +178,28 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
   stores it; a **successful** sign-in stores it only when the account has none yet (`update … where time_zone is
   null`), so it never overrides a zone chosen on `/account`. An invalid or absent value is ignored (no error; the
   zone stays NULL). On `/account` it can be chosen or cleared without the password. A stored zone the runtime no
-  longer recognises counts as not set. "Today" elsewhere in the app is still the server's date (not per account).
+  longer recognises counts as not set.
   - As built: `src/lib/time-zone.ts` (`canonicalTimeZone(value): string | null`, `listTimeZones()`,
     `groupedTimeZones()` for the select); services `adoptTimeZoneIfUnset(userId, browserTimeZone): Promise<boolean>`
     and `getUserTimeZone(userId, conn?): Promise<string | null>`; `registerUser` takes `timeZone?`; `UserView` has
-    `timeZone`.
+    `timeZone`; `CurrentUser` has `timeZone` too (canonical, or null when unset or unknown to the runtime; read in
+    the same query as the session, so no extra round trip).
+- **Today.** Everything a signed-in user sees as "today" is the date **in the account's time zone**: the default date
+  of the entry and transfer forms and their Today / Yesterday pills, the current month (Overview, Transactions,
+  Categories, Wallets, a wallet page; the month switchers' upper bound and "This month"), "spent so far", the pace and
+  no-spend-day insights (day N), future-day shading in the charts and the day strip, the "Today" / "Yesterday" day
+  headers, the date picker's today marker and its "Today" button, the month grid's current month, a wallet's
+  projected days, the default "From" of a manual rate, and the date in the export file names. Without a zone (or with
+  one the runtime does not know) it is the **server's local date** (a container runs in UTC unless `TZ` is set).
+  - As built: `todayInZone(timeZone, now?)` in `src/lib/dates.ts` (`dateInTimeZone` through `Intl`; falls back to
+    `todayISO()`, the server's local date); request code calls `todayInZone(user.timeZone)` once and passes the date
+    on. Services never pick today themselves on a request path: `getDashboard` requires `month`, `getMonthInsights`
+    and `getWalletMonth` require `today`, `monthDayN(month, today)` and the `list-params.ts` helpers require
+    `thisMonth`. Client components never read the clock for it: `EntryForm`, `DatePicker` / `CalendarPanel` take
+    `today`, `MonthGrid` takes `thisMonth` (the `MonthSwitcher` passes its `maxMonth`), each from the page that renders
+    them (a page's props are rendered fresh on every navigation; a layout's are not). Left on the server's clock on
+    purpose: the demo seed (`seedDemoData`, a script) and the exchange-rate provider's "is this day final / capped at
+    today" logic (`getDailyRates`, `getProviderCurrencies`), which is about the provider's days, not the user's.
 - **Profile (`/account`).** The user ID, email (add, change, remove) and first name / surname can be changed with
   the registration rules above. Changing the user ID or the email (an email added, changed or removed) needs the
   current password; the names alone do not. A change of letter case only is no change (values are stored
@@ -298,7 +316,7 @@ bigint is `numeric`, `count` is `bigint`) are mapped to `number` in the queries.
 - `src/lib/auth.ts` exposes `getCurrentUser(): Promise<CurrentUser | null>` (React `cache`, per request),
   `requireUser(): Promise<CurrentUser>` (redirects to `/login`; both mark the session used, see "Devices"),
   `createSession(userId)` (stores the user agent), `destroySession()`,
-  `redirectIfSignedIn()`, `clearSessionCookie()` (after an account deletion); `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string }`. Cookie name `et_session`.
+  `redirectIfSignedIn()`, `clearSessionCookie()` (after an account deletion); `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string; timeZone: string | null }` ("today" for the user is `todayInZone(user.timeZone)`, see Auth → "Today")`. Cookie name `et_session`.
   The `(app)` layout calls `requireUser()`; every Server Action calls it too (layouts don't protect actions).
   Signed-in users visiting `/login` or `/register` are redirected to `/`.
 - Password hashing lives in `src/lib/password.ts` (`hashPassword`, `verifyPassword`); user creation/login in
@@ -498,7 +516,7 @@ deleteTransfer(userId, transferId): void                            // removes t
 // (receivedAmountMinor ignored); different currency ⇒ receivedAmountMinor required and > 0 (field receivedAmount).
 
 // dashboard.ts
-getDashboard(userId, opts?: { month?: string /* YYYY-MM, default current; invalid → VALIDATION */ }): {
+getDashboard(userId, opts: { month: string /* YYYY-MM, required (the caller's current month); invalid → VALIDATION */ }): {
   month: string;
   wallets: WalletView[];                                                     // active only
   totalsByCurrency: { currency; balanceMinor; incomeMinor; expenseMinor }[]; // one row per currency of an active wallet, sorted by code;
@@ -512,7 +530,7 @@ getDashboard(userId, opts?: { month?: string /* YYYY-MM, default current; invali
 // getMonthTimeline / getMonthInsights / getCategoryMonthAmounts ("All in <currency>"; see Overview → Converted view).
 // "Expense" / "income" mean
 // transactions of those kinds (transfers excluded) on all wallets of that currency, archived included, unless a
-// walletId narrows it. Day N = today's day for the current month (server local time), the month's last day for a
+// walletId narrows it. Day N = today's day for the current month (`today`: the user's, `todayInZone`), the month's last day for a
 // past month, 0 for a future month (empty arrays / zeros, no error). An invalid `month` → VALIDATION (field `month`);
 // a `currency` that is not a valid uppercase ISO code → VALIDATION (field `currency`); a valid currency the user
 // holds no wallet in just gives zeros.
@@ -530,7 +548,7 @@ getMonthTimeline(userId, { month; currency; walletId?; categoryId? }): {    // w
   largestDay: { date; amountMinor; label } | null // the month's biggest expense day (earliest on a tie; the whole month,
                                                  // not only days 1..N) and its largest entry's note, else its category
 }
-getMonthInsights(userId, { month; currency }): {
+getMonthInsights(userId, { month; currency; today }): {   // today: YYYY-MM-DD, the user's (todayInZone), decides N
   incomeMinor; expenseMinor; netMinor;          // the whole month (future-dated entries included)
   topCategory: { categoryId; categoryName; amountMinor; sharePercent } | null;   // largest expense category; ties by
                                                 // pickTopCategory (lower-cased name by code units, then id — one rule
@@ -541,7 +559,8 @@ getMonthInsights(userId, { month; currency }): {
   noSpendDays: { days; outOf; previousDays; previousOutOf };   // days 1..N with no expense in this currency (outOf = N);
                                                               // previous* = the same over the whole previous month
 }
-getWalletMonth(userId, walletId, month, { today? }): {         // null when the wallet is not the user's (archived works)
+getWalletMonth(userId, walletId, month, { today }): {          // null when the wallet is not the user's (archived works);
+                                                               // today: the user's (todayInZone), required
   openingMinor;                     // balance at the start of the month: initial + every entry dated before it
   inMinor; outMinor;                // the whole month, transfers included (each leg in its own wallet's amount)
   entryCount; totalEntryCount;      // entries this month / ever
@@ -601,7 +620,7 @@ returns `0` for zero — callers that need > 0 must check), `formatMoney(minor, 
 `src/lib/currencies.ts`: `CURRENCIES: { code, name }[]` from `Intl.supportedValuesOf('currency')` with English display
 names, common ones (EUR, USD, GBP, RON, CHF, JPY, CAD, AUD, SEK, NOK, DKK, PLN, HUF, CZK) pinned first;
 `PINNED_CURRENCIES`, `currencyName(code)`, `isValidCurrency(code)` (uppercase 3-letter code only).
-`src/lib/dates.ts`: `todayISO()`, `currentMonth()` (server local time), `isValidDate`, `isValidMonth`,
+`src/lib/dates.ts`: `todayInZone(timeZone, now?)` (the user's today, see Auth → "Today"), `todayISO()`, `currentMonth()` (server local time: the fallback, scripts and tests), `isValidDate`, `isValidMonth`,
 `monthRange(month) → { from, to }` (inclusive), `shiftMonth(month, delta)`, `addDays(date, n)`, `addMonths(date, n)`
 (day clamped to the target month: `"2026-01-31"` + 1 → `"2026-02-28"`), `formatDate(date)`
 (`"5 Nov 2026"`), `formatMonth(month)` (`"November 2026"`).
@@ -625,7 +644,7 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   `aria-describedby="<id>-error"`.
 - `Field` `{ id; label; hint?; error?; className? }` — label + control + hint + inline error (`<id>-error`); `FieldError`,
   `Label`.
-- `DatePicker` (client) `{ id; name; defaultValue?: 'YYYY-MM-DD' | ''; required?; error?; allowEmpty?; max?;
+- `DatePicker` (client) `{ id; name; today: 'YYYY-MM-DD' /* the user's, from the server */; defaultValue?: 'YYYY-MM-DD' | ''; required?; error?; allowEmpty?; max?;
   align?: 'start'|'end'; placeholder? }` — used for every date field instead of `<input type="date">`. Renders a
   trigger `<button type="button" id={id} role="combobox" aria-haspopup="dialog">` styled like `Input`, showing
   `formatDate(value)` or "Pick a date", with the same `aria-invalid` / `aria-describedby="<id>-error"` convention,
@@ -644,7 +663,7 @@ All primitives are exported from `@/components/ui`. They take normal HTML props 
   (accessible name "Back to days, <Month YYYY>", the month shown before) that returns to the day view with focus on
   the focusable day, as Escape does. Picking closes it and returns focus to the trigger. Keyboard in the
   grid: see `moveDate`; one day is in the Tab order (roving tabindex); moving past the shown month changes month.
-- `MonthGrid` (client) `{ value: 'YYYY-MM' | null; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
+- `MonthGrid` (client) `{ value: 'YYYY-MM' | null; thisMonth: 'YYYY-MM' /* the user's, from the server */; onSelect(month); minMonth?; maxMonth?; focusMonth?; autoFocus? }` —
   year stepper (‹ 2026 ›) over a 3 × 4 grid of `aria-pressed` month buttons; months outside the bounds are
   disabled; the current month has a ring when not selected. Keyboard: see `moveMonth`; roving tabindex.
 - `Popover` (client) `{ open; onClose; anchor; trigger; align?: 'start'|'end'; id?; role?: 'dialog'|'listbox'; 'aria-label'?; className? }` —
@@ -1221,7 +1240,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   `date`, `note` (and the transfer fields), so the pills are radio inputs with those names.
   - As built (step 6): one `EntryForm` (`components/transactions/entry-form.tsx`) with `variant: 'page' | 'dialog'`
     serves the dialog (`NewEntry variant="dialog"` from the intercepted route), the full page and both edit pages;
-    it also takes `today` (the server's `todayISO()`, so the pills render the same on server and client).
+    it also takes `today` (the user's, `todayInZone(user.timeZone)` on the server, so the pills are in the account's zone and render the same on server and client).
     **Dialog variant:** no `Card`; posts a hidden `mode=dialog`. With it `createTransactionAction` /
     `createTransferAction` call `revalidatePath("/", "layout")` and return `{ ok: true, message }` instead of
     redirecting — `message` is "Added €12.40 to Food" or "Moved €20.00 from Cash to Revolut USD", formatted on the
@@ -1359,8 +1378,8 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
      (use this browser's)" with value `""`, then every zone of `groupedTimeZones()` in `<optgroup>`s by the part
      before the first `/` — "Africa", "America", …, "UTC" under "Other" last — labelled by the rest of the name with
      spaces for `_`; the account's zone preselected; the list is computed on the server and passed in as a prop so
-     server HTML and hydration agree; hint "Used to date imported Spendee entries, whose times are in UTC, so every
-     browser dates them alike."), current password (hint "Needed only when you change your user ID or
+     server HTML and hydration agree; hint "Sets your “today” (default dates, the current month; without one, the
+     server’s date) and dates imported Spendee entries, whose times are in UTC."), current password (hint "Needed only when you change your user ID or
      email."), "Save profile". Prefilled from the account; after a result the inputs show the echoed / saved values.
   2. **Change password**: the form described in Auth → "Changing the password".
   3. **Devices** ("Sessions last 30 days unless you sign out."): the list of active sessions described in Auth →
@@ -1955,7 +1974,7 @@ behaves like an empty group — no rows, never an error, except in mutations, wh
   (omitted → unchanged; moving into an archived group is VALIDATION, keeping the current one is fine).
 - `TransactionFilters.groupId?`, used by `listTransactions`, `listDayTotals`, `filterConditions` and the CSV
   export; ignored when `walletId` is set.
-- `getDashboard(userId, { month?, groupId? })`; `getMonthTimeline` / `getMonthInsights` opts `groupId?`
+- `getDashboard(userId, { month, groupId? })`; `getMonthTimeline` / `getMonthInsights` opts `groupId?`
   (ignored when `walletId` is set); `listUserCurrencies(userId, { groupId? })`; `pickDefaultCurrency(userId, month,
   { groupId? })`; `listCategoriesWithUsage(..., { groupId? })` (keep the existing parameters, add the option).
 - Import: a wallet created by an import goes into the target group — `previewImport` / `runImport` take an optional

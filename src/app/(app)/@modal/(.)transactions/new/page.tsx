@@ -12,7 +12,7 @@ export default async function NewTransactionDialog({ searchParams }: { searchPar
   const user = await requireUser();
   return (
     <Dialog title="Add transaction" className="sm:max-w-2xl">
-      <NewEntry userId={user.id} searchParams={await searchParams} returnTo={DEFAULT_RETURN_TO} variant="dialog" />
+      <NewEntry user={user} searchParams={await searchParams} returnTo={DEFAULT_RETURN_TO} variant="dialog" />
     </Dialog>
   );
 }

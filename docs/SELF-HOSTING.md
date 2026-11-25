@@ -41,6 +41,10 @@ change. With [`deploy/compose.yaml`](../deploy/compose.yaml), put them in a `.en
 | `MIGRATIONS_DIR` | `/app/drizzle` | `<cwd>/drizzle` | folder the SQL migrations are read from; leave as is |
 | `ALLOWED_DEV_ORIGINS` | — | — | `npm run dev` only: extra hostnames allowed to open the dev server |
 
+No time-zone setting is needed. "Today" (default dates, the current month) is each account's own: the date in the
+time zone under **Account settings → Profile → Time zone**, which the browser fills in at registration or the first
+sign-in. Only an account without one falls back to the server's date, which in the container is UTC.
+
 Both Compose files also read these (they configure Compose, not the app; the `EXPENSES_TRACKER_*` ones only
 `deploy/compose.yaml`):
 

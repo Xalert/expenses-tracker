@@ -11,7 +11,7 @@ import { WalletMonthChart } from "@/components/wallets/wallet-month-chart";
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { currencyName } from "@/lib/currencies";
-import { currentMonth, formatMonth, isValidMonth, todayISO } from "@/lib/dates";
+import { formatMonth, isValidMonth, todayInZone } from "@/lib/dates";
 import { walletDayAside } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
@@ -50,12 +50,12 @@ export default async function WalletPage({ params, searchParams }: Props) {
   if (!wallet) notFound();
 
   const sp = await searchParams;
-  const maxMonth = currentMonth();
+  const today = todayInZone(user.timeZone);
+  const maxMonth = today.slice(0, 7);
   const requested = typeof sp.month === "string" && isValidMonth(sp.month) ? sp.month : maxMonth;
   const month = requested > maxMonth ? maxMonth : requested;
   const isCurrentMonth = month === maxMonth;
-  const today = todayISO();
-  const data = await getWalletMonth(user.id, wallet.id, month);
+  const data = await getWalletMonth(user.id, wallet.id, month, { today });
   if (!data) notFound();
 
   const archived = wallet.archivedAt !== null;

@@ -8,6 +8,7 @@ import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { deleteExpiredSessions, sessionTouchDue, touchSession } from "@/server/users";
 import { shouldUseSecureCookie } from "./config";
+import { canonicalTimeZone } from "./time-zone";
 import { storedUserAgent } from "./user-agent";
 import { displayName } from "./user-id";
 
@@ -23,6 +24,11 @@ export type CurrentUser = {
   lastName: string | null;
   /** First name + surname when either is set, otherwise the user ID (`displayName` in src/lib/user-id.ts). */
   displayName: string;
+  /**
+   * The account's IANA time zone in canonical spelling, or null (none set, or one this runtime does not know). "Today"
+   * for this user is `todayInZone(user.timeZone)` (src/lib/dates.ts); pass it into services and client components.
+   */
+  timeZone: string | null;
 };
 
 function hashToken(token: string): string {
@@ -93,6 +99,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       email: users.email,
       firstName: users.firstName,
       lastName: users.lastName,
+      timeZone: users.timeZone,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -107,7 +114,15 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   }
   if (sessionTouchDue(row.lastUsedAt, now)) await touchSession(row.sessionId, now);
   const { id, username, email, firstName, lastName } = row;
-  return { id, username, email, firstName, lastName, displayName: displayName(row) };
+  return {
+    id,
+    username,
+    email,
+    firstName,
+    lastName,
+    displayName: displayName(row),
+    timeZone: canonicalTimeZone(row.timeZone),
+  };
 });
 
 /** The signed-in user; redirects to /login when signed out. Use in the (app) layout, pages and every Server Action. */

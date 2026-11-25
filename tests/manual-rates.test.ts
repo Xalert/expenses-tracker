@@ -127,12 +127,13 @@ describe("own rates in the converted month figures", () => {
     await spend(alice, kwd, 2000, "2026-03-20"); // 2.000 KWD
     await setManualRate(alice.id, { currency: "KWD", base: "EUR", effectiveDate: "2026-03-10", rate: "3" });
     const convert = { rates: daily, manual: await manualRatesFor(alice.id) };
-    const i = await getMonthInsights(alice.id, { month: "2026-03", currency: "EUR", convert });
+    const i = await getMonthInsights(alice.id, { today: "2026-11-25", month: "2026-03", currency: "EUR", convert });
     // 10.00 EUR + 2 KWD × 3 = 6.00 EUR; the 4 Mar entry predates the rate and is left out.
     expect(i.expenseMinor).toBe(1000 + 600);
     expect(i.missingCurrencies).toEqual(["KWD"]);
     await setManualRate(alice.id, { currency: "KWD", base: "USD", effectiveDate: "2026-03-01", rate: "2.5" });
     const all = await getMonthInsights(alice.id, {
+      today: "2026-11-25",
       month: "2026-03",
       currency: "EUR",
       convert: { rates: daily, manual: await manualRatesFor(alice.id) },

@@ -112,7 +112,7 @@ describe("GET /api/export/context", () => {
 
   it("downloads the signed-in user's context as pretty-printed JSON", async () => {
     const alice = await seed();
-    session.user = { id: alice.id, username: "alice", email: null, firstName: null, lastName: null, displayName: "alice" };
+    session.user = { id: alice.id, username: "alice", email: null, firstName: null, lastName: null, displayName: "alice", timeZone: null };
     const res = await GET();
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json; charset=utf-8");
@@ -123,5 +123,23 @@ describe("GET /api/export/context", () => {
     expect(text.endsWith("}\n")).toBe(true);
     const body = contextSchema.parse(JSON.parse(text));
     expect(body.wallets.map((w) => w.name)).toEqual(["Main", "Tokyo", "Old card"]);
+  });
+
+  it("dates the file name in the account's time zone", async () => {
+    const alice = await seed();
+    const user = { id: alice.id, username: "alice", email: null, firstName: null, lastName: null, displayName: "alice" };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-24T23:30:00Z"));
+      const fileDate = async (timeZone: string | null) => {
+        session.user = { ...user, timeZone };
+        return /context-(\d{4}-\d{2}-\d{2})\.json/.exec((await GET()).headers.get("Content-Disposition") ?? "")?.[1];
+      };
+      expect(await fileDate("Pacific/Auckland")).toBe("2026-11-25");
+      expect(await fileDate("America/Los_Angeles")).toBe("2026-11-24");
+      expect(await fileDate("UTC")).toBe("2026-11-24");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

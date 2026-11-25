@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { todayISO } from "@/lib/dates";
+import { todayInZone } from "@/lib/dates";
 import { buildContext } from "@/server/export";
 import { attachmentHeaders, unauthorized } from "../_shared";
 
@@ -14,6 +14,6 @@ export async function GET() {
   if (!user) return unauthorized();
   const body = JSON.stringify(await buildContext(user.id), null, 2) + "\n";
   return new Response(body, {
-    headers: attachmentHeaders(`expenses-tracker-context-${todayISO()}.json`, "application/json; charset=utf-8"),
+    headers: attachmentHeaders(`expenses-tracker-context-${todayInZone(user.timeZone)}.json`, "application/json; charset=utf-8"),
   });
 }

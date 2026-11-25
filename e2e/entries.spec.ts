@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
-import { expect, hydrated, test } from "./support/fixtures";
-import { seedWallet } from "./support/seed";
+import { expect, hydrated, signInContext, test } from "./support/fixtures";
+import { seedUser, seedWallet, todayISO } from "./support/seed";
 
 /** Two EUR wallets and a USD one for `userId`. */
 async function wallets(userId: number) {
@@ -272,4 +272,21 @@ test.describe("date picker", () => {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
   });
+});
+
+test.describe("today in the account's time zone", () => {
+  // UTC+14 and UTC−11 are 25 hours apart, so at any moment their dates differ: each account must get its own.
+  for (const timeZone of ["Pacific/Kiritimati", "Pacific/Pago_Pago"]) {
+    test(`the Add form defaults to today in ${timeZone}`, async ({ page, context, baseURL }) => {
+      const user = await seedUser({ timeZone });
+      await seedWallet(user.id, { name: "Bank", currency: "EUR" });
+      await signInContext(context, user.token, baseURL!);
+      const before = todayISO(timeZone);
+      await page.goto("/transactions/new");
+      const posted = await page.locator('form input[type="hidden"][name="date"]').inputValue();
+      // Either side of a midnight that passed while the page loaded.
+      expect([before, todayISO(timeZone)]).toContain(posted);
+      await expect(page.getByRole("button", { name: "Today", exact: true })).toHaveAttribute("aria-pressed", "true");
+    });
+  }
 });
