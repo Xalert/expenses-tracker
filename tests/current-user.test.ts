@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB } from "@/db";
-import { sessions, users } from "@/db/schema";
+import { recurringTransactions, sessions, transactions, users } from "@/db/schema";
+import { addDays } from "@/lib/dates";
+import { createWallet } from "@/server/wallets";
 import { makeUser, useFreshDb } from "./helpers";
 
 // getCurrentUser reads the session cookie through next/headers; the test decides which token the request carries.
@@ -47,5 +49,31 @@ describe("getCurrentUser: the account's time zone", () => {
     await useFreshDb();
     await signIn("Mars/Olympus_Mons");
     expect((await getCurrentUser())?.timeZone).toBeNull();
+  });
+});
+
+describe("getCurrentUser: repeating entries", () => {
+  it("creates the entries that are due up to the user's today before anything reads", async () => {
+    const alice = await signIn(null);
+    const wallet = await createWallet(alice.id, { name: "Bank", currency: "EUR", initialBalanceMinor: 0 });
+    const today = todayInZone(null);
+    const start = addDays(today, -2);
+    await db.insert(recurringTransactions).values({
+      userId: alice.id,
+      walletId: wallet.id,
+      kind: "expense",
+      categoryId: alice.cat("Food"),
+      amountMinor: 500,
+      frequency: "daily",
+      interval: 1,
+      startDate: start,
+      nextDate: start,
+    });
+    expect(await getCurrentUser()).toMatchObject({ id: alice.id });
+    const rows = await db.select({ date: transactions.date }).from(transactions).orderBy(transactions.date);
+    expect(rows.map((r) => r.date)).toEqual([start, addDays(today, -1), today]);
+    // A second request has nothing left to do.
+    await getCurrentUser();
+    expect(await db.select().from(transactions)).toHaveLength(3);
   });
 });

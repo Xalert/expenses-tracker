@@ -14,6 +14,7 @@ import type { RowShare } from "@/lib/category-split";
 import { cn } from "@/lib/cn";
 import { initialFormState, type FormState } from "@/lib/form";
 import { formatMoney } from "@/lib/money";
+import { usageText } from "@/lib/usage-text";
 import type { CategoryWithMonthUsage, CategoryWithUsage } from "@/server/categories";
 
 export const MAX_CATEGORY_NAME = 40;
@@ -27,8 +28,6 @@ export type Announce = (
   opts?: { focusHeading?: boolean; movedTo?: { kind: "expense" | "income"; id: number } },
 ) => void;
 
-
-const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
 
 /** The danger text button of the open row ("Remove Food"): `--danger` text, no fill, 44px tall. */
 const removeButtonClass = "-ml-3 max-w-full min-w-0 text-danger! hover:bg-danger-soft!";
@@ -155,14 +154,15 @@ function KindControls({ category, onChanged }: { category: CategoryWithUsage; on
     return next;
   }, initialFormState);
   const target = OTHER_KIND[category.kind];
-  const count = category.transactionCount;
+  // Repeating entries count as use too (src/server/recurring.ts).
+  const count = category.transactionCount + category.recurringCount;
   const error = state.fieldErrors?.kind ?? (state.ok ? undefined : state.message);
   const errorId = `category-${category.id}-kind-error`;
 
   if (count > 0 && !error) {
     return (
       <p className="text-sm text-muted-foreground">
-        Used by {plural(count)}, so it stays an {category.kind} category: changing it would turn{" "}
+        Used by {usageText(category.transactionCount, category.recurringCount)}, so it stays an {category.kind} category: changing it would turn{" "}
         {count === 1 ? "that entry" : "those entries"} into {target}.
       </p>
     );
@@ -286,7 +286,7 @@ function RemoveControls({
 }) {
   const [error, setError] = useState<string | undefined>();
   const errorId = `category-${category.id}-remove-error`;
-  const count = category.transactionCount;
+  const count = category.transactionCount + category.recurringCount;
 
   return (
     <div className="space-y-2">
@@ -438,7 +438,7 @@ function MoveAndRemoveForm({
     >
       {hasSelect ? (
         <>
-          <Label htmlFor={selectId}>Remove, moving its {plural(category.transactionCount)} to</Label>
+          <Label htmlFor={selectId}>Remove, moving its {usageText(category.transactionCount, category.recurringCount)} to</Label>
           <Select
             ref={selectRef}
             id={selectId}
@@ -469,7 +469,7 @@ function MoveAndRemoveForm({
       ) : (
         <>
           <Label htmlFor={nameId}>
-            Remove, moving its {plural(category.transactionCount)} to a new {kind} category named
+            Remove, moving its {usageText(category.transactionCount, category.recurringCount)} to a new {kind} category named
           </Label>
           {nameField}
         </>

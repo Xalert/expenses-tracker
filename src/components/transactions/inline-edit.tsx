@@ -9,6 +9,7 @@ import {
   updateTransactionInlineAction,
   updateTransferInlineAction,
 } from "@/app/(app)/transactions/actions";
+import { RepeatIcon } from "@/components/shell/icons";
 import { useExpandableRow } from "@/components/ui/expandable-row";
 import { withReturnTo } from "@/lib/return-to";
 import { ConfirmDeleteForm } from "./confirm-delete-form";
@@ -25,6 +26,8 @@ export type InlineEntry =
       amount: string;
       date: string;
       note: string;
+      /** The repeating rule that made the entry: the footer links to it on /recurring. */
+      recurringId?: number | null;
     }
   | {
       type: "transfer";
@@ -145,6 +148,15 @@ export function InlineEditPanel({ entry, rowKey }: { entry: InlineEntry; rowKey:
             >
               Open as page
             </Link>
+            {!isTransfer && entry.recurringId != null && (
+              <Link
+                href={`/recurring#rule-${entry.recurringId}`}
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+              >
+                <RepeatIcon className="size-4" />
+                Repeating entry
+              </Link>
+            )}
           </>
         }
       />

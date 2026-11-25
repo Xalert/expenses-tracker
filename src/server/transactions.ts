@@ -25,6 +25,8 @@ export type TransactionView = {
   transferId: number | null;
   /** The other leg, for transfer legs. */
   counterparty: { walletId: number; walletName: string; currency: string; amountMinor: number } | null;
+  /** The repeating rule that created this entry (src/server/recurring.ts), or null. */
+  recurringId: number | null;
 };
 
 export type TransactionFilters = {
@@ -73,6 +75,7 @@ type Row = {
   date: string;
   note: string | null;
   transferId: number | null;
+  recurringId: number | null;
   cpWalletId: number | null;
   cpWalletName: string | null;
   cpCurrency: string | null;
@@ -93,6 +96,7 @@ function baseQuery(db: DBOrTx, where: SQL | undefined) {
       date: transactions.date,
       note: transactions.note,
       transferId: transactions.transferId,
+      recurringId: transactions.recurringId,
       cpWalletId: otherLeg.walletId,
       cpWalletName: otherWallet.name,
       cpCurrency: otherWallet.currency,
@@ -133,6 +137,7 @@ function toView(r: Row): TransactionView {
             amountMinor: r.cpAmountMinor ?? 0,
           }
         : null,
+    recurringId: r.recurringId,
   };
 }
 
@@ -233,14 +238,18 @@ export async function getTransaction(userId: number, id: number, tx?: DBOrTx): P
   return row ? toView(row) : null;
 }
 
-type ValidatedInput = Required<Omit<TransactionInput, "note">> & { note: string | null };
-
-async function validateInput(
+export type ValidatedTransactionInput = Required<Omit<TransactionInput, "note">> & { note: string | null };
+/**
+ * Internal (also used by src/server/recurring.ts): check an expense / income input against the account — an owned
+ * wallet that takes entries, an owned category of the kind that is not archived (each kept when `previous` already
+ * used it) — and return it normalised. The category row is read `FOR SHARE` (see `changeCategoryKind`).
+ */
+export async function validateTransactionInput(
   userId: number,
   input: TransactionInput,
   tx: DBOrTx,
   previous?: { walletId: number; categoryId: number | null },
-): Promise<ValidatedInput> {
+): Promise<ValidatedTransactionInput> {
   const kind = input.kind as CategoryKind;
   if (kind !== "expense" && kind !== "income") {
     throw new ServiceError("VALIDATION", "Choose expense or income.", "kind");
@@ -277,7 +286,7 @@ async function validateInput(
 export async function createTransaction(userId: number, input: TransactionInput): Promise<TransactionView> {
   const db = await getDb();
   const id = await db.transaction(async (tx) => {
-    const v = await validateInput(userId, input, tx);
+    const v = await validateTransactionInput(userId, input, tx);
     const [row] = await tx
       .insert(transactions)
       .values({ userId, ...v, transferId: null })
@@ -311,7 +320,7 @@ export async function updateTransaction(userId: number, id: number, input: Trans
   const db = await getDb();
   await db.transaction(async (tx) => {
     const existing = await getEditableRow(userId, id, tx);
-    const v = await validateInput(userId, input, tx, existing);
+    const v = await validateTransactionInput(userId, input, tx, existing);
     await tx
       .update(transactions)
       .set(v)

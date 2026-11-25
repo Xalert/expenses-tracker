@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { archiveWalletAction, deleteWalletAction, unarchiveWalletAction } from "@/app/(app)/wallets/actions";
 import { Popover } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { deleteWalletConfirm } from "@/lib/usage-text";
 import { ActionButton } from "./action-button";
 
 const itemClass = "flex! h-11! w-full justify-start! rounded-xl! px-3! text-sm font-semibold";
@@ -37,11 +38,14 @@ export function WalletMenu({
   walletName,
   archived,
   canDelete,
+  recurringCount = 0,
 }: {
   walletId: number;
   walletName: string;
   archived: boolean;
   canDelete: boolean;
+  /** Repeating entries on the wallet: Delete's confirmation says they go with it. */
+  recurringCount?: number;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
@@ -137,7 +141,7 @@ export function WalletMenu({
               size="md"
               role="menuitem"
               buttonClassName={cn(itemClass, "text-danger! hover:bg-danger-soft!")}
-              confirmMessage={`Delete “${walletName}”? This can't be undone.`}
+              confirmMessage={deleteWalletConfirm(walletName, recurringCount)}
             />
           )}
         </div>

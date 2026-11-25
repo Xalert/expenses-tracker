@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RepeatIcon } from "@/components/shell/icons";
 import { transactionLabel } from "@/components/transaction-list";
 import { ExpandableList, ExpandableRow } from "@/components/ui/expandable-row";
 import { cn } from "@/lib/cn";
@@ -50,11 +51,22 @@ export function inlineEntryOf(t: TransactionView): InlineEntry {
     amount: minorToInputValue(t.amountMinor, t.currency),
     date: t.date,
     note,
+    recurringId: t.recurringId,
   };
 }
 
 function editHref(t: TransactionView): string {
   return t.transferId !== null ? `/transactions/transfers/${t.transferId}/edit` : `/transactions/${t.id}/edit`;
+}
+
+/** After the label of an entry a repeating rule made (its open row links to /recurring). */
+function RepeatMarker() {
+  return (
+    <>
+      <RepeatIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="sr-only">(repeats)</span>
+    </>
+  );
 }
 
 /**
@@ -68,7 +80,10 @@ function RowSummary({ t, showWallet }: { t: TransactionView; showWallet: boolean
     <>
       <span className={cn("size-2 shrink-0 rounded-full", dotClass[t.kind])} aria-hidden="true" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-semibold text-foreground">{transactionLabel(t)}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate font-semibold text-foreground">{transactionLabel(t)}</span>
+          {t.recurringId !== null && <RepeatMarker />}
+        </span>
         {meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>}
       </span>
       <span className="shrink-0 text-right tabular-nums">

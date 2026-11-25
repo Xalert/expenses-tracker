@@ -26,7 +26,7 @@ const cat = (
   monthAmountMinor: number,
   monthCount: number,
   transactionCount: number,
-): CategoryWithMonthUsage => ({ id, name, kind, archivedAt: null, monthAmountMinor, monthCount, transactionCount });
+): CategoryWithMonthUsage => ({ id, name, kind, archivedAt: null, monthAmountMinor, monthCount, transactionCount, recurringCount: 0 });
 const archive = (c: CategoryWithMonthUsage): CategoryWithMonthUsage => ({ ...c, archivedAt: new Date("2026-10-01T00:00:00Z") });
 
 // Service order (by name); Housing spends the most, so it gets ramp 1 although it is not the first row.

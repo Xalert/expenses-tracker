@@ -1,16 +1,18 @@
 import "server-only";
 import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, wallets, type CategoryKind } from "@/db/schema";
+import { categories, recurringTransactions, transactions, wallets, type CategoryKind } from "@/db/schema";
 import { sortCategories } from "@/lib/category-order";
 import { isValidCurrency } from "@/lib/currencies";
 import { isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
+import { usageText } from "@/lib/usage-text";
 import { MAX_ID, assertId, isPgId, isUniqueViolation, normalizeName } from "./_validate";
 
 /** `archivedAt` set: hidden from the entry form's pickers; still in reports, history and exports. */
 export type CategoryView = { id: number; name: string; kind: CategoryKind; archivedAt: Date | null };
-export type CategoryWithUsage = CategoryView & { transactionCount: number };
+/** `recurringCount`: repeating entries (src/server/recurring.ts) filed under it; they count as use too. */
+export type CategoryWithUsage = CategoryView & { transactionCount: number; recurringCount: number };
 export type CategoryWithMonthUsage = CategoryWithUsage & {
   /** Transactions in `opts.month`, every currency (0 without a month). */
   monthCount: number;
@@ -27,7 +29,7 @@ export const DEFAULT_CATEGORIES: Record<CategoryKind, readonly string[]> = {
 
 const KIND_NOUN: Record<CategoryKind, string> = { expense: "expense", income: "income" };
 
-const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
+
 
 // Order: `sortCategories` (src/lib/category-order.ts) in JS: expense first, active before archived, then by name
 // ignoring case by code point, then id. Never SQL `lower(name)`, whose result depends on the database's collation.
@@ -90,6 +92,9 @@ export async function listCategoriesWithUsage(
     .select({
       ...viewColumns,
       transactionCount: sql<number>`count(${transactions.id})`.mapWith(Number),
+      recurringCount: sql<number>`(select count(*) from ${recurringTransactions} where ${recurringTransactions.categoryId} = ${categories.id})`.mapWith(
+        Number,
+      ),
       monthCount: sql<number>`coalesce(sum(case when ${inMonth} then 1 else 0 end), 0)`.mapWith(Number),
       monthAmountMinor: sql<number>`coalesce(sum(case when ${inMonth} and ${inCurrency} then ${transactions.amountMinor} else 0 end), 0)`.mapWith(Number),
     })
@@ -158,6 +163,14 @@ async function usageOf(tx: DBOrTx, userId: number, categoryId: number): Promise<
     .select({ n: count() })
     .from(transactions)
     .where(and(eq(transactions.categoryId, categoryId), eq(transactions.userId, userId)));
+  return row?.n ?? 0;
+}
+
+async function rulesOf(tx: DBOrTx, userId: number, categoryId: number): Promise<number> {
+  const [row] = await tx
+    .select({ n: count() })
+    .from(recurringTransactions)
+    .where(and(eq(recurringTransactions.categoryId, categoryId), eq(recurringTransactions.userId, userId)));
   return row?.n ?? 0;
 }
 
@@ -238,8 +251,9 @@ export async function renameCategory(
 }
 
 /**
- * Switch an owned category between expense and income. Only while no transaction uses it: with transactions it is
- * CONFLICT (field `kind`), since changing it would turn those expenses into income or the other way round. The name
+ * Switch an owned category between expense and income. Only while no transaction and no repeating entry uses it:
+ * otherwise it is CONFLICT (field `kind`), since changing it would turn those expenses into income or the other way
+ * round. The name
  * must be free in the new kind (CONFLICT, field `kind`). The same kind is a no-op.
  */
 export async function changeCategoryKind(
@@ -256,11 +270,13 @@ export async function changeCategoryKind(
       name = current.name;
       if (current.kind === kind) return current;
       const usage = await usageOf(tx, userId, current.id);
-      if (usage > 0) {
+      const rules = await rulesOf(tx, userId, current.id);
+      if (usage + rules > 0) {
+        const n = usage + rules;
         throw new ServiceError(
           "CONFLICT",
-          `“${current.name}” is used by ${plural(usage)}, so it stays an ${KIND_NOUN[current.kind]} category: ` +
-            `changing it would turn ${usage === 1 ? "that entry" : "those entries"} into ${KIND_NOUN[kind]}. ` +
+          `“${current.name}” is used by ${usageText(usage, rules)}, so it stays an ${KIND_NOUN[current.kind]} category: ` +
+            `changing it would turn ${n === 1 ? "that entry" : "those entries"} into ${KIND_NOUN[kind]}. ` +
             `Add a new ${KIND_NOUN[kind]} category instead.`,
           "kind",
         );
@@ -312,8 +328,9 @@ export async function unarchiveCategory(userId: number, categoryId: number): Pro
 }
 
 /**
- * Remove an owned category. Unused → deleted (the replacement options are ignored). In use → its transactions are
- * re-pointed to a replacement of the same kind and the category is deleted, in one DB transaction. The replacement
+ * Remove an owned category. Unused → deleted (the replacement options are ignored). In use (transactions or repeating
+ * entries) → its transactions and repeating entries are re-pointed to a replacement of the same kind and the category
+ * is deleted, in one DB transaction. The replacement
  * is either `moveToCategoryId` (another owned, active category of the same kind; VALIDATION otherwise) or
  * `moveToNewCategoryName` (a string: a new category of the same kind created in the same DB transaction; name rules
  * as `createCategory`, errors on field `moveToNewCategoryName`). The new name wins when both are given. Without
@@ -324,7 +341,7 @@ export async function deleteCategory(
   userId: number,
   categoryId: number,
   opts: { moveToCategoryId?: number | null; moveToNewCategoryName?: string | null } = {},
-): Promise<{ movedTransactions: number; movedTo: CategoryView | null }> {
+): Promise<{ movedTransactions: number; movedRecurring: number; movedTo: CategoryView | null }> {
   const newName = opts.moveToNewCategoryName;
   let pendingName: { name: string; kind: CategoryKind } | undefined;
   try {
@@ -332,10 +349,12 @@ export async function deleteCategory(
     return await db.transaction(async (tx) => {
       const category = await ownedCategory(tx, userId, categoryId);
       const usage = await usageOf(tx, userId, category.id);
+      const rules = await rulesOf(tx, userId, category.id);
+      const used = usageText(usage, rules);
       const noun = KIND_NOUN[category.kind];
       let target: CategoryView | null = null;
 
-      if (usage > 0) {
+      if (usage + rules > 0) {
         const moveTo = opts.moveToCategoryId;
         if (typeof newName === "string") {
           const name = normalizeCategoryName(newName, "moveToNewCategoryName");
@@ -357,8 +376,8 @@ export async function deleteCategory(
           throw new ServiceError(
             "CONFLICT",
             hasOther
-              ? `“${category.name}” is used by ${plural(usage)}. Choose a category to move them to.`
-              : `“${category.name}” is used by ${plural(usage)} and is your only ${noun} category. ` +
+              ? `“${category.name}” is used by ${used}. Choose a category to move them to.`
+              : `“${category.name}” is used by ${used} and is your only ${noun} category. ` +
                   `Name a new ${noun} category to move them to, or archive “${category.name}” instead.`,
             hasOther ? "moveToCategoryId" : "moveToNewCategoryName",
           );
@@ -396,10 +415,14 @@ export async function deleteCategory(
           .update(transactions)
           .set({ categoryId: target.id })
           .where(and(eq(transactions.categoryId, category.id), eq(transactions.userId, userId)));
+        await tx
+          .update(recurringTransactions)
+          .set({ categoryId: target.id })
+          .where(and(eq(recurringTransactions.categoryId, category.id), eq(recurringTransactions.userId, userId)));
       }
 
       await tx.delete(categories).where(and(eq(categories.id, category.id), eq(categories.userId, userId)));
-      return { movedTransactions: usage, movedTo: target };
+      return { movedTransactions: usage, movedRecurring: rules, movedTo: target };
     });
   } catch (err) {
     if (pendingName && isUniqueViolation(err)) {

@@ -254,6 +254,7 @@ describe("deleteCategory into a new category", () => {
     const count = (await listCategories(alice.id)).length;
     expect(await deleteCategory(alice.id, alice.cat("Housing"), { moveToNewCategoryName: "Rent" })).toEqual({
       movedTransactions: 0,
+      movedRecurring: 0,
       movedTo: null,
     });
     expect((await listCategories(alice.id)).map((c) => c.name)).not.toContain("Rent");

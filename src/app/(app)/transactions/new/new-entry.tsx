@@ -3,6 +3,7 @@ import { Card, EmptyState, LinkButton } from "@/components/ui";
 import type { CurrentUser } from "@/lib/auth";
 import { todayInZone } from "@/lib/dates";
 import { getGroupScope } from "@/lib/group-scope";
+import { isFrequency } from "@/lib/recurrence";
 import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
 import { categoryOptions, param, parseId, walletOptions } from "../form-options";
@@ -51,6 +52,7 @@ export async function NewEntry({
   const walletId = wallets.some((w) => w.id === walletParam) ? walletParam! : groupFirst;
 
   const today = todayInZone(user.timeZone);
+  const repeatParam = param(searchParams.repeat);
   return (
     <EntryForm
       variant={variant}
@@ -64,6 +66,8 @@ export async function NewEntry({
       canTransfer={wallets.length >= 2}
       // Dialog and full page share the draft "Manage categories" keeps.
       draftKey="new"
+      // `?repeat=monthly` (the "New" button of /recurring) preselects Repeat.
+      repeat={{ frequency: isFrequency(repeatParam) ? repeatParam : "never" }}
     />
   );
 }
