@@ -746,7 +746,7 @@ function RepeatFields({
           value={frequency}
           onChange={(e) => onFrequency(e.target.value as Frequency | "never")}
           error={errors.frequency}
-          className="w-auto min-w-32"
+          className="w-auto! min-w-32"
         >
           {(Object.keys(FREQUENCY_LABEL) as (Frequency | "never")[]).map((f) => (
             <option key={f} value={f}>
@@ -767,13 +767,13 @@ function RepeatFields({
                 value={every}
                 onChange={(e) => onEvery(e.target.value)}
                 error={errors.interval}
-                className="w-14 text-center tabular-nums"
+                className="w-14! text-center tabular-nums"
                 aria-describedby={pid("interval-unit")}
               />
               <span id={pid("interval-unit")}>{unitLabel(frequency, n ?? 2)}</span>
             </span>
             <span className="inline-flex items-center gap-2 text-sm text-foreground">
-              <span id={pid("endDate-label")}>until</span>
+              <span id={pid("endDate-label")}>Until</span>
               <DatePicker
                 id={pid("endDate")}
                 name="endDate"

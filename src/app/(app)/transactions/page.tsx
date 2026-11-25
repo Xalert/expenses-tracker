@@ -261,7 +261,7 @@ export default async function TransactionsPage({
         description={anyAtAll ? describeCount(total, params, view, thisMonth) : undefined}
         actions={
           // Not in the top menu: repeating entries are reached from here and from the marker on the entries they made.
-          <Link href="/recurring" className={buttonClasses({ variant: "secondary", size: "sm" })}>
+          <Link href="/recurring" className={buttonClasses({ variant: "secondary" })}>
             <RepeatIcon className="size-4" />
             Repeating
           </Link>

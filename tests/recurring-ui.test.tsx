@@ -57,7 +57,7 @@ describe("the Add form's Repeat control", () => {
     const html = addForm({ frequency: "monthly" });
     expect(html).toMatch(/<option value="monthly" selected="">Monthly<\/option>/);
     expect(html).toMatch(/<input[^>]*name="interval"[^>]*value="1"/);
-    expect(text(html)).toContain("Every month until No end date");
+    expect(text(html)).toContain("Every month Until No end date");
     expect(html).toContain("No end date");
     expect(html).toContain('aria-label="End date (optional)"');
   });

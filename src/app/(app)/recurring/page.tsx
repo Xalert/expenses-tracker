@@ -133,7 +133,7 @@ export default async function RecurringPage() {
               ← Transactions
             </Link>
             {rules.length > 0 && (
-              <LinkButton href={NEW_RECURRING_HREF} size="sm">
+              <LinkButton href={NEW_RECURRING_HREF}>
                 New
               </LinkButton>
             )}

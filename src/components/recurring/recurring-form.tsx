@@ -125,7 +125,15 @@ export function RecurringForm({
               name="walletId"
               aria-labelledby="walletId-label"
               required
-              options={wallets.map((w) => ({ value: String(w.id), label: w.archived ? `${w.name} (archived)` : w.name }))}
+              options={wallets.map((w) => ({
+                value: String(w.id),
+                label: (
+                  <>
+                    {w.archived ? `${w.name} (archived)` : w.name}
+                    {w.groupName && <span className="font-normal text-muted-foreground"> · {w.groupName}</span>}
+                  </>
+                ),
+              }))}
               defaultValue={pick("walletId")}
               onChange={setWalletId}
               error={err.walletId}
@@ -143,7 +151,7 @@ export function RecurringForm({
                 defaultValue={v.frequency ?? frequency}
                 onChange={(e) => setFrequency(e.target.value as Frequency)}
                 error={err.frequency}
-                className="w-auto min-w-32"
+                className="w-auto! min-w-32"
               >
                 {RECURRING_FREQUENCY_VALUES.map((f) => (
                   <option key={f} value={f}>
@@ -162,7 +170,7 @@ export function RecurringForm({
                   defaultValue={pick("interval")}
                   onChange={(e) => setEvery(e.target.value.trim())}
                   error={err.interval}
-                  className="w-14 text-center tabular-nums"
+                  className="w-14! text-center tabular-nums"
                   aria-describedby="interval-unit"
                 />
                 <span id="interval-unit">{unitLabel(frequency, n)}</span>

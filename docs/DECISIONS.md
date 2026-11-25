@@ -459,6 +459,39 @@ first two rows of "Interface" above (sidebar + bottom tab bar, the five-entry ba
 | The wallet page's actions moved into a "⋯" menu (`role="menu"`, arrow keys) with "Edit wallet", Archive / Unarchive and Delete; Archive / Unarchive close the menu when they succeed | The header has room for the three add pills; the rarer actions sit one step away, as the design shows | built (step 5) |
 | `WalletCard` / `WalletRow` (`components/wallets/wallet-card.tsx`) were removed | Nothing used them after the Overview (step 3) and the new wallet list | built (step 5) |
 
+### Recurring entries
+
+Decided and built 2026-11-25 (SPEC "Recurring entries"). The table and `transactions.recurring_id` came with migration
+`0007`, written beforehand by the planner.
+
+| Decision | Why | Decided by |
+|---|---|---|
+| No scheduler: due occurrences become entries lazily, when the user next uses the app (every page, export download and Server Action sees the entries up to the user's today) | A self-hosted single container has no reliable background job, and nobody looks at the data while not using the app | planner |
+| Occurrences are counted from `startDate`: a rule from the 31st lands on shorter months' last day and returns to the 31st; 29 Feb yearly lands on 28 Feb in other years; the date maths is a pure module (`src/lib/recurrence.ts`) | Counting from the previous occurrence would drift to the 28th for good after February | planner |
+| Catching up after an absence creates every missed occurrence on its own day, at most 300 per rule per run (`MAX_OCCURRENCES_PER_RUN`); the rest follow on the next request | The history should be what it would have been; the bound keeps one request short after years away | planner |
+| Created entries are ordinary entries carrying `recurringId`; editing or deleting one does not touch the rule; deleting the rule keeps its entries (`set null`) | A rule is a convenience for typing, not a second source of truth | planner |
+| Editing a rule changes future entries only | Past entries are history the user may already have corrected by hand | planner |
+| Paused rules create nothing and do not backfill; resuming continues from the first occurrence on or after the day of resuming. A rule whose wallet, wallet group or category is archived when an occurrence falls due is paused then (and shown with the reason); the user resumes it by hand | A pause means "not while I'm away"; silently filling an archived wallet would break the archive rule | planner |
+| Expenses and income only; recurring transfers are a known gap | Keeps the first version to one kind of row per occurrence | planner |
+| Removing a category "moving its entries" moves its rules too, in the same DB transaction; a rule counts as use for the kind change; deleting a wallet without entries deletes its rules (FK cascade) and its confirmation says so | A rule must never point at a category of the other kind or at nothing | planner |
+| Creation lives in the Add form (expense / income being created): a "Repeat" select (Never … Yearly), "every N" and an optional end date; the entry is the rule's first occurrence; a past start says before saving how many more entries saving adds | One place to add things; the rule starts from a real entry | planner |
+| `/recurring` lists the rules with pause / resume, edit and delete; not in the top menu (linked from the /transactions header and from the marker on rule-made entries); "New" opens the Add form with Repeat preselected | Rules are set up rarely; the menu stays short | planner |
+| The backup carries an optional `recurring` list (wallet by the file's id, category by kind + name) and each entry's optional `recurringId`; version stays 1; import adds a rule the account lacks and skips an identical one; not in the CSV | Lossless round trip without a version bump; a CSV moves entries, not rules | planner |
+| The demo seeds two rules (monthly salary and rent on the 1st, from last month) with their entries linked | Shows the feature on `dev:demo`; the 1st keeps the seed's counts the same on every day of the month | planner / built |
+| The hook is `getCurrentUser` (`src/lib/auth.ts`), right after the session is resolved: it is React-`cache`d per request, already knows the time zone, and every page (via `requireUser`), every Server Action and the export route handlers go through it before reading anything; the layout and the page of one render await the same promise, so neither can read before the entries exist | A layout-only hook would race the page (they render concurrently); a page-by-page call would be forgotten somewhere | built |
+| The hook's cost when nothing is due is one indexed query (`user_id = ? and paused_at is null and next_date <= today`); each due rule is caught up in its own DB transaction: `SELECT … FOR UPDATE` on the rule row, re-check paused / `next_date` under the lock, insert its entries, move `next_date`, commit | Two requests at once: the second waits on the lock, then sees the new `next_date` and does nothing (checked with 8 concurrent runs on a real Postgres: 401 entries, none twice) | built |
+| A failure inside the hook is logged (`console.error`) and does not fail the request | A broken rule must not lock the user out of every page; the next request retries | built |
+| The mutations that change when a rule runs (create, edit, resume) catch the rule up inside their own DB transaction, with the caller's today | A Server Action's redirect renders in the same request, after `getCurrentUser` already ran: without this, today's entry would only appear on the next page load | built |
+| The pause reason is not stored: `RecurringView.blockedBy` is worked out from the wallet / group / category at read time ("The wallet “Cash” is archived.") | No schema change; the reason shown is the one that blocks resuming now (after unarchiving, the rule shows plain "Paused" and Resume) | built |
+| Resume uses the later of today and the stored next date, so pausing and resuming on the same day never makes a second entry for today | `firstOccurrenceOnOrAfter(today)` alone would repeat today's occurrence when it was already made | built |
+| The rule's kind cannot be changed by editing; the category picker offers the kind's categories (plus its own archived one) | Same as editing an entry's category; switching expense ↔ income is a new rule | built |
+| Editing keeps the schedule's anchor (`startDate`) when the frequency, interval and next date are unchanged; changing any of them restarts the schedule at the new next date, which must then be today or later. An end date before the next date ends the rule; one before the anchor is refused. An ended rule continues when given a next date | "Future entries only", with a predictable way to move the day of month; the 31st survives an amount-only edit | built |
+| "Every N" is 1–99 | Enough for any real schedule; keeps the input two characters wide | built |
+| The Repeat state (frequency, every, until) is React state in `EntryForm`, reset to Never after a "Keep open for another" save | It survives the remount after a refused save like the kind does; resetting it stops a second save from creating a second rule by accident | built |
+| The marker is a small loop icon after the category with "(repeats)" for screen readers; the link to /recurring is in the open row's footer ("Repeating entry"), not on the marker | The marker sits inside the row's button, where a link cannot go | built |
+| An imported rule keeps the file's next date and paused state (paused as of the import); its due entries are made by the next request like any rule's. A rule matches an existing one on wallet, category, kind, amount, note, frequency, interval, start and end date; next date and paused are not compared | Re-importing one's own backup must add nothing, even after the rule moved on | built |
+| A category named only by a backup rule (not in the file's `categories`) is created like any other category the import needs | The rule names its category by kind + name, so the file may not list it | built |
+
 ### Wallet groups
 
 Decided 2026-11-09 with the owner (the design is SPEC "Wallet groups"; steps 1, data model and services, and 2, the interface, are built).
@@ -562,6 +595,15 @@ New features beyond these have not been chosen yet.
   registration or their next sign-in with JavaScript on, so this is left for accounts that never signed in again
   since 2026-11-18, browsers without JavaScript, and browsers whose zone is not an IANA name. Entries imported
   before an account had its zone keep the dates they got then.
+- **Recurring transfers** *(2026-11-25)*: repeating entries are expenses and income only; a monthly move to savings
+  is still entered by hand.
+- **A rule's upcoming occurrences are not shown ahead of time** *(2026-11-25)*: the wallet page's "projected" days
+  only show entries that exist (future-dated ones); next month's rent from a rule appears only on its date. The
+  /recurring list shows each rule's next date.
+- **Repeating entries are not in the CSV** *(2026-11-25)*, only in the JSON backup: a CSV moves entries, not rules
+  (an exported entry made by a rule imports as a plain entry).
+- **No list of a rule's entries** *(2026-11-25)*: /recurring shows how many entries a rule made, but /transactions
+  has no filter by rule.
 - **Manual exchange rates are not in the CSV** (only in the JSON backup since 2026-11-18): a CSV moves entries, not
   rates.
 - **An upload without a `Content-Length` header** that exceeds the Server Action limit still gets Next.js's generic
@@ -587,6 +629,14 @@ New features beyond these have not been chosen yet.
   touching the checkout at the time (a parallel agent, a `next build` / `next typegen` in the same folder); not
   confirmed. If it shows up again, restart `npm run dev`.
 - A date cannot be typed into the date picker (see Interface decisions); it is mouse/touch or keyboard navigation only.
+- *(2026-11-25)* **A rule paused by hand keeps showing the archive reason** once its wallet or category is archived
+  later (the reason is worked out at read time, not stored), and a rule paused because of an archive shows plain
+  "Paused" after unarchiving.
+- *(2026-11-25)* On the repeating-entry edit page at 375px a large amount is cut off in the amount box (the
+  `BigAmount` box shares the row with "EUR · into ING Current"); the value is intact and scrolls in the input. Same
+  component as the Add form.
+- *(2026-11-25)* A rule whose wallet is created archived by a backup import is created as given; it pauses itself at
+  its next due date rather than being refused at import.
 
 ### Statement importer gaps
 
@@ -847,3 +897,13 @@ New features beyond these have not been chosen yet.
 - **Dependabot (2026-11-25) has not run.** `.github/dependabot.yml` was checked only against the documented options
   (and parsed as YAML): not whether the groups come out as intended (`next` and `eslint-config-next` in one PR), the
   cooldown, or the Docker entry finding `FROM node:24-bookworm-slim` and which tag it proposes.
+- **Repeating entries (2026-11-25).** Covered: the date maths (`tests/recurrence.test.ts`), the services on PGlite
+  (`tests/recurring.test.ts`: catch-up, the per-run bound, pause / resume, archive pausing, editing, deletion,
+  categories, another user's rule), the hook through `getCurrentUser` (`tests/current-user.test.ts`), the actions,
+  the backup round trip, render tests, and `e2e/recurring.spec.ts` (desktop and 375px). Two requests at once were
+  checked once by hand against a real Postgres 17 (8 concurrent `materializeDueRecurring` runs on a pool: 401
+  entries, none twice); there is no automated test of that on Postgres (PGlite has one connection, so its test only
+  shows that repeated and overlapping calls create nothing twice). Not tried: time zones where today differs
+  between server and account around midnight (the hook uses `todayInZone(user.timeZone)`, as every page does), a
+  rule caught up across a daylight-saving change (dates are plain strings, so none is expected), and the hook's
+  failure path (logged, request continues) other than by reading the code.

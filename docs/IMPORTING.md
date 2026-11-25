@@ -15,7 +15,7 @@ rules it follows. The exact contract for developers is in [`SPEC.md`](SPEC.md#im
 
 | Download | Format | Use it to |
 |---|---|---|
-| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones, archived state and date), transactions, transfers, and your own exchange rates from the Rates page. |
+| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones, archived state and date), transactions, transfers, your repeating entries (with which entries they made), and your own exchange rates from the Rates page. |
 | Transactions | CSV | Work in a spreadsheet, and import it back. One row per wallet first, then one per archived category the rows use, then one row per expense, income or transfer. |
 | Wallets & categories | JSON | Give the [Statement Importer](STATEMENT-IMPORTER.md) your wallet and category names (archived ones flagged, and left out there), without any transactions. |
 
@@ -141,9 +141,11 @@ selected twice in one import is used once.
 ## Preview and confirmation
 
 The preview shows what will be added, the duplicates skipped, the wallets, groups and categories that will be
-created (marked "archived" when they will be), the exchange rates a backup adds, and anything worth knowing
-(rounding, labels, time zones). A backup's exchange rate for a currency and date you already have a rate for is not
-imported: yours is kept, and the preview says so when they differ. **Import** re-checks everything against your
+created (marked "archived" when they will be), the exchange rates and repeating entries a backup adds, and anything
+worth knowing (rounding, labels, time zones). A backup's exchange rate for a currency and date you already have a rate
+for is not imported: yours is kept, and the preview says so when they differ. A repeating entry you already have (same
+wallet, category, amount, note and schedule) is skipped; a new one is added as it was, paused or not, and the entries
+it should have made since the backup are added the next time you open a page. **Import** re-checks everything against your
 account as it is at that moment. If something changed in between (another tab, another device), the confirmation says
 so and lists the numbers that differ from the preview.
 

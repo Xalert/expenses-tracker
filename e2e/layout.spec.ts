@@ -1,9 +1,21 @@
 import { expect, expectNoHorizontalOverflow, hydrated, test } from "./support/fixtures";
-import { seedEntry, seedGroup, seedTransfer, seedWallet } from "./support/seed";
+import { seedEntry, seedGroup, seedRecurring, seedTransfer, seedWallet } from "./support/seed";
 
 // Every main page, with enough data to fill its cards, at 375px in both colour schemes: nothing scrolls sideways and
 // nothing logs a console error (the fixture checks that after each test).
-const PAGES = ["/", "/transactions", "/transactions/new", "/wallets", "/wallets/new", "/categories", "/data", "/account", "/rates"];
+const PAGES = [
+  "/",
+  "/transactions",
+  "/transactions/new",
+  "/transactions/new?repeat=monthly",
+  "/wallets",
+  "/wallets/new",
+  "/categories",
+  "/data",
+  "/account",
+  "/rates",
+  "/recurring",
+];
 
 for (const colorScheme of ["light", "dark"] as const) {
   test.describe(`${colorScheme} scheme`, () => {
@@ -18,7 +30,12 @@ for (const colorScheme of ["light", "dark"] as const) {
       await seedEntry(user.id, { walletId: bank.id, kind: "income", category: "Salary", amountMinor: 9_876_543 });
       await seedEntry(user.id, { walletId: jpy.id, kind: "expense", category: "Food", amountMinor: 1_200 });
       await seedTransfer(user.id, { fromWalletId: bank.id, toWalletId: usd.id, amountMinor: 10_000, receivedAmountMinor: 10_800 });
-      const pages = [...PAGES, `/wallets/${bank.id}`, `/wallets/${bank.id}/edit`];
+      const { rule } = await seedRecurring(
+        user.id,
+        { walletId: bank.id, kind: "expense", category: "Housing", amountMinor: 123_456, note: "a fairly long note for the rent of the flat" },
+        { frequency: "weekly", interval: 2, endDate: "2099-12-31" },
+      );
+      const pages = [...PAGES, `/wallets/${bank.id}`, `/wallets/${bank.id}/edit`, `/recurring/${rule.id}/edit`];
       for (const path of pages) {
         await page.goto(path);
         await hydrated(page);
