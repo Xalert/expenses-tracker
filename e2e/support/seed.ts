@@ -91,7 +91,7 @@ export async function categoryByName(userId: number, name: string): Promise<Cate
 /** An expense / income on `date` (default today), `amountMinor` in the wallet's minor units. */
 export async function seedEntry(
   userId: number,
-  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string },
+  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string; tags?: string[] },
 ) {
   const category = await categoryByName(userId, input.category);
   return createTransaction(userId, {
@@ -101,6 +101,7 @@ export async function seedEntry(
     amountMinor: input.amountMinor,
     date: input.date ?? todayISO(),
     note: input.note ?? null,
+    tags: input.tags,
   });
 }
 

@@ -15,7 +15,7 @@ rules it follows. The exact contract for developers is in [`SPEC.md`](SPEC.md#im
 
 | Download | Format | Use it to |
 |---|---|---|
-| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones, archived state and date, colour), transactions, transfers, your repeating entries (with which entries they made), your own exchange rates from the Rates page, and your budgets. |
+| Full backup | JSON | Keep a backup, or move your account to another instance. Everything: wallets (initial balance, group, archived state and date), categories (also unused ones, archived state and date, colour), transactions, transfers, your repeating entries (with which entries they made), your own exchange rates from the Rates page, your budgets, and your tags (each entry's, and unused ones). |
 | Transactions | CSV | Work in a spreadsheet, and import it back. One row per wallet first, then one per archived category the rows use, then one row per expense, income or transfer. |
 | Wallets & categories | JSON | Give the [Statement Importer](STATEMENT-IMPORTER.md) your wallet and category names (archived ones flagged, and left out there), without any transactions. |
 
@@ -41,14 +41,14 @@ The format is recognised from the content, not the file name.
 ## The transactions CSV
 
 ```
-date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind
-,wallet,Main,EUR,1000.00,,,,,,Personal,,
-,wallet,Old card,USD,50.00,,,,,,Personal,2025-06-30,
-,category,,,,Old rent,,,,,,2025-12-31,expense
-2026-03-01,expense,Main,EUR,12.50,Food,Lunch,,,,Personal,,
-2026-03-02,income,Main,EUR,2500.00,Salary,,,,,Personal,,
-2026-03-05,transfer,Main,EUR,100.00,,ATM,Cash,EUR,100.00,Personal,,
-2026-03-06,transfer,Main,EUR,200.00,,,Old card,USD,215.40,Personal,,
+date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind,tags
+,wallet,Main,EUR,1000.00,,,,,,Personal,,,
+,wallet,Old card,USD,50.00,,,,,,Personal,2025-06-30,,
+,category,,,,Old rent,,,,,,2025-12-31,expense,
+2026-03-01,expense,Main,EUR,12.50,Food,Lunch,,,,Personal,,,"holiday 2026, reimbursable"
+2026-03-02,income,Main,EUR,2500.00,Salary,,,,,Personal,,,
+2026-03-05,transfer,Main,EUR,100.00,,ATM,Cash,EUR,100.00,Personal,,,
+2026-03-06,transfer,Main,EUR,200.00,,,Old card,USD,215.40,Personal,,,
 ```
 
 - Required columns: `date`, `type`, `wallet`, `currency`, `amount`. The others are optional, header names are not
@@ -64,6 +64,12 @@ date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,g
   have none.
 - **Wallets** are identified by name and currency (ignoring case): an existing wallet is used, a missing one is
   created. Two wallets of yours with the same name and currency count as one in a CSV.
+- **Tags** (optional column `tags`): an expense's or income's tags, separated by commas inside the cell
+  (`"holiday 2026, reimbursable"`; quote the cell when the file is comma-separated). Each tag is 1–40 characters, at
+  most 10 per entry; a tag you already have is used (matched ignoring case), a missing one is created. Tags are not
+  part of what makes an entry a [duplicate](#duplicates), and a skipped duplicate does **not** get the file's tags
+  (an import adds, it never changes what you have). Transfers, wallet rows and category rows cannot have tags: a
+  `tags` cell on them is a problem.
 
 ### Wallet rows, groups and archived wallets
 
@@ -124,7 +130,9 @@ single-file Spendee export works too.
   entries near midnight differently). The preview says which time zone it used, where it came from, and how many
   entries landed on a different day than the UTC date in the file. The time of day is not kept. Set the time zone
   before your first Spendee import: changing it later does not change entries already imported.
-- **Labels** are added to the note (`note · labels`), since this app has no labels.
+- **Labels** are added to the note (`note · labels`); they do **not** become tags. The note is part of what makes an
+  entry a duplicate, so turning labels into tags would change the note and import files you already imported a
+  second time. Add tags afterwards in the app if you want them.
 - **Rounding.** Spendee can write more decimals than a currency has (converted foreign purchases). Such amounts are
   rounded half away from zero to the currency's decimals; the preview counts them.
 - **Wallets** created from Spendee start at a balance of 0 (Spendee's export has no starting balance); edit them
@@ -134,7 +142,7 @@ single-file Spendee export works too.
 
 With **Skip transactions that already exist** on (the default), an entry is skipped when your account already has
 one with the same wallet, type, category, date, amount and note (a transfer: both wallets, date, both amounts and
-note). It is counted one for one: if the file has 3 identical entries and your account has 1, 2 are added. So
+note; tags are not compared, and a skipped entry keeps the tags it has). It is counted one for one: if the file has 3 identical entries and your account has 1, 2 are added. So
 importing the same file twice adds nothing the second time, while repeated purchases inside one file are kept. A file
 selected twice in one import is used once.
 

@@ -97,13 +97,7 @@ function TagPanel({
   const row = useExpandableRow();
   return (
     <div className="space-y-4 px-4 pt-1 pb-4 sm:px-[18px]">
-      <Link
-        href={tagEntriesHref(tag.id)}
-        className="inline-flex min-h-11 items-center text-sm font-semibold text-accent-hover hover:underline sm:min-h-0"
-      >
-        {tag.transactionCount === 0 ? "No entries carry it" : `Show its ${entries(tag.transactionCount)}`}
-        <span aria-hidden="true">&nbsp;›</span>
-      </Link>
+      {/* The name first: opening the row focuses the panel's first control (as the category rows). */}
       <TagRenameForm
         tag={tag}
         onCancel={() => row.close()}
@@ -113,7 +107,7 @@ function TagPanel({
           announce(message, { focusHeading: merged });
         }}
       />
-      <div className="border-t border-border pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
         <TagDeleteButton
           tag={tag}
           onDeleted={(message) => {
@@ -121,6 +115,17 @@ function TagPanel({
             announce(message, { focusHeading: true });
           }}
         />
+        {tag.transactionCount > 0 ? (
+          <Link
+            href={tagEntriesHref(tag.id)}
+            className="inline-flex min-h-11 items-center text-sm font-semibold text-accent-hover hover:underline"
+          >
+            Show its {entries(tag.transactionCount)}
+            <span aria-hidden="true">&nbsp;›</span>
+          </Link>
+        ) : (
+          <p className="text-sm text-muted-foreground">No entry carries it.</p>
+        )}
       </div>
     </div>
   );
@@ -199,7 +204,8 @@ function TagDeleteButton({ tag, onDeleted }: { tag: TagView; onDeleted: (message
       onSubmit={(e) => {
         if (!window.confirm(question)) e.preventDefault();
       }}
-      className="space-y-1.5"
+      // Not shrunk next to the link: a long name wraps the link onto the next line before it is truncated.
+      className="max-w-full min-w-0 shrink-0 space-y-1.5"
     >
       <SubmitButton variant="ghost" className="-ml-3 max-w-full min-w-0 text-danger! hover:bg-danger-soft!" pendingLabel="Deleting…">
         <span className="truncate">Delete {tag.name}</span>

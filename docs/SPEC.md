@@ -428,7 +428,8 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
-`actualBalance`, `color`, `today`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries).
+`actualBalance`, `color`, `today`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries),
+`tags` (an entry's tag list), `tagId` (the tag filter).
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -531,9 +532,11 @@ type TransactionView = {
   date: string; note: string | null;
   transferId: number | null;
   counterparty: { walletId; walletName; currency; amountMinor } | null   // the other leg, for transfers
+  tags: string[]                  // the entry's tag names, by name ignoring case; [] for transfer legs (see "Tags")
 }
-type TransactionFilters = { walletId?; kind?: 'expense' | 'income' | 'transfer'; categoryId?; from?: string; to?: string; q?: string; limit?: number; offset?: number }
-type TransactionInput = { walletId; kind: 'expense' | 'income'; categoryId; amountMinor; date; note?: string | null }
+type TransactionFilters = { walletId?; kind?: 'expense' | 'income' | 'transfer'; categoryId?; tagId?; from?: string; to?: string; q?: string; limit?: number; offset?: number }
+type TransactionInput = { walletId; kind: 'expense' | 'income'; categoryId; amountMinor; date; note?: string | null; tags?: string[] }
+//   tags: replaces the entry's whole set in its DB transaction (create: omitted = none; update: omitted = unchanged)
 listTransactions(userId, filters?): { items: TransactionView[]; total: number }   // date desc, id desc; default limit 50, clamped to 1..200
 //   kind 'transfer' matches both legs; from/to inclusive (malformed → VALIDATION); q = case-insensitive substring of the note
 //   (transfer legs carry a copy of the transfer note, so they match too); total = count of all matches ignoring limit/offset
@@ -1043,7 +1046,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       amount (income `text-income`, expense `text-foreground`, transfers `text-transfer`; a cross-currency transfer
       shows only its own leg).
 - **/transactions** — (with a wallet group selected the list, totals, strip, currency picker and wallet options are
-  narrowed to it and "Export CSV" carries `group=<id>`; an explicit `wallet` filter wins) filter chips at the top (month, wallet, type, category; each opens a popover; a search field
+  narrowed to it and "Export CSV" carries `group=<id>`; an explicit `wallet` filter wins) filter chips at the top (month, wallet, type, category, tag; each opens a popover; a search field
   for the note text), then the **day strip**, then the list. **The default view is the current month**
   (`?month=YYYY-MM`, with "All time" in the month chip; explicit `from`/`to` still work and override `month`).
   - **Day strip** (only when one month is shown): a bar per day of that month for expenses in one currency — the
@@ -1066,17 +1069,18 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - As built (step 4; `page.tsx`, `components/transactions/{list-params,filter-chips,day-strip,day-list,inline-edit}`,
     `lib/day-labels.ts`):
     - **URL state** (`list-params.ts`): `month` (`YYYY-MM` or `all`; absent = the current month), `wallet`, `kind`,
-      `category`, `from`, `to`, `q`, `page`, and `currency` (a valid uppercase code; only picks the strip's currency,
+      `category`, `tag` (one tag id; see "Tags"), `from`, `to`, `q`, `page`, and `currency` (a valid uppercase code; only picks the strip's currency,
       not a filter). Invalid values are dropped. `resolveView(params, thisMonth)` → `{ type: 'month', month }`,
       `{ type: 'all' }` or `{ type: 'range', from?, to? }` (any `from`/`to` wins over `month`); `listFilters` turns
       that into `TransactionFilters`. `hasFilters` counts a month only when it differs from the current one
       (`?month=<current>` is not a filter) and ignores `currency` and `page`. `monthHref` / `dayHref` keep the other
       filters and the currency and leave the current month out of the URL; `exportCsvHref` drops page and currency.
     - **Header**: "Transactions" and "N entries this month" / "N entries in October 2026" / "N entries" (all time) /
-      "N match your filters" (any wallet, type, category, search or date range). No Add button (the floating one).
-    - **Chip row** (`FilterChips`, client): Month · Wallet · Type · Category pills (`pillClasses`; the selected
-      style when set — the month chip only away from the current month), each opening a `Popover`. Wallet, Type and
-      Category: `aria-haspopup="listbox"`, a `role="listbox"` panel of `next/link` options (`role="option"`,
+      "N match your filters" (any wallet, type, category, tag, search or date range). No Add button (the floating one).
+    - **Chip row** (`FilterChips`, client): Month · Wallet · Type · Category · Tag pills (`pillClasses`; the selected
+      style when set — the month chip only away from the current month), each opening a `Popover` (Tag only when the
+      user has a tag or one is selected; an id that is no tag of theirs reads "Unknown tag" and matches nothing). Wallet,
+      Type, Category and Tag: `aria-haspopup="listbox"`, a `role="listbox"` panel of `next/link` options (`role="option"`,
       `aria-selected`, a ✓ on the chosen one; Category grouped Expense / Income in `role="group"`s; archived wallets
       marked); opening focuses the selected option, Up / Down / Home / End move, Enter follows the link, Tab leaves.
       A set chip shows the value ("Cash") with "Wallet:" visually hidden. **Month**: `aria-haspopup="dialog"` — a
@@ -1091,7 +1095,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       **Without JavaScript** (`NoScriptFilters`, server, rendered by the page inside `<noscript>`): a GET
       `<form action="/transactions" aria-label="Filters">` of native selects — Month (next month, the current month
       as the empty default, the 24 before it, the month in view if older, "All time"), Wallet ("All wallets", archived
-      marked), Type, Category (`<optgroup>` Expense / Income) — with hidden `q` and `currency` and an "Apply" button;
+      marked), Type, Category (`<optgroup>` Expense / Income), Tag ("All tags"; under the chip's rule) — with hidden `q` and `currency` and an "Apply" button;
       a selected day or range is replaced by the chosen month. A `<style>` in it hides the Wallet / Type / Category
       chips and the Month chip's popover button (`data-needs-js`); the Month chip's ‹ › links stay, and in place of
       its button a `<noscript>` link with the same label (`#no-script-month`, the id of the form's Month select)
@@ -1121,7 +1125,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       `ConversionNotes` line sits under the heading; `?view=only` (in `ListParams.view`, kept by `listHref`, the
       no-JS form and the search form, dropped from the CSV export link) counts only that currency. With a wallet
       filter there is no conversion (one wallet, one currency).
-      `getMonthTimeline(userId, { month, currency, walletId, categoryId, convert? })`; the type and
+      `getMonthTimeline(userId, { month, currency, walletId, categoryId, tagId, convert? })`; the type and
       search filters do not apply (it always shows expenses). `DayBars` 48px tall (72 with a cap), scaled with
       `pickScale` (one huge day capped, labelled with its amount), days after today `future`, inside a
       `role="group"` labelled "Each day of November 2026: select a day to list only that day"; each bar links to
@@ -1144,7 +1148,10 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
       whose transfers cancel out shows "€0.00"), muted. Rows (`ExpandableRow`): kind dot, `transactionLabel`, "note ·
       wallet" muted, the signed amount bold (income `text-income`, expense `text-foreground`, transfers
       `text-transfer`) and, for a cross-currency transfer leg, the other leg's amount small and muted under it. Each
-      row also has a `<noscript>` "Edit <label>" link to its edit page. `PAGE_SIZE` stays 50.
+      row also has a `<noscript>` "Edit <label>" link to its edit page. `PAGE_SIZE` stays 50. An entry with tags shows
+      them after "note · wallet" on the same line (`TagPills`): the first as a small `bg-surface-muted` pill (two from
+      `sm`), each at most 7rem wide and truncated, the rest as "+N"; the pills are `aria-hidden` and a visually hidden
+      "Tags: a, b, c" carries the whole list (so it is part of the row button's name).
     - **In-place editing** (`InlineEditPanel`, client): `EntryForm variant="inline"` — no card, no `mode`, a 56px
       amount box with a 32px number, `space-y-4`, element ids prefixed `edit-<rowId>-` (names unchanged) so they
       cannot clash with the Add dialog opened over the list. A transaction keeps the edit page's Expense / Income
@@ -1304,6 +1311,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     "Different currencies, so enter what actually arrived. No rate is applied for you."
   - Date as pills "Today" / "Yesterday" / a calendar button opening the `DatePicker` popover; a note field.
   - Expense / Income being created: a "Repeat" row (Never by default; see "Recurring entries" → Screens).
+  - Expense / Income (create and edit, every variant): a Tags field after the note (see "Tags" → Screens).
   - Footer: "Keep open for another" checkbox (on success the form clears amount and note and stays open), Cancel,
     and the submit button ("Add expense", "Add transfer"; Enter submits). `?wallet=` / `?kind=` preselect.
   Server Actions, field names and services are unchanged; the form still posts `walletId`, `categoryId`, `amount`,
@@ -1358,7 +1366,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
     **Manage categories keeps a draft:** before the link navigates, `saveEntryDraft(draftKey, kind, form)`
     (`components/transactions/entry-draft.ts`) writes `{ kind, values, savedAt }` to sessionStorage under
     `entry-draft:<draftKey>` — `values` are the non-empty posted `amount`, `receivedAmount`, `walletId`,
-    `categoryId`, `fromWalletId`, `toWalletId`, `date`, `note`. On mount, a form with a `draftKey` takes (reads and
+    `categoryId`, `fromWalletId`, `toWalletId`, `date`, `note`, `tags`. On mount, a form with a `draftKey` takes (reads and
     removes) that entry and applies it through `sanitizeDraft` — a kind the form offers, wallets that are in its
     list, a category of the draft's kind that still exists, a `YYYY-MM-DD` date, strings of at most 500 characters,
     at most an hour old; anything else is dropped (field by field, or the whole draft) — then remounts with those
@@ -1380,7 +1388,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   (inline next to the control; focus to the section heading after a removal; a `role="status"` announcement).
   Since the category gap work (2026-11-18) the open row also changes the kind (unused categories only), archives /
   unarchives, and removes a used category into a new one; archived categories are listed under "Archived" in their
-  kind's card (see "Open row" and "Archived" below).
+  kind's card (see "Open row" and "Archived" below). Below the two cards: the **Tags** card (see "Tags" → Screens).
   - As built (step 7; `categories/page.tsx`, `components/categories/{category-section,category-row,spending-split}.tsx`,
     `lib/category-split.ts`):
     - **Month and currency**: `?month=` as on the Overview (invalid → the current month, a future month → the current
@@ -1595,11 +1603,15 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   entries: `{ id, walletId, kind, category, amountMinor, amount, note, frequency, interval, startDate, endDate,
   nextDate, paused }` — the wallet by the file's wallet id, the category by `kind` + name, `nextDate` null = ended; in
   creation order; absent in older files) and, per transaction, an optional `recurringId` (the `recurring[].id` that
-  made it). The version stays 1. References use ids local to the file.
+  made it); per transaction an optional `tags` (its tag names, sorted; absent when it has none) and an optional
+  top-level `tags[]` (`{ name }`, every tag of the account by name, unused ones included; absent in older files; see
+  "Tags"). The version stays 1. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
-  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind`.
+  `date,type,wallet,currency,amount,category,note,to_wallet,to_currency,to_amount,group,archived,kind,tags`.
+  `tags` (optional, added with tags, always the last column) holds an expense's or income's tag names separated by
+  ", " (sorted; see "Tags" → Import and export); it is empty on transfer, wallet and category rows.
   `type` is `expense` | `income` | `transfer` | `wallet` | `category`; `amount` is positive, plain decimal with a dot, no thousands
   separator, in the wallet's currency; a transfer is **one** row (`wallet` → `to_wallet`, `to_amount` = amount
   received). `group` (optional) names the group of the row's `wallet`.
@@ -1789,8 +1801,10 @@ Date,Wallet,Type,Category name,Amount,Currency,Note,Labels,Author
   UTC — was tried and reverted: it moved entries made just after local midnight to the previous day.)*
 - `Amount` has 8 decimals; trailing zeros are not "rounding". Genuinely over-precise amounts (currency
   conversions) are rounded as before, with the notice.
-- `Labels`: this app has no labels. They are kept by appending them to the note (`note · labels`, or just the
-  labels when there is no note), with a notice counting the affected entries.
+- `Labels`: kept by appending them to the note (`note · labels`, or just the labels when there is no note), with a
+  notice counting the affected entries. **They do not become tags** (since tags exist, 2026-11-25, deliberately): the
+  note is part of an entry's duplicate identity, so moving labels out of it would make files imported before import
+  again.
 - **Transfers** are written as two rows in two different wallets' files: an `Outgoing Transfer` (negative) in the
   source wallet and an `Incoming Transfer` (positive) in the destination, with an empty category, the same note,
   and timestamps at most a couple of seconds apart. The importer pairs them into one transfer:
@@ -1947,6 +1961,7 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
   groupsToCreate: string[]; categoriesToCreate: { name; kind; archived?: true }[]; manualRatesToAdd: number /* backup */;
   budgetsToAdd: number /* backup */; recurringToAdd: number; duplicateRecurring: number /* backup */;
+  tagsToCreate: string[] /* tags the account lacks that added entries carry, plus a backup's listed ones */;
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
@@ -2039,16 +2054,117 @@ type BrokenTransferRow = { direction; walletKey | null; currency | null; amountM
   - Transfers: same currency ⇒ the received amount may be omitted (backup `receivedAmountMinor`, CSV `to_amount`) and,
     if given, must equal the amount sent; different currencies ⇒ required. CSV `to_currency` defaults to `currency`.
     A category on a transfer row is a problem.
-  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount,group,archived,kind`
+  - CSV header: `date,type,wallet,currency,amount` are required (`category,note,to_wallet,to_currency,to_amount,group,archived,kind,tags`
     optional); `type` and header names are case-insensitive; rows whose cells are all blank are skipped; negative
     amounts are rejected with "amounts are positive; the type says which way the money goes".
-  - Formula guard: export prefixes `'` to `wallet`, `category`, `note`, `to_wallet` cells starting with `=`, `+`, `-`,
+  - Formula guard: export prefixes `'` to `wallet`, `category`, `note`, `to_wallet`, `group`, `tags` cells (the `tags`
+    cell as a whole, before it is split) starting with `=`, `+`, `-`,
     `@`, tab, CR **or `'`**; import strips one leading `'` only when the next character is one of those. That makes it
     an exact round trip (`'quoted` → `''quoted` → `'quoted`; a hand-written `'quoted` stays as is).
   - Backup limits: 1 000 wallets, 1 000 categories, 50 000 transactions + transfers; raw strings ≤ 2 000 chars before
     the service rules apply. Unknown fields are ignored; `version` ≠ 1 is rejected with a message (newer vs unknown).
   - The CSV export lists rows oldest first; a transfer is included when either leg matches the filters (so a wallet
     filter includes transfers into it) and appears once.
+
+## Tags
+
+Purpose: free labels on entries that cut across categories ("holiday 2026", "reimbursable"), to find and total what
+belongs together. Built 2026-11-25 (decisions in DECISIONS "Tags"). Tables `tags` and `transaction_tags` (see "Data
+model"; migration `0007`).
+
+### Rules
+
+- Tags go on **expenses and income** only. Transfers are not tagged, and repeating rules carry no tags (an entry made
+  by "Add" with Repeat gets the tags; the rule's later entries do not).
+- A tag belongs to one user. Name: trimmed, inner whitespace collapsed, 1–40 characters, **no comma** (the form field
+  and the CSV cell separate tags with commas), unique per user **ignoring case** (`lower(name)`, the unique index).
+  The pure rules are in `src/lib/tags.ts` (`cleanTagName`, `tagNameProblem`, `splitTagInput`, `dedupeTagNames`,
+  `tagListProblem`, `sortTagNames`, `joinTags`, `MAX_TAG_NAME_LENGTH` 40, `MAX_TAGS_PER_ENTRY` 10).
+- An entry has **at most 10** tags; repeats ignoring case are dropped (the first spelling given wins).
+- A tag is **created the first time it is used** (no separate "create" step); a name matching an existing tag ignoring
+  case uses that tag and its spelling.
+- Saving an entry **replaces its whole set** of tags, in the entry's DB transaction (a refused save changes neither).
+  Deleting an entry removes its links; the tag stays (possibly unused) until deleted.
+- **Renaming** a tag onto the name of another of the user's tags (ignoring case) **merges** them: the renamed tag's
+  entries get the other tag (one link where an entry had both), the renamed tag is deleted, all in one DB transaction;
+  the other tag keeps its spelling. Changing only the letter case of its own name is a plain rename.
+- **Deleting** a tag takes it off its entries; the entries stay.
+- Order wherever tags are listed: name lower-cased by code point, then id (sorted in JS). An entry's tags in the same
+  order.
+- Every query is scoped by `userId`; another user's tag behaves like a missing one (the filter by it matches nothing).
+
+### Services (`src/server/tags.ts`)
+
+```ts
+type TagView = { id; name; transactionCount }            // transactionCount: entries carrying it (all time, every group)
+listTags(userId): TagView[]                               // by name ignoring case
+getTag(userId, tagId, db?): TagView | null
+renameTag(userId, tagId, { name }): { tag: TagView; mergedFrom: string | null }
+//   VALIDATION / NOT_FOUND / CONFLICT (a concurrent creation of the name; try again) on field `name`; mergedFrom = the
+//   renamed tag's old name when it was merged into `tag`
+deleteTag(userId, tagId): { name; transactionCount }      // NOT_FOUND for a missing / another user's tag
+normalizeTagName(value, field = "name"): string; normalizeTagList(value): string[]   // VALIDATION on `name` / `tags`
+// internal: resolveTagIds / setEntryTags (entry services), ensureTagIds (import), loadEntryTags (one query per 10 000
+// entry ids) / loadAllEntryTags (backup)
+```
+
+Changed elsewhere: `TransactionView.tags`, `TransactionInput.tags` (create / update / `createRecurringEntry`, field
+`tags`), `TransactionFilters.tagId` (`filterConditions`, so the list, `listDayTotals` and the CSV export), and
+`getMonthTimeline`'s `tagId` (the day strip). `listTransactions` / `getTransaction` load the page's tags in **one**
+query (not one per row).
+
+### Screens
+
+- **Entry form** (`EntryForm`, every variant: the Add dialog and page, both edit pages, the in-place editors on
+  /transactions and wallet pages; expense / income only, not Transfer): a Tags field after the note
+  (`TagsField`, `components/transactions/tags-field.tsx`). The base is **one text input** `name="tags"` (visually
+  hidden label "Tags", placeholder "Tags, separated by commas (optional)", `maxLength` 1000), which is all there is
+  without JavaScript and keeps the Add sheet one row taller. With scripts, once it is focused or has a value, the
+  user's tags appear under it as toggle pills (`role="group"` "Your tags", `aria-pressed`, 44px tall below `sm`):
+  the ones in the field first, then by use; while a name is typed after the last comma only tags containing it
+  (`tagSuggestions`, at most 8). Clicking a pill adds the tag (replacing the typed piece when it was a search for
+  that tag) or removes it (`toggleTag`); the pills stay once shown (WebKit does not focus a clicked button, so they
+  are not hidden on blur). A line under them names the new tags ("New tag “beach”: created when you save.") or says
+  more than 10 is too many. The action splits the field (`splitTagInput`; more than 1000 characters is refused) and
+  a form without the field leaves an edited entry's tags alone; errors land on `tags` with the text echoed back.
+  The field's text survives a Transfer ↔ Expense switch and "Manage categories" (draft field `tags`), and **"Keep
+  open for another" keeps the tags** for the next entry (amount and note are cleared).
+- **Day lists** (/transactions, wallet pages): the pills after the note (see /transactions → List).
+- **/transactions**: one tag filter, `?tag=<id>` (the Tag chip and the no-JS select; the strip, the day totals, the
+  count line, the month links, Clear and "Export CSV" follow it like the other filters).
+- **/categories**: the **Tags** card below the category cards (`TagSection`,
+  `components/categories/tag-section.tsx`): heading "Tags · N tags" (focusable, a `role="status"` line under it), a
+  line on what tags are (or, with none, how to make one), then a row per tag (`ExpandableRow`: "#", name, "N
+  entries"). The open row: "New name for “x”" (focused and selected) with the hint "Giving it the name of another
+  tag merges the two.", Save / Cancel (`renameTagAction(tagId, prev, formData)` → "Renamed to “y”." / "Saved “y”." /
+  "Merged “x” into “y”." with `merged: true`); under a divider "Delete x" (danger ghost button, `confirm()`,
+  `deleteTagAction(tagId)` → "Deleted “x” and took it off N entries.") and "Show its N entries ›"
+  (`/transactions?month=all&tag=<id>`; "No entry carries it." when unused). A rename closes the row and returns focus
+  to it; a merge or a deletion removes the row, so focus goes to the heading. Both actions revalidate the layout.
+  Counts are all time and not narrowed by the wallet-group scope. No new route.
+
+### Import and export
+
+- **Native CSV**: optional column `tags`, the last one. Export: the entry's names joined with ", " (sorted), the
+  formula guard applied to the whole cell. Import: the cell (guard removed) split on commas, cleaned, repeats dropped,
+  each name valid and at most 10 (a problem at the line otherwise); missing tags are created and attached to the
+  entries the import **adds**. Tags are **not** part of an entry's duplicate identity, and a row skipped as a
+  duplicate does **not** add its tags to the existing entry ("import adds, never changes"); a tag only skipped rows
+  name is not created. A `tags` cell on a transfer row is a **problem** ("Transfers cannot have tags; leave it
+  empty."), as on wallet and category rows. A file without the column imports as before. Across files of one
+  selection a tag is one tag per name ignoring case. The Statement Importer's CSV does not write the column.
+- **Backup**: per transaction `tags` (names) and a top-level `tags: [{ name }]` with every tag of the account (unused
+  ones survive a round trip); both optional, version 1. Import: names checked like the services (problems at
+  `tags[i].name` / `transactions[i].tags`); a listed tag the account lacks is created even when unused; entry tags as
+  for the CSV.
+- **Preview**: `ImportPreview.tagsToCreate` (names), shown as "New tags: …", in the confirmation's differences and the
+  success line ("Created 2 tags.").
+- **Spendee**: labels stay appended to the note (see "Provider formats"); they never become tags.
+
+### Demo data
+
+Three tags on a few entries of both months: "friends" (lunch with Ana, dinner in Cluj), "Cluj trip" (dinner and taxi in
+Cluj), "reimbursable" (software licences).
 
 ## Recurring entries
 
