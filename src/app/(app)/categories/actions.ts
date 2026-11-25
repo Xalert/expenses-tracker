@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { isValidCurrency } from "@/lib/currencies";
 import { isServiceError } from "@/lib/errors";
 import { formValues, serviceErrorState, type FormState } from "@/lib/form";
+import { usageText } from "@/lib/usage-text";
 import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
 import { removeBudget, setBudget } from "@/server/budgets";
 import {
@@ -20,7 +21,6 @@ import { colorField, nameField, parseBudgetTarget, parseCategoryId, parseCategor
 
 const NOT_FOUND_STATE: FormState = { message: "Category not found. It may have been removed already." };
 
-const plural = (n: number) => (n === 1 ? "1 transaction" : `${n} transactions`);
 
 /** Category names show up on every signed-in page (dashboard, lists, filters, wallet pages, forms). */
 function revalidateCategories() {
@@ -196,12 +196,13 @@ export async function deleteCategoryAction(
     return serviceErrorState(err, values);
   }
   revalidateCategories();
-  const { movedTransactions: moved, movedTo } = result;
-  if (moved === 0 || !movedTo) return { ok: true, message: `Removed “${category.name}”.` };
+  const { movedTransactions: moved, movedRecurring, movedTo } = result;
+  if ((moved === 0 && movedRecurring === 0) || !movedTo) return { ok: true, message: `Removed “${category.name}”.` };
+  const what = usageText(moved, movedRecurring);
   return {
     ok: true,
     message: replacement.moveToNewCategoryName !== undefined
-      ? `Removed “${category.name}” and moved ${plural(moved)} to the new category “${movedTo.name}”.`
-      : `Removed “${category.name}” and moved ${plural(moved)} to “${movedTo.name}”.`,
+      ? `Removed “${category.name}” and moved ${what} to the new category “${movedTo.name}”.`
+      : `Removed “${category.name}” and moved ${what} to “${movedTo.name}”.`,
   };
 }

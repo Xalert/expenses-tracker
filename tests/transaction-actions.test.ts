@@ -1,7 +1,9 @@
 // The create Server Actions behind the Add form: `mode=dialog` returns `{ ok: true }` (the dialog closes or clears
 // itself), the full page still redirects to `returnTo`. Next's request APIs are mocked; the services run for real.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addDays, todayISO } from "@/lib/dates";
 import { listCategories } from "@/server/categories";
+import { listRecurring } from "@/server/recurring";
 import { createTransaction, getTransaction, listTransactions } from "@/server/transactions";
 import { createTransfer, getTransfer } from "@/server/transfers";
 import { createWallet } from "@/server/wallets";
@@ -116,6 +118,55 @@ describe("createTransactionAction", () => {
 
     const decimals = await createTransactionAction({}, expense({ mode: "dialog", walletId: String(yen), amount: "1.5" }));
     expect(decimals.fieldErrors?.amount).toMatch(/whole amount in JPY/);
+  });
+});
+
+describe("createTransactionAction with Repeat", () => {
+  // The mocked user has no time zone: "today" is the server's date.
+  const today = todayISO();
+
+  it("frequency never (or absent) saves a plain entry", async () => {
+    expect(await createTransactionAction({}, expense({ mode: "dialog", frequency: "never" }))).toMatchObject({ ok: true });
+    expect(await listRecurring(user.id)).toEqual([]);
+    expect((await listTransactions(user.id, {})).items[0].recurringId).toBeNull();
+  });
+
+  it("creates the entry and the rule, catches up to today and says so", async () => {
+    const state = await createTransactionAction(
+      {},
+      expense({ mode: "dialog", date: addDays(today, -2), frequency: "daily", interval: "1", endDate: "" }),
+    );
+    expect(state).toEqual({
+      ok: true,
+      message: "Added €12.40 to Food, repeating every day (and 2 later dates up to today)",
+    });
+    const [rule] = await listRecurring(user.id);
+    expect(rule).toMatchObject({ frequency: "daily", interval: 1, startDate: addDays(today, -2), endDate: null });
+    const { items } = await listTransactions(user.id, {});
+    expect(items.map((t) => t.date)).toEqual([today, addDays(today, -1), addDays(today, -2)]);
+    expect(items.every((t) => t.recurringId === rule.id)).toBe(true);
+    expect(next.revalidated).toEqual([["/", "layout"]]);
+  });
+
+  it("the full page redirects as before", async () => {
+    expect(await redirectOf(createTransactionAction({}, expense({ date: today, frequency: "monthly", interval: "2" })))).toBe(
+      "/wallets",
+    );
+    expect((await listRecurring(user.id))[0]).toMatchObject({ frequency: "monthly", interval: 2 });
+  });
+
+  it("puts schedule errors on frequency, interval and endDate with the values echoed, saving nothing", async () => {
+    const bad = await createTransactionAction({}, expense({ mode: "dialog", frequency: "hourly" }));
+    expect(bad.fieldErrors?.frequency).toBe("Choose how often it repeats.");
+    const zero = await createTransactionAction({}, expense({ mode: "dialog", frequency: "weekly", interval: "0" }));
+    expect(zero.fieldErrors?.interval).toBe("Enter a whole number from 1 to 99.");
+    expect(zero.values).toMatchObject({ frequency: "weekly", interval: "0" });
+    const end = await createTransactionAction({}, expense({ mode: "dialog", frequency: "weekly", endDate: "2026-11-01" }));
+    expect(end.fieldErrors?.endDate).toBe("The end date cannot be before the first entry.");
+    const garbled = await createTransactionAction({}, expense({ mode: "dialog", frequency: "weekly", endDate: "soon" }));
+    expect(garbled.fieldErrors?.endDate).toBe("Enter a valid end date.");
+    expect(await listRecurring(user.id)).toEqual([]);
+    expect((await listTransactions(user.id, {})).total).toBe(0);
   });
 });
 

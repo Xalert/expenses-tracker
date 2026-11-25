@@ -6,8 +6,10 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
+import { materializeDueRecurring } from "@/server/recurring";
 import { deleteExpiredSessions, sessionTouchDue, touchSession } from "@/server/users";
 import { shouldUseSecureCookie } from "./config";
+import { todayInZone } from "./dates";
 import { canonicalTimeZone } from "./time-zone";
 import { storedUserAgent } from "./user-agent";
 import { displayName } from "./user-id";
@@ -83,6 +85,11 @@ export async function currentSessionTokenHash(): Promise<string | null> {
 /**
  * The signed-in user, or null. Cached for the duration of a request. Marks the session used (`lastUsedAt`) when its
  * last mark is older than `SESSION_TOUCH_INTERVAL_MS`, so most requests write nothing.
+ *
+ * It is also where repeating entries become real ones (`materializeDueRecurring`, up to the user's today): every page,
+ * Server Action and export route reaches the user through here before it reads anything, and the layout and the page
+ * of one render share this cached promise, so the entries exist before either queries. One cheap query when nothing
+ * is due. A failure there is logged and does not fail the request (the next request tries again).
  */
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
@@ -114,6 +121,12 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   }
   if (sessionTouchDue(row.lastUsedAt, now)) await touchSession(row.sessionId, now);
   const { id, username, email, firstName, lastName } = row;
+  const timeZone = canonicalTimeZone(row.timeZone);
+  try {
+    await materializeDueRecurring(id, todayInZone(timeZone, now));
+  } catch (err) {
+    console.error("Could not create the due repeating entries:", err);
+  }
   return {
     id,
     username,
@@ -121,7 +134,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     firstName,
     lastName,
     displayName: displayName(row),
-    timeZone: canonicalTimeZone(row.timeZone),
+    timeZone,
   };
 });
 

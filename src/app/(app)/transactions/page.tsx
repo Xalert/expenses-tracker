@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ConversionNotes, ConvertSwitch } from "@/components/dashboard/conversion";
+import { RepeatIcon } from "@/components/shell/icons";
 import { DayList } from "@/components/transactions/day-list";
 import { DayStrip } from "@/components/transactions/day-strip";
 import { FilterChips } from "@/components/transactions/filter-chips";
@@ -255,7 +256,17 @@ export default async function TransactionsPage({
 
   return (
     <>
-      <PageHeader title="Transactions" description={anyAtAll ? describeCount(total, params, view, thisMonth) : undefined} />
+      <PageHeader
+        title="Transactions"
+        description={anyAtAll ? describeCount(total, params, view, thisMonth) : undefined}
+        actions={
+          // Not in the top menu: repeating entries are reached from here and from the marker on the entries they made.
+          <Link href="/recurring" className={buttonClasses({ variant: "secondary" })}>
+            <RepeatIcon className="size-4" />
+            Repeating
+          </Link>
+        }
+      />
 
       {anyAtAll && (
         <FilterChips

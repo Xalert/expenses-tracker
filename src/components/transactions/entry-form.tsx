@@ -25,6 +25,7 @@ import { GroupDot } from "@/components/wallets/group-dot";
 import { cn } from "@/lib/cn";
 import { addDays, formatDate } from "@/lib/dates";
 import { initialFormState, type FormState } from "@/lib/form";
+import { countOccurrencesAfter, isFrequency, unitLabel, type Frequency } from "@/lib/recurrence";
 import { sanitizeDraft, saveEntryDraft, takeEntryDraft, type DraftField } from "./entry-draft";
 import { NewCategoryInline } from "./new-category-inline";
 
@@ -146,6 +147,7 @@ export function EntryForm({
   footerStart,
   categoryAction = createCategoryFromEntryAction,
   draftKey,
+  repeat,
 }: {
   wallets: WalletOption[];
   categories: CategoryOption[];
@@ -179,6 +181,11 @@ export function EntryForm({
    * for the inline editor and to no draft otherwise.
    */
   draftKey?: string;
+  /**
+   * The Add form only: offer "Repeat" for an expense / income (posts `frequency`, `interval`, `endDate`; see
+   * `createTransactionAction`). `frequency` preselects it (the "New" button of /recurring); default Never.
+   */
+  repeat?: { frequency?: Frequency | "never" };
 }) {
   const router = useRouter();
   const formId = useId();
@@ -207,6 +214,14 @@ export function EntryForm({
     String(initial.toWalletId ?? activeWallets.find((w) => w.id !== initialFrom)?.id ?? ""),
   );
   const [date, setDate] = useState(initial.date);
+  // Repeat (Add form only): React state, so the choice survives the remount after a refused save, as the kind does.
+  // A first render that already carries a result (a refused save without JavaScript) starts from its echoed values.
+  const echoed = txState.values ?? {};
+  const [frequency, setFrequency] = useState<Frequency | "never">(() =>
+    isFrequency(echoed.frequency) ? echoed.frequency : (repeat?.frequency ?? "never"),
+  );
+  const [every, setEvery] = useState(() => echoed.interval ?? "1");
+  const [endDate, setEndDate] = useState(() => echoed.endDate ?? "");
   const [keepOpen, setKeepOpen] = useState(false);
   const draft = draftKey ?? (isInline ? idPrefix : undefined);
   // Categories made with "+ New category" since the page was rendered; the refreshed props bring them too (deduped).
@@ -282,6 +297,9 @@ export function EntryForm({
       if (isInline) {
         onSaved?.(state.message);
       } else if (keepOpen) {
+        // The next entry starts without Repeat, so a second save cannot make a second rule by accident.
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- reacting to the action's result, once
+        setFrequency("never");
         (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
       } else {
         // Refresh once the page behind is back, so it shows the new entry (back() is asynchronous).
@@ -583,6 +601,21 @@ export function EntryForm({
             <FieldError id={pid("date")}>{err.date}</FieldError>
           </div>
 
+          {repeat && !isTransfer && (
+            <RepeatFields
+              pid={pid}
+              frequency={frequency}
+              onFrequency={setFrequency}
+              every={every}
+              onEvery={setEvery}
+              endDate={endDate}
+              onEndDate={setEndDate}
+              startDate={date}
+              today={today}
+              errors={err}
+            />
+          )}
+
           <div className="space-y-1.5">
             <label htmlFor={pid("note")} className="sr-only">
               Note
@@ -673,6 +706,118 @@ export function EntryForm({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+const FREQUENCY_LABEL: Record<Frequency | "never", string> = {
+  never: "Never",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
+/**
+ * The Add form's "Repeat": one row (label + select) while it is Never; any other choice adds "Every N <unit>", an
+ * optional end date and, when the entry's date is in the past, how many more entries saving will add up to today.
+ * Posts `frequency`, `interval` and `endDate` (no end date posts nothing). Without JavaScript only the select is there
+ * (every 1, no end), unless the page preselected a frequency.
+ */
+function RepeatFields({
+  pid,
+  frequency,
+  onFrequency,
+  every,
+  onEvery,
+  endDate,
+  onEndDate,
+  startDate,
+  today,
+  errors,
+}: {
+  pid: (name: string) => string;
+  frequency: Frequency | "never";
+  onFrequency: (value: Frequency | "never") => void;
+  every: string;
+  onEvery: (value: string) => void;
+  endDate: string;
+  onEndDate: (value: string) => void;
+  startDate: string;
+  today: string;
+  errors: Partial<Record<string, string>>;
+}) {
+  const on = frequency !== "never";
+  const n = /^\d{1,2}$/.test(every.trim()) && Number(every) >= 1 ? Number(every) : null;
+  const more =
+    on && n !== null
+      ? countOccurrencesAfter({ frequency, interval: n, startDate, endDate: endDate || null }, startDate, today)
+      : 0;
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label htmlFor={pid("frequency")} className={sectionLabel}>
+          Repeat
+        </label>
+        <Select
+          id={pid("frequency")}
+          name="frequency"
+          value={frequency}
+          onChange={(e) => onFrequency(e.target.value as Frequency | "never")}
+          error={errors.frequency}
+          className="w-auto! min-w-32"
+        >
+          {(Object.keys(FREQUENCY_LABEL) as (Frequency | "never")[]).map((f) => (
+            <option key={f} value={f}>
+              {FREQUENCY_LABEL[f]}
+            </option>
+          ))}
+        </Select>
+        {on && (
+          <>
+            <span className="inline-flex items-center gap-2 text-sm text-foreground">
+              <label htmlFor={pid("interval")}>Every</label>
+              <Input
+                id={pid("interval")}
+                name="interval"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={2}
+                value={every}
+                onChange={(e) => onEvery(e.target.value)}
+                error={errors.interval}
+                className="w-14! text-center tabular-nums"
+                aria-describedby={pid("interval-unit")}
+              />
+              <span id={pid("interval-unit")}>{unitLabel(frequency, n ?? 2)}</span>
+            </span>
+            <span className="inline-flex items-center gap-2 text-sm text-foreground">
+              <span id={pid("endDate-label")}>Until</span>
+              <DatePicker
+                id={pid("endDate")}
+                name="endDate"
+                today={today}
+                allowEmpty
+                value={endDate}
+                onChange={onEndDate}
+                error={errors.endDate}
+                placeholder="No end date"
+                aria-label={endDate ? `Until ${formatDate(endDate)}. Choose another end date` : "End date (optional)"}
+                className="w-40"
+              />
+            </span>
+          </>
+        )}
+      </div>
+      <FieldError id={pid("frequency")}>{errors.frequency}</FieldError>
+      <FieldError id={pid("interval")}>{errors.interval}</FieldError>
+      <FieldError id={pid("endDate")}>{errors.endDate}</FieldError>
+      {more > 0 && (
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          The date is in the past: saving also adds {more === 1 ? "1 more entry" : `${more} more entries`} for the
+          dates up to today.
+        </p>
+      )}
     </div>
   );
 }

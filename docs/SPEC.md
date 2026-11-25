@@ -334,7 +334,8 @@ budgets explicitly, before the wallets and categories they point at.
 - `ALLOW_REGISTRATION=false` (`isRegistrationAllowed()` in `src/lib/config.ts`): `/register` renders a "Registration
   is disabled" card, `registerAction` returns an error without creating anything, `/login` hides the sign-up link.
 - `src/lib/auth.ts` exposes `getCurrentUser(): Promise<CurrentUser | null>` (React `cache`, per request),
-  `requireUser(): Promise<CurrentUser>` (redirects to `/login`; both mark the session used, see "Devices"),
+  `requireUser(): Promise<CurrentUser>` (redirects to `/login`; both mark the session used, see "Devices", and
+  create the user's due repeating entries first, see "Recurring entries" → "The hook"),
   `createSession(userId)` (stores the user agent), `destroySession()`,
   `redirectIfSignedIn()`, `clearSessionCookie()` (after an account deletion); `CurrentUser = { id: number; username: string; email: string | null; firstName: string | null; lastName: string | null; displayName: string; timeZone: string | null }` ("today" for the user is `todayInZone(user.timeZone)`, see Auth → "Today")`. Cookie name `et_session`.
   The `(app)` layout calls `requireUser()`; every Server Action calls it too (layouts don't protect actions).
@@ -427,7 +428,7 @@ behaves exactly like a missing row: getters resolve `null`, mutations reject wit
 `ServiceError.field` values used: `name`, `currency`, `initialBalance`, `walletId`, `groupId`, `kind`, `categoryId`, `amount`,
 `receivedAmount`, `fromWalletId`, `toWalletId`, `date`, `note`, `from`, `to`, `month`, `year`, `username`, `email`,
 `firstName`, `lastName`, `password`, `currentPassword`, `newPassword`, `confirmUsername`, `moveToCategoryId`,
-`actualBalance`, `color`, `today`.
+`actualBalance`, `color`, `today`, `frequency`, `interval`, `endDate`, `nextDate` (the last four: repeating entries).
 Name your form inputs the same so `serviceErrorState` lands errors on the right field.
 
 ### Server Action form state (copy this pattern — see `src/app/(auth)/register/actions.ts` + `register-form.tsx`)
@@ -1052,7 +1053,9 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - **List**: entries grouped by day, newest first. Each day has a header ("Today · Sunday 8", "Tuesday 3") and
     the day's net per currency on the right (over all matches of the filters, not only the page). Rows: a dot
     coloured by kind, category (or "Transfer → Savings"), note · wallet, signed amount (income in `--income`,
-    expenses in the text colour, transfers muted; a cross-currency transfer also shows the other leg's amount).
+    expenses in the text colour, transfers muted; a cross-currency transfer also shows the other leg's amount). An
+    entry made by a repeating rule has a small loop marker after its category (see "Recurring entries"); the page
+    header has a "Repeating" button to `/recurring`.
   - **In-place editing**: a row is a button (`aria-expanded`); activating it opens an edit form under the row
     (amount, category, wallet, date, note; for a transfer: from, to, sent, received when the currencies differ,
     date, note) with Delete (confirms), Cancel and Save. One row open at a time; Escape or Cancel closes it and
@@ -1300,6 +1303,7 @@ at a time it has a currency switch (`?currency=XXX`, see `pickDefaultCurrency`).
   - Transfer: From → To (selects), "Sent" and — only when the currencies differ — "Received", with the line
     "Different currencies, so enter what actually arrived. No rate is applied for you."
   - Date as pills "Today" / "Yesterday" / a calendar button opening the `DatePicker` popover; a note field.
+  - Expense / Income being created: a "Repeat" row (Never by default; see "Recurring entries" → Screens).
   - Footer: "Keep open for another" checkbox (on success the form clears amount and note and stays open), Cancel,
     and the submit button ("Add expense", "Add transfer"; Enter submits). `?wallet=` / `?kind=` preselect.
   Server Actions, field names and services are unchanged; the form still posts `walletId`, `categoryId`, `amount`,
@@ -1587,7 +1591,11 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
   string stored, by currency then date; absent in older files); an optional `color` per category (a `GROUP_COLORS`
   key, written only when set; anything else reads as none); an optional top-level `budgets[]` (`{ category?, currency,
   amountMinor, amount }`: `category` names an expense category of the file, absent or null for the overall budget;
-  the overall one first; absent in older files). The version stays 1. References use ids local to the file.
+  the overall one first; absent in older files); an optional top-level `recurring[]` (the repeating
+  entries: `{ id, walletId, kind, category, amountMinor, amount, note, frequency, interval, startDate, endDate,
+  nextDate, paused }` — the wallet by the file's wallet id, the category by `kind` + name, `nextDate` null = ended; in
+  creation order; absent in older files) and, per transaction, an optional `recurringId` (the `recurring[].id` that
+  made it). The version stays 1. References use ids local to the file.
   Amounts are written both as integer minor units and as a decimal string; minor units are authoritative on
   import. **Never** contains the user's email, password hash, sessions or database ids of other users.
 - **Transactions (CSV)** — one row per expense / income / transfer, columns
@@ -1683,6 +1691,16 @@ per-bank presets) is **out of scope** for the app; the separate Statement Import
     for the same currency and date in one file is a problem), except that the currencies need not be held: a wallet
     may have been deleted since. The preview counts them (`manualRatesToAdd`, "Your own exchange rates: N to add to
     the Rates page."; also in the confirmation differences and the success line).
+  - **Repeating entries** (backup `recurring`): validated like `createRecurringEntry` (a wallet id of the file, a
+    category name, interval 1–99, valid dates, end and next date not before the start; a next date after the end
+    reads as ended), problems on `recurring[i].<field>`; a category only a rule names is created like any other. A
+    rule the account already has — same wallet, category, kind, amount, note, frequency, interval, start and end date
+    — is skipped (next date and paused state are not compared); any other is created as the file has it (next date,
+    paused as of the import), before the entries. A transaction's `recurringId` must name a rule of the file (a
+    problem otherwise) and links the added entry to the created or matched rule; duplicate entries are skipped as
+    usual and keep their own link. Entries due after the file's next date are made by the next request (the hook).
+    Preview: `recurringToAdd`, `duplicateRecurring` ("Repeating entries: N to add, M you already have"; also in the
+    confirmation differences and the success line). Not in the CSV.
   - **Duplicates are skipped by default** (checkbox "Skip transactions that already exist", on): entries are
     compared on (wallet, kind, category, date, amount, note) — transfers on (from, to, date, both amounts, note) —
     as a multiset: if the file has 3 identical entries and the account already has 1, 2 are added. Importing the
@@ -1928,7 +1946,7 @@ type ImportPreview = { format: 'backup' | 'csv' | 'spendee' | null /* null also 
   ok; transactionsToAdd; transfersToAdd; duplicateTransactions; duplicateTransfers;
   walletsToCreate: { name; currency; archived; group; described /* the file gives its balance + archived state */ }[];
   groupsToCreate: string[]; categoriesToCreate: { name; kind; archived?: true }[]; manualRatesToAdd: number /* backup */;
-  budgetsToAdd: number /* backup */;
+  budgetsToAdd: number /* backup */; recurringToAdd: number; duplicateRecurring: number /* backup */;
   problems: ImportProblem[] /* first 50 */; problemCount; notices: ImportNotice[] /* never affect ok */;
   unpairedTransfers: number /* Spendee transfer rows without a partner */ }
 previewImport(userId, input: ImportInput, opts?): ImportPreview   // both read getUserTimeZone(userId) first
@@ -1946,7 +1964,8 @@ type ImportSource = { text /* as uploaded */; body /* BOM stripped, trimStart, n
 type ParsedFile = { format; walletMatching: 'by-position' | 'merge'; wallets: WalletSpec[]; categories: CategorySpec[] /* archived?, archivedAt?, detailsLoc?, color? */;
   manualRates?: ManualRateSpec[] /* backup: { currency; base; effectiveDate; rate; loc } */;
   budgets?: BudgetSpec[] /* backup: { category: index into categories | null (overall); currency; amountMinor; loc } */;
-  entries: EntrySpec[]; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
+  recurring?: RecurringSpec[] /* backup: { kind; wallet; category; amountMinor; note; frequency; interval; startDate; endDate; nextDate; paused; loc } */;
+  entries: EntrySpec[] /* EntrySpec.recurring?: index into recurring (backup) */; transfers: TransferSpec[]; transferLegs: TransferLeg[] /* halves to pair in finalize */;
   problems: ImportProblem[]; notices: ImportNotice[]; unpairedTransferRows: number; rowCount: number;
   tallies: Map<string, number> /* per-format counters summed over the selection, e.g. "rounded:RON" */ }
 type Loc = { line?; path?; file?; fileIndex? /* internal ordering; stripped before reaching the UI */ }
@@ -2030,6 +2049,118 @@ type BrokenTransferRow = { direction; walletKey | null; currency | null; amountM
     the service rules apply. Unknown fields are ignored; `version` ≠ 1 is rejected with a message (newer vs unknown).
   - The CSV export lists rows oldest first; a transfer is included when either leg matches the filters (so a wallet
     filter includes transfers into it) and appears once.
+
+## Recurring entries
+
+Purpose: rent, salary, subscriptions — an expense or income that repeats is entered once, and the app adds an
+ordinary entry on each of its dates. Built 2026-11-25 (decisions in DECISIONS "Recurring entries").
+
+### Rules
+
+- A **rule** (`recurring_transactions`, see "Data model") belongs to one user and holds what each entry gets — wallet,
+  kind (`expense` | `income`; no transfers), category of that kind, positive amount in the wallet's currency, optional
+  note — and a schedule: `frequency` (`daily` | `weekly` | `monthly` | `yearly`), `interval` (every N, 1–99),
+  `startDate`, optional inclusive `endDate`. `nextDate` is the next occurrence not yet turned into an entry (NULL once
+  the rule has ended); `pausedAt` is set while paused.
+- **Occurrences are counted from `startDate`** (`src/lib/recurrence.ts`, pure): occurrence k is `startDate` moved by
+  k × interval days / weeks / months / years. Months and years clamp to the month's length, so a rule from the 31st
+  lands on 28/29 Feb, 30 Apr… and back on 31 Mar; 29 Feb yearly lands on 28 Feb in other years. Nothing falls after
+  `endDate` or after 2999-12-31.
+- **No scheduler.** Due occurrences become entries the next time the user uses the app (see "The hook"). Catching up
+  after an absence creates every missed occurrence, each on its own date, at most `MAX_OCCURRENCES_PER_RUN` (300) per
+  rule per run; the rest follow on the next request.
+- Created entries are **ordinary entries** with `transactions.recurringId` set: they count, filter, edit and delete
+  like any other. Editing or deleting one does not affect the rule; **deleting the rule keeps its entries**
+  (`recurringId` becomes NULL).
+- **Editing a rule changes future entries only.** The kind cannot change. Keeping frequency, interval and next date
+  keeps the anchor (`startDate`); changing any of them restarts the schedule at the new next date (`startDate :=
+  nextDate`), which must then be today or later. An end date before the next date ends the rule; one before the
+  anchor is refused. An ended rule continues when given a next date.
+- **Paused rules create nothing and do not backfill.** Resuming continues from the first occurrence on or after the
+  later of today and the stored next date (so pause + resume on one day never repeats today's entry); an occurrence
+  on the day of resuming is created at once.
+- **Archived wallet, wallet group or category:** when an occurrence falls due and the rule's wallet is archived, the
+  wallet's group is archived or its category is archived, the rule is **paused** (no entry). The reason is shown with
+  it (`blockedBy`, worked out at read time, not stored). Resuming is refused while the reason holds; after
+  unarchiving, the user resumes by hand. Archiving alone does nothing until an occurrence is due.
+- **Categories:** a rule counts as **use** for the kind change (refused while any rule uses the category). Removing a
+  category "moving its entries to" a replacement moves its rules too, in the same DB transaction; a category used
+  only by rules needs a replacement as well. Messages say "used by 3 transactions and 1 repeating entry". With
+  budgets: the rules move to the replacement but the removed category's budget does not (it goes with the category);
+  a kind change blocked by a rule never reaches the budget removal that an allowed change does.
+- **Wallets:** deleting a wallet without entries deletes its rules (the FK cascades); the Delete confirmation says so
+  when it has any ("Its repeating entry is deleted with it."). Renaming or moving a wallet to another group keeps its
+  rules.
+- Every query is scoped by `userId`; another user's rule behaves like a missing one.
+
+### The hook
+
+`getCurrentUser()` (`src/lib/auth.ts`, React `cache`d per request) calls `materializeDueRecurring(user.id,
+todayInZone(user.timeZone))` right after resolving the session. Every page (through `requireUser`), every Server
+Action and the export route handlers reach the user through it before reading anything, and a layout and a page of
+one render await the same cached promise, so the entries exist before either queries. When nothing is due it costs
+one query (`user_id = ? and paused_at is null and next_date <= today`). Each due rule is caught up in **its own DB
+transaction**: `SELECT … FOR UPDATE` on the rule row, re-check `paused_at` / `next_date` under the lock, check the
+wallet / group / category (category read `FOR SHARE`), insert the entries, set the new `next_date`, commit. Two
+requests at once: the second waits on the row lock, then finds nothing left. A failure is logged and does not fail
+the request. Mutations that change when a rule runs (create, edit, resume) catch the rule up inside their own DB
+transaction with the caller's today (a Server Action's redirect renders in the same request, after the hook ran).
+
+### Services (`src/server/recurring.ts`)
+
+- `RecurringView = { id; kind; walletId; walletName; currency; categoryId; categoryName; amountMinor; note;
+  frequency; interval; startDate; endDate; nextDate; pausedAt; status: "active" | "paused" | "ended"; blockedBy:
+  string | null; entryCount }` (`status`: ended when `nextDate` is NULL, else paused when `pausedAt` is set).
+- `listRecurring(userId): RecurringView[]` — active by next date, then paused, then ended; `getRecurring(userId, id,
+  tx?): RecurringView | null`; `countRecurringForWallet(userId, walletId): number`.
+- `createRecurringEntry(userId, input: TransactionInput, repeat: { frequency; interval?; endDate? }, today): {
+  transaction: TransactionView; rule: RecurringView; added: number }` — validates the entry like `createTransaction`
+  (`validateTransactionInput`, now exported from `transactions.ts`), inserts the rule (`startDate` = the entry's date,
+  `nextDate` = the occurrence after it) and the entry with `recurringId`, then catches up to `today` (`added`), all in
+  one DB transaction.
+- `updateRecurring(userId, id, { walletId; categoryId; amountMinor; note?; frequency; interval; nextDate; endDate? },
+  today): RecurringView`; `pauseRecurring(userId, id)` (idempotent; an ended rule is left alone);
+  `resumeRecurring(userId, id, today)` (VALIDATION with the reason while blocked); `deleteRecurring(userId, id)`.
+- `materializeDueRecurring(userId, today, { limitPerRule? }): { created; paused }` — the hook.
+- Errors use the fields `frequency`, `interval`, `endDate`, `nextDate` plus the entry fields (`walletId`,
+  `categoryId`, `amount`, `date`, `note`).
+- Changed elsewhere: `TransactionView.recurringId`; `CategoryWithUsage.recurringCount`; `deleteCategory` returns
+  `movedRecurring` too; `usageText` / `deleteWalletConfirm` in `src/lib/usage-text.ts`.
+
+### Screens
+
+- **Add form, Repeat** (`EntryForm` prop `repeat`, passed only by `NewEntry`, i.e. the Add dialog and full page; not
+  the edit pages or the inline editor; hidden for Transfer): after the Date block, one row "Repeat" + a select
+  `name="frequency"` (Never — default — / Daily / Weekly / Monthly / Yearly). Any other choice adds, on the same
+  wrapping row, "Every [N] <unit>" (`name="interval"`, default 1) and "Until" (a `DatePicker` with `allowEmpty`,
+  `name="endDate"`, "No end date"), and, when the entry's date is in the past, "The date is in the past: saving also
+  adds N more entries for the dates up to today." (`countOccurrencesAfter`, on the client, from the server's
+  `today`). Frequency, every and until are React state (they survive a refused save; a first render carrying a
+  result starts from its echoed values); a "Keep open for another" save resets Repeat to Never. Without JavaScript
+  only the select is there (every 1, no end) unless the page preselected a frequency. `?repeat=monthly` (any
+  frequency) preselects it. `createTransactionAction` reads `frequency` ("never" / absent = a plain entry),
+  `interval` and `endDate`, and calls `createRecurringEntry` with `todayInZone(user.timeZone)`; the dialog's message
+  is "Added €950.00 to Housing, repeating every month on the 1st (and 2 later dates up to today)".
+- **Marker:** in the day lists (`/transactions`, wallet page) an entry with `recurringId` shows a small loop icon
+  after its category, with "(repeats)" for screen readers. Its open row's footer has a "Repeating entry" link to
+  `/recurring#rule-<id>`.
+- **/transactions header:** a secondary "Repeating" button (loop icon) linking to `/recurring`.
+- **/recurring** ("Repeating entries"; not in `NAV_ITEMS`; null page at `@modal/recurring/page.tsx`): header with "←
+  Transactions" and "New" (→ `/transactions/new?repeat=monthly`; the page's `AddButton` goes there too). One card
+  listing the rules (`id="rule-<id>"`): dot by kind, category (`<h2>`), signed amount, "schedule in words · wallet ·
+  note" (`describeSchedule`: "Every month on the 31st", "Every 2 weeks on Monday", "Every year on 29 February"), a
+  badge Active / Paused / Ended with "Next 1 Dec 2026 · until … · 3 entries so far", the blocking reason when paused
+  by an archive, and Pause or Resume (plain forms, hidden Resume while blocked), Edit, Delete (confirms; says the
+  entries stay). Empty state "No repeating entries yet" with "New repeating entry".
+- **/recurring/<id>/edit** (full page only; null page at `@modal/recurring/[id]/edit/page.tsx`): `RecurringForm`
+  (`components/recurring/recurring-form.tsx`) — amount (`BigAmount`, the chosen wallet's currency), category pills
+  (the rule's kind, plus its own archived one), wallet pills, Repeat (no Never) + Every N, "Next entry" (required),
+  "Until (optional)", note, a line on what editing changes, Cancel / Save changes. Keyed per result; errors on their
+  fields; `updateRecurringAction(ruleId, prev, formData)` parses the amount with the chosen wallet's currency and
+  redirects to `/recurring#rule-<id>`. `pauseRecurringAction`, `resumeRecurringAction`, `deleteRecurringAction` take
+  `id` and redirect back (a refused resume or a missing rule just reloads). All revalidate the layout.
+- **Wallet delete** (edit form and the wallet page's ⋯ menu): the confirmation names the rules that go with it.
+- **Demo data:** monthly salary and rent from the 1st of last month are rules; their two entries each are linked.
 
 ## Wallet groups
 

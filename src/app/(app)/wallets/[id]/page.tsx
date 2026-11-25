@@ -19,6 +19,7 @@ import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
 import { toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
+import { countRecurringForWallet } from "@/server/recurring";
 import { getWalletBalanceOn, listWalletClosingBalances } from "@/server/reconcile";
 import { listTransactions } from "@/server/transactions";
 import { getWallet, listWallets } from "@/server/wallets";
@@ -170,6 +171,7 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 walletName={wallet.name}
                 archived={archived}
                 canDelete={wallet.transactionCount === 0}
+                recurringCount={wallet.transactionCount === 0 ? await countRecurringForWallet(user.id, wallet.id) : 0}
                 reconcileHref={hidden ? undefined : reconcileHref}
               />
             </div>

@@ -5,6 +5,7 @@ import { isValidCurrency } from "@/lib/currencies";
 import { IMPORT_MAX_ROWS } from "@/lib/constants";
 import { isServiceError } from "@/lib/errors";
 import type { GroupColor } from "@/lib/group-colors";
+import type { Frequency } from "@/lib/recurrence";
 import { currencyDecimals } from "@/lib/money";
 import { MAX_CATEGORY_NAME_LENGTH } from "../categories";
 import { normalizeName } from "../_validate";
@@ -94,6 +95,23 @@ export type EntrySpec = {
   date: string;
   note: string | null;
   loc: Loc;
+  /** Backup only: index into `ParsedFile.recurring` of the repeating entry that made it. */
+  recurring?: number;
+};
+/** Backup only: a repeating expense / income (validated; dates checked, `nextDate` null = ended). */
+export type RecurringSpec = {
+  kind: CategoryKind;
+  wallet: number; // index into wallets
+  category: number; // index into categories
+  amountMinor: number;
+  note: string | null;
+  frequency: Frequency;
+  interval: number;
+  startDate: string;
+  endDate: string | null;
+  nextDate: string | null;
+  paused: boolean;
+  loc: Loc;
 };
 export type TransferSpec = {
   from: number;
@@ -156,6 +174,8 @@ export type ParsedFile = {
   categories: CategorySpec[];
   /** Backup only: the file's `manualRates` (absent in older backups); imported additively. */
   manualRates?: ManualRateSpec[];
+  /** Backup only: the file's `recurring` list (absent in older backups); imported additively. */
+  recurring?: RecurringSpec[];
   /** Backup only: the file's `budgets` (absent in older backups); imported additively. */
   budgets?: BudgetSpec[];
   entries: EntrySpec[];

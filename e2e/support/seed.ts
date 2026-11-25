@@ -8,6 +8,7 @@ import { getDb, schema } from "@/db";
 import { todayInZone } from "@/lib/dates";
 import { listCategories, type CategoryView } from "@/server/categories";
 import { setManualRate } from "@/server/manual-rates";
+import { createRecurringEntry, type RepeatInput } from "@/server/recurring";
 import { createTransaction } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { registerUser } from "@/server/users";
@@ -101,6 +102,28 @@ export async function seedEntry(
     date: input.date ?? todayISO(),
     note: input.note ?? null,
   });
+}
+
+/** An entry that repeats (`createRecurringEntry`); its catch-up runs up to the seeded user's today. */
+export async function seedRecurring(
+  userId: number,
+  input: { walletId: number; kind: "expense" | "income"; category: string; amountMinor: number; date?: string; note?: string },
+  repeat: RepeatInput,
+) {
+  const category = await categoryByName(userId, input.category);
+  return createRecurringEntry(
+    userId,
+    {
+      walletId: input.walletId,
+      kind: input.kind,
+      categoryId: category.id,
+      amountMinor: input.amountMinor,
+      date: input.date ?? todayISO(),
+      note: input.note ?? null,
+    },
+    repeat,
+    todayISO(),
+  );
 }
 
 export async function seedTransfer(

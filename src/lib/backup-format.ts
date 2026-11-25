@@ -16,6 +16,7 @@ export const BACKUP_LIMITS = {
   groups: 1_000,
   categories: 1_000,
   manualRates: 10_000,
+  recurring: 1_000,
   /** One per category plus the overall one. */
   budgets: 1_001,
   /** transactions + transfers together. */
@@ -120,6 +121,28 @@ export const backupTransactionSchema = z.object({
   amountMinor: positiveInt,
   amount: decimal.optional(),
   note,
+  /** Optional (added after version 1 shipped): the `recurring[].id` of the repeating entry that made it. */
+  recurringId: localId.optional(),
+});
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): the repeating expenses and income (/recurring). The
+ * wallet by the file's own wallet id, the category by `kind` + name (`category`). `nextDate` null = ended.
+ */
+export const backupRecurringSchema = z.object({
+  id: localId,
+  walletId: localId,
+  kind: z.enum(["expense", "income"], { error: "Expected expense or income." }),
+  category: text,
+  amountMinor: positiveInt,
+  amount: decimal.optional(),
+  note,
+  frequency: z.enum(["daily", "weekly", "monthly", "yearly"], { error: "Expected daily, weekly, monthly or yearly." }),
+  interval: safeInt.optional().default(1),
+  startDate: isoDate,
+  endDate: isoDate.nullable().optional(),
+  nextDate: isoDate.nullable().optional(),
+  paused: z.boolean({ error: "Expected true or false." }).optional().default(false),
 });
 
 export const backupTransferSchema = z.object({
@@ -156,6 +179,10 @@ export const backupSchema = z.object({
     .array(backupManualRateSchema)
     .max(BACKUP_LIMITS.manualRates, { error: `At most ${BACKUP_LIMITS.manualRates} exchange rates.` })
     .optional(),
+  recurring: z
+    .array(backupRecurringSchema)
+    .max(BACKUP_LIMITS.recurring, { error: `At most ${BACKUP_LIMITS.recurring} repeating entries.` })
+    .optional(),
   budgets: z
     .array(backupBudgetSchema)
     .max(BACKUP_LIMITS.budgets, { error: `At most ${BACKUP_LIMITS.budgets} budgets.` })
@@ -169,6 +196,7 @@ export type BackupCategory = Backup["categories"][number];
 export type BackupTransaction = Backup["transactions"][number];
 export type BackupTransfer = Backup["transfers"][number];
 export type BackupManualRate = NonNullable<Backup["manualRates"]>[number];
+export type BackupRecurring = NonNullable<Backup["recurring"]>[number];
 export type BackupBudget = NonNullable<Backup["budgets"]>[number];
 
 /** `transactions[3].amountMinor` from a zod issue path. */

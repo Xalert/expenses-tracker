@@ -6,6 +6,7 @@ import { currentMonth, monthRange, shiftMonth, todayISO } from "@/lib/dates";
 import { DEMO_USER } from "@/lib/demo";
 import { setBudget } from "@/server/budgets";
 import { listCategories, renameCategory } from "@/server/categories";
+import { createRecurringEntry } from "@/server/recurring";
 import { createTransaction, type TransactionInput } from "@/server/transactions";
 import { createTransfer } from "@/server/transfers";
 import { registerUser } from "@/server/users";
@@ -83,8 +84,8 @@ export async function findDemoUser(db?: DB): Promise<{ id: number; username: str
 }
 
 /**
- * Create the demo user (`DEMO_USER`) with two wallet groups (Personal, Business), six wallets and sample income, expenses and transfers for last month and
- * this month, through the services on the process-wide connection (`getDb()`). The caller checks that no demo user
+ * Create the demo user (`DEMO_USER`) with two wallet groups (Personal, Business), six wallets, sample income, expenses and transfers for last month and
+ * this month, and two repeating entries (monthly salary and rent; their entries are linked to them), through the services on the process-wide connection (`getDb()`). The caller checks that no demo user
  * exists yet (`findDemoUser`); registering a second one fails on the unique user ID.
  */
 export async function seedDemoData(): Promise<{ userId: number; username: string; months: [string, string] }> {
@@ -118,9 +119,22 @@ export async function seedDemoData(): Promise<{ userId: number; username: string
     await createTransaction(user.id, { ...rest, categoryId: cat(category) });
   };
 
+  // Two repeating entries (/recurring), started on the 1st of last month: their first entry, and this month's, which the
+  // catch-up makes at once (the 1st is never after today).
+  await createRecurringEntry(
+    user.id,
+    { walletId: eurBank.id, kind: "income", categoryId: cat("Salary"), amountMinor: 420000, date: day(lastMonth, 1), note: "Monthly salary" },
+    { frequency: "monthly" },
+    today,
+  );
+  await createRecurringEntry(
+    user.id,
+    { walletId: eurBank.id, kind: "expense", categoryId: cat("Housing"), amountMinor: 115000, date: day(lastMonth, 1), note: "Rent" },
+    { frequency: "monthly" },
+    today,
+  );
+
   for (const month of [lastMonth, thisMonth]) {
-    await tx({ walletId: eurBank.id, kind: "income", category: "Salary", amountMinor: 420000, date: day(month, 1), note: "Monthly salary" });
-    await tx({ walletId: eurBank.id, kind: "expense", category: "Housing", amountMinor: 115000, date: day(month, 2), note: "Rent" });
     await tx({ walletId: eurBank.id, kind: "expense", category: "Bills", amountMinor: 8990, date: day(month, 5), note: "Electricity" });
     await tx({ walletId: eurBank.id, kind: "expense", category: "Bills", amountMinor: 2999, date: day(month, 6), note: "Internet" });
     await tx({ walletId: eurBank.id, kind: "expense", category: "Groceries", amountMinor: 6420, date: day(month, 3), note: "Weekly shop" });

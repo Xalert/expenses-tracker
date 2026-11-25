@@ -216,10 +216,15 @@ describe("deleteCategory", () => {
   });
 
   it("deletes an unused category (replacement ignored)", async () => {
-    expect(await deleteCategory(alice.id, alice.cat("Housing"))).toEqual({ movedTransactions: 0, movedTo: null });
+    expect(await deleteCategory(alice.id, alice.cat("Housing"))).toEqual({
+      movedTransactions: 0,
+      movedRecurring: 0,
+      movedTo: null,
+    });
     expect(await getCategory(alice.id, alice.cat("Housing"))).toBeNull();
     expect(await deleteCategory(alice.id, alice.cat("Bills"), { moveToCategoryId: alice.cat("Salary") })).toEqual({
       movedTransactions: 0,
+      movedRecurring: 0,
       movedTo: null,
     });
     expect((await listCategories(alice.id, "expense")).map((c) => c.name)).toEqual(["Food", "Groceries", "Transport"]);

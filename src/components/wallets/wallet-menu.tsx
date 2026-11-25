@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { archiveWalletAction, deleteWalletAction, unarchiveWalletAction } from "@/app/(app)/wallets/actions";
 import { Popover } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { deleteWalletConfirm } from "@/lib/usage-text";
 import { ActionButton } from "./action-button";
 import { RECONCILE_INPUT_ID, walletMenuTriggerId } from "./reconcile-form";
 
@@ -43,12 +44,15 @@ export function WalletMenu({
   walletName,
   archived,
   canDelete,
+  recurringCount = 0,
   reconcileHref,
 }: {
   walletId: number;
   walletName: string;
   archived: boolean;
   canDelete: boolean;
+  /** Repeating entries on the wallet: Delete's confirmation says they go with it. */
+  recurringCount?: number;
   /** The page with `?reconcile=1` (the Reconcile balance panel); omitted while the wallet takes no new entries. */
   reconcileHref?: string;
 }) {
@@ -159,7 +163,7 @@ export function WalletMenu({
               size="md"
               role="menuitem"
               buttonClassName={cn(itemClass, "text-danger! hover:bg-danger-soft!")}
-              confirmMessage={`Delete “${walletName}”? This can't be undone.`}
+              confirmMessage={deleteWalletConfirm(walletName, recurringCount)}
             />
           )}
         </div>

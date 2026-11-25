@@ -34,6 +34,7 @@ const cat = (id: number, name: string, monthAmountMinor: number, color: Category
   monthAmountMinor,
   monthCount: monthAmountMinor > 0 ? 1 : 0,
   transactionCount: monthAmountMinor > 0 ? 3 : 0,
+  recurringCount: 0,
 });
 const EXPENSE = [cat(1, "Bills", 12_000), cat(2, "Food", 4_000, "teal"), cat(3, "Transport", 0)];
 const split = spendingSplit(EXPENSE);

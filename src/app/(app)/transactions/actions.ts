@@ -4,12 +4,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
-import { isValidDate } from "@/lib/dates";
+import { isValidDate, todayInZone } from "@/lib/dates";
 import { isServiceError } from "@/lib/errors";
 import { formValues, serviceErrorState, zodErrorState, type FormState } from "@/lib/form";
 import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
+import { MAX_RECURRING_INTERVAL, describeSchedule, isFrequency } from "@/lib/recurrence";
 import { safeReturnTo } from "@/lib/return-to";
 import { createCategory } from "@/server/categories";
+import { createRecurringEntry, type RecurringView, type RepeatInput } from "@/server/recurring";
 import {
   createTransaction,
   deleteTransaction,
@@ -183,22 +185,66 @@ async function parseTransfer(
 // ---------------------------------------------------------------------------------------------
 // Expense / income
 
+/**
+ * The Add form's Repeat control: `frequency` ("never", absent or empty = no repeat; else daily / weekly / monthly /
+ * yearly), `interval` (every N; empty = 1) and an optional `endDate`. Field errors land on those names.
+ */
+function parseRepeat(formData: FormData, values: Record<string, string>): Parsed<RepeatInput | null> {
+  const frequency = formData.get("frequency");
+  if (frequency === null || frequency === "" || frequency === "never") return { ok: true, input: null };
+  if (!isFrequency(frequency)) {
+    return { ok: false, state: { fieldErrors: { frequency: "Choose how often it repeats." }, values } };
+  }
+  const rawInterval = String(formData.get("interval") ?? "").trim();
+  const interval = rawInterval === "" ? 1 : /^\d{1,3}$/.test(rawInterval) ? Number(rawInterval) : NaN;
+  if (!(interval >= 1 && interval <= MAX_RECURRING_INTERVAL)) {
+    return {
+      ok: false,
+      state: { fieldErrors: { interval: `Enter a whole number from 1 to ${MAX_RECURRING_INTERVAL}.` }, values },
+    };
+  }
+  const endDate = String(formData.get("endDate") ?? "").trim();
+  if (endDate !== "" && !isValidDate(endDate)) {
+    return { ok: false, state: { fieldErrors: { endDate: "Enter a valid end date." }, values } };
+  }
+  return { ok: true, input: { frequency, interval, endDate: endDate || null } };
+}
+
+/** "Added €950.00 to Rent, repeating every month (and 2 earlier dates)". */
+function repeatedMessage(created: TransactionView, rule: RecurringView, added: number): string {
+  const amount = formatMoney(created.amountMinor, created.currency);
+  const every = describeSchedule(rule).replace(/^Every/, "every");
+  const more = added === 0 ? "" : ` (and ${added === 1 ? "1 later date" : `${added} later dates`} up to today)`;
+  return `Added ${amount} to ${created.categoryName ?? created.walletName}, repeating ${every}${more}`;
+}
+
 export async function createTransactionAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const values = formValues(formData);
   const parsed = await parseTransaction(user.id, formData, values);
   if (!parsed.ok) return parsed.state;
+  const repeat = parseRepeat(formData, values);
+  if (!repeat.ok) return repeat.state;
   let created: TransactionView;
+  let repeated: { rule: RecurringView; added: number } | null = null;
   try {
-    created = await createTransaction(user.id, parsed.input);
+    if (repeat.input) {
+      const result = await createRecurringEntry(user.id, parsed.input, repeat.input, todayInZone(user.timeZone));
+      created = result.transaction;
+      repeated = result;
+    } else {
+      created = await createTransaction(user.id, parsed.input);
+    }
   } catch (err) {
     return serviceErrorState(err, values);
   }
   if (isDialogMode(formData)) {
+    if (repeated) return savedInDialog(repeatedMessage(created, repeated.rule, repeated.added));
     const amount = formatMoney(created.amountMinor, created.currency);
     return savedInDialog(`Added ${amount} to ${created.categoryName ?? created.walletName}`);
   }
   revalidateAll([parsed.input.walletId]);
+  if (repeated) revalidatePath("/recurring");
   redirect(returnToOf(formData));
 }
 

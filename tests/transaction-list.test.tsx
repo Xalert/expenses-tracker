@@ -17,6 +17,7 @@ const base: TransactionView = {
   note: "Lunch",
   transferId: null,
   counterparty: null,
+  recurringId: null,
 };
 
 describe("TransactionList", () => {

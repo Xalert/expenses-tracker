@@ -33,6 +33,7 @@ export function hasSomethingToImport(p: ImportPreview): boolean {
       p.groupsToCreate.length +
       p.categoriesToCreate.length +
       p.manualRatesToAdd +
+      p.recurringToAdd +
       p.budgetsToAdd >
     0
   );
@@ -63,6 +64,7 @@ export function previewDifferences(previewed: ImportPreview, result: ImportPrevi
     [result.groupsToCreate.length, previewed.groupsToCreate.length, "new group", "new groups"],
     [result.categoriesToCreate.length, previewed.categoriesToCreate.length, "new category", "new categories"],
     [result.manualRatesToAdd, previewed.manualRatesToAdd, "exchange rate", "exchange rates"],
+    [result.recurringToAdd, previewed.recurringToAdd, "repeating entry", "repeating entries"],
     [result.budgetsToAdd, previewed.budgetsToAdd, "budget", "budgets"],
   ];
   return rows.filter(([now, before]) => now !== before).map(([now, before, one, many]) => `${plural(now, one, many)} (preview: ${before.toLocaleString("en-US")})`);
@@ -175,6 +177,14 @@ export function PreviewCard({
             Your own exchange rates:{" "}
             <strong className="font-semibold text-foreground">{p.manualRatesToAdd.toLocaleString("en-US")}</strong> to add
             to the Rates page.
+          </p>
+        )}
+        {(p.recurringToAdd > 0 || p.duplicateRecurring > 0) && (
+          <p className="text-sm break-words text-muted-foreground">
+            Repeating entries:{" "}
+            <strong className="font-semibold text-foreground">{p.recurringToAdd.toLocaleString("en-US")}</strong> to add
+            {p.duplicateRecurring > 0 && `, ${p.duplicateRecurring.toLocaleString("en-US")} you already have`}. Their
+            entries due by today are added the next time a page opens.
           </p>
         )}
         {p.budgetsToAdd > 0 && (
@@ -399,6 +409,7 @@ export function ImportSuccess({ result: r, previewed }: { result: ImportPreview;
           {r.categoriesToCreate.length > 0 &&
             ` Created ${plural(r.categoriesToCreate.length, "category", "categories")}.`}
           {r.manualRatesToAdd > 0 && ` Added ${plural(r.manualRatesToAdd, "exchange rate", "exchange rates")}.`}
+          {r.recurringToAdd > 0 && ` Added ${plural(r.recurringToAdd, "repeating entry", "repeating entries")}.`}
           {r.budgetsToAdd > 0 && ` Added ${plural(r.budgetsToAdd, "budget", "budgets")}.`}
           {duplicates > 0 && ` Skipped ${plural(duplicates, "duplicate", "duplicates")}.`}
         </p>
