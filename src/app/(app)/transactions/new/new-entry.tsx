@@ -6,7 +6,7 @@ import { getGroupScope } from "@/lib/group-scope";
 import { isFrequency } from "@/lib/recurrence";
 import { listWallets } from "@/server/wallets";
 import { createTransactionAction, createTransferAction } from "../actions";
-import { categoryOptions, param, parseId, walletOptions } from "../form-options";
+import { categoryOptions, param, parseId, tagOptions, walletOptions } from "../form-options";
 
 const KINDS: EntryKind[] = ["expense", "income", "transfer"];
 
@@ -58,6 +58,7 @@ export async function NewEntry({
       variant={variant}
       wallets={wallets}
       categories={await categoryOptions(userId)}
+      tags={await tagOptions(userId)}
       initial={{ kind, walletId, fromWalletId: walletId, date: today }}
       today={today}
       transactionAction={createTransactionAction}

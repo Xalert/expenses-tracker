@@ -291,7 +291,7 @@ function MonthPanel({
 }
 
 /**
- * The /transactions filter row: chips Month · Wallet · Type · Category (each a popover; the choices are links, so
+ * The /transactions filter row: chips Month · Wallet · Type · Category · Tag (each a popover; the choices are links, so
  * the URL holds the state), "Clear" when any filter besides the default month is set, the note search (a GET form;
  * Enter submits) and the Export CSV link. Wraps at 375px: the search and export share the last line.
  */
@@ -302,12 +302,15 @@ export function FilterChips({
   categories,
   exportHref,
   showClear,
+  tags = [],
 }: {
   params: ListParams;
   /** The server's current month (the default view). */
   thisMonth: string;
   wallets: { id: number; name: string; currency: string; archived: boolean }[];
   categories: { id: number; name: string; kind: "expense" | "income" }[];
+  /** The user's tags (the Tag chip is left out when there are none and none is selected). */
+  tags?: { id: number; name: string }[];
   /** Null hides the Export CSV link (nothing to export). */
   exportHref: string | null;
   showClear: boolean;
@@ -352,6 +355,14 @@ export function FilterChips({
           .map((c) => ({ href: listHref(base, { category: c.id }), label: c.name, selected: c.id === params.category })),
       }))
       .filter((g) => g.options.length > 0),
+  ];
+
+  const tag = tags.find((t) => t.id === params.tag);
+  const tagGroups: OptionGroup[] = [
+    { options: [{ href: listHref(base, { tag: undefined }), label: "All tags", selected: !params.tag }] },
+    ...(tags.length > 0
+      ? [{ options: tags.map((t) => ({ href: listHref(base, { tag: t.id }), label: t.name, selected: t.id === params.tag })) }]
+      : []),
   ];
 
   // A single month: ‹ › step through the months (the key hints match MonthStepShortcut). Not capped at this month.
@@ -421,6 +432,17 @@ export function FilterChips({
           {(close) => <OptionList groups={categoryGroups} onPick={close} />}
         </Chip>
       )}
+      {(tags.length > 0 || params.tag) && (
+        <Chip
+          name="Tag"
+          value={params.tag ? (tag?.name ?? "Unknown tag") : undefined}
+          active={Boolean(params.tag)}
+          popup="listbox"
+          panelClassName={listPanel}
+        >
+          {(close) => <OptionList groups={tagGroups} onPick={close} />}
+        </Chip>
+      )}
       {showClear && (
         <Link
           href="/transactions"
@@ -448,6 +470,7 @@ export function FilterChips({
               ["wallet", params.wallet],
               ["kind", params.kind],
               ["category", params.category],
+              ["tag", params.tag],
               ["from", params.from],
               ["to", params.to],
               ["currency", params.currency],

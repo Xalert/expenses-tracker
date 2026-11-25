@@ -18,6 +18,7 @@ const base: TransactionView = {
   transferId: null,
   counterparty: null,
   recurringId: null,
+  tags: [],
 };
 
 describe("TransactionList", () => {

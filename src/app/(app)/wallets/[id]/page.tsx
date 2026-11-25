@@ -17,7 +17,7 @@ import { walletDayAside } from "@/lib/day-labels";
 import { formatMoney } from "@/lib/money";
 import { monthName } from "@/lib/overview";
 import { listCategories } from "@/server/categories";
-import { toCategoryOptions } from "../../transactions/form-options";
+import { tagOptions, toCategoryOptions } from "../../transactions/form-options";
 import { getWalletMonth } from "@/server/insights";
 import { countRecurringForWallet } from "@/server/recurring";
 import { getWalletBalanceOn, listWalletClosingBalances } from "@/server/reconcile";
@@ -265,7 +265,13 @@ export default async function WalletPage({ params, searchParams }: Props) {
                 : `No entries in ${formatMonth(month)}. Add one with the buttons above.`}
             </p>
           ) : (
-            <InlineEditProvider wallets={walletOptions} categories={categoryOptions} today={today} returnTo={pageHref}>
+            <InlineEditProvider
+              wallets={walletOptions}
+              categories={categoryOptions}
+              tags={await tagOptions(user.id)}
+              today={today}
+              returnTo={pageHref}
+            >
               <DayList
                 items={items}
                 today={today}

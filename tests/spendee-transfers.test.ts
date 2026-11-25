@@ -203,6 +203,9 @@ describe("Spendee per-wallet dialect: detection and rows", () => {
     expect(r.imported).toBe(true);
     expect((await entriesOf(alice.id)).map((e) => e.note)).toEqual(["lunch · 🍕 work", "trip", "plain"]);
     expect(r.notices).toContainEqual(expect.objectContaining({ code: "labels", count: 2 }));
+    // Deliberately not tags (SPEC "Tags"): the note is part of an entry's duplicate identity, so turning labels into
+    // tags would make files imported before import again.
+    expect(r.tagsToCreate).toEqual([]);
     // The note limit still applies once the labels are added.
     const p = await refused(wallet(joint("2026-08-01T10:00:00+00:00", "Expense", "-1.00000000", { category: "Food", note: "n".repeat(495), labels: "abcdef" })));
     expectProblems(p, [{ line: 2, message: /^Note: Keep the note to 500 characters or fewer \(with the labels added\)\.$/ }]);

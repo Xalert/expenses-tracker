@@ -19,6 +19,9 @@ export const BACKUP_LIMITS = {
   recurring: 1_000,
   /** One per category plus the overall one. */
   budgets: 1_001,
+  tags: 10_000,
+  /** A generous raw cap; the importer then applies the real rule (at most 10 per entry). */
+  tagsPerEntry: 100,
   /** transactions + transfers together. */
   entries: IMPORT_MAX_ROWS,
 } as const;
@@ -123,7 +126,18 @@ export const backupTransactionSchema = z.object({
   note,
   /** Optional (added after version 1 shipped): the `recurring[].id` of the repeating entry that made it. */
   recurringId: localId.optional(),
+  /** Optional (added after version 1 shipped): the entry's tag names. */
+  tags: z
+    .array(text, { error: "Expected a list of tag names." })
+    .max(BACKUP_LIMITS.tagsPerEntry, { error: `At most ${BACKUP_LIMITS.tagsPerEntry} tags per entry.` })
+    .optional(),
 });
+
+/**
+ * Optional (added after version 1 shipped; old files lack it): every tag of the account, so unused ones survive a round
+ * trip. Entries name their tags themselves; a name only an entry uses is created too.
+ */
+export const backupTagSchema = z.object({ name: text });
 
 /**
  * Optional (added after version 1 shipped; old files lack it): the repeating expenses and income (/recurring). The
@@ -187,6 +201,10 @@ export const backupSchema = z.object({
     .array(backupBudgetSchema)
     .max(BACKUP_LIMITS.budgets, { error: `At most ${BACKUP_LIMITS.budgets} budgets.` })
     .optional(),
+  tags: z
+    .array(backupTagSchema)
+    .max(BACKUP_LIMITS.tags, { error: `At most ${BACKUP_LIMITS.tags} tags.` })
+    .optional(),
 });
 
 export type Backup = z.output<typeof backupSchema>;
@@ -198,6 +216,7 @@ export type BackupTransfer = Backup["transfers"][number];
 export type BackupManualRate = NonNullable<Backup["manualRates"]>[number];
 export type BackupRecurring = NonNullable<Backup["recurring"]>[number];
 export type BackupBudget = NonNullable<Backup["budgets"]>[number];
+export type BackupTag = NonNullable<Backup["tags"]>[number];
 
 /** `transactions[3].amountMinor` from a zod issue path. */
 export function formatIssuePath(path: readonly PropertyKey[]): string {

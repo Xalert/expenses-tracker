@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { dayHeaderLabel, dayNetLabel, groupByDate } from "@/lib/day-labels";
 import { formatMoney, minorToInputValue } from "@/lib/money";
 import { withReturnTo } from "@/lib/return-to";
+import { joinTags } from "@/lib/tags";
 import type { DayTotal, TransactionView } from "@/server/transactions";
 import { InlineEditPanel, type InlineEntry } from "./inline-edit";
 
@@ -51,8 +52,33 @@ export function inlineEntryOf(t: TransactionView): InlineEntry {
     amount: minorToInputValue(t.amountMinor, t.currency),
     date: t.date,
     note,
+    tags: joinTags(t.tags),
     recurringId: t.recurringId,
   };
+}
+
+// No display class here: one of the pills is `hidden sm:inline-block` (`cn` does not merge classes).
+const tagPill =
+  "max-w-[7rem] shrink-0 truncate rounded-full bg-surface-muted px-1.5 py-px text-[11px] leading-4 font-semibold text-muted-foreground";
+
+/**
+ * An entry's tags after its note: the first one (two from `sm`) as small pills, the rest as "+2", so the row stays one
+ * line at 375px; the whole list is read out ("Tags: …") for screen readers.
+ */
+export function TagPills({ tags }: { tags: readonly string[] }) {
+  if (tags.length === 0) return null;
+  const more = (shown: number) => tags.length - shown;
+  return (
+    <>
+      <span className="sr-only">Tags: {tags.join(", ")}</span>
+      <span aria-hidden="true" className="flex min-w-0 shrink-0 items-center gap-1">
+        <span className={cn(tagPill, "inline-block")}>{tags[0]}</span>
+        {tags[1] !== undefined && <span className={cn(tagPill, "hidden sm:inline-block")}>{tags[1]}</span>}
+        {more(1) > 0 && <span className="text-[11px] font-semibold text-muted-foreground sm:hidden">+{more(1)}</span>}
+        {more(2) > 0 && <span className="hidden text-[11px] font-semibold text-muted-foreground sm:inline">+{more(2)}</span>}
+      </span>
+    </>
+  );
 }
 
 function editHref(t: TransactionView): string {
@@ -84,7 +110,14 @@ function RowSummary({ t, showWallet }: { t: TransactionView; showWallet: boolean
           <span className="truncate font-semibold text-foreground">{transactionLabel(t)}</span>
           {t.recurringId !== null && <RepeatMarker />}
         </span>
-        {meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>}
+        {t.tags.length > 0 ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {meta && <span className="min-w-0 truncate">{meta}</span>}
+            <TagPills tags={t.tags} />
+          </span>
+        ) : (
+          meta && <span className="block truncate text-xs text-muted-foreground">{meta}</span>
+        )}
       </span>
       <span className="shrink-0 text-right tabular-nums">
         <span className={cn("block font-bold", amountClass[t.kind])}>

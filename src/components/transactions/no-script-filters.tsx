@@ -33,7 +33,7 @@ const selectClass =
 
 /**
  * The /transactions filters without JavaScript, rendered by the page inside `<noscript>`: a plain GET form with a
- * select per chip (Month · Wallet · Type · Category) and "Apply"; the note search and the strip's currency ride
+ * select per chip (Month · Wallet · Type · Category · Tag) and "Apply"; the note search and the strip's currency ride
  * along as hidden fields. A date range or a selected day is replaced by the month chosen here. Empty choices
  * ("All wallets") submit empty values, which the page redirects away (`hasEmptyParams`). The `<style>` hides the
  * popover chips (`data-needs-js`), which cannot open without scripts; the month chip's ‹ › links still work, and its
@@ -44,11 +44,13 @@ export function NoScriptFilters({
   thisMonth,
   wallets,
   categories,
+  tags = [],
 }: {
   params: ListParams;
   thisMonth: string;
   wallets: { id: number; name: string; currency: string; archived: boolean }[];
   categories: { id: number; name: string; kind: "expense" | "income" }[];
+  tags?: { id: number; name: string }[];
 }) {
   const view = resolveView(params, thisMonth);
   const monthValue =
@@ -117,6 +119,20 @@ export function NoScriptFilters({
                   </optgroup>
                 );
               })}
+            </select>
+          </label>
+        )}
+        {(tags.length > 0 || params.tag) && (
+          <label className={field}>
+            Tag
+            <select name="tag" defaultValue={params.tag ? String(params.tag) : ""} className={selectClass}>
+              <option value="">All tags</option>
+              {params.tag && !tags.some((t) => t.id === params.tag) && <option value={params.tag}>Unknown tag</option>}
+              {tags.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
           </label>
         )}

@@ -28,6 +28,7 @@ import { initialFormState, type FormState } from "@/lib/form";
 import { countOccurrencesAfter, isFrequency, unitLabel, type Frequency } from "@/lib/recurrence";
 import { sanitizeDraft, saveEntryDraft, takeEntryDraft, type DraftField } from "./entry-draft";
 import { NewCategoryInline } from "./new-category-inline";
+import { TagsField, type TagOption } from "./tags-field";
 
 export type EntryKind = "expense" | "income" | "transfer";
 
@@ -53,6 +54,8 @@ export type EntryInitialValues = {
   fromWalletId?: number;
   toWalletId?: number;
   receivedAmount?: string;
+  /** Expense / income: the entry's tags as the field shows them ("holiday 2026, reimbursable"). */
+  tags?: string;
 };
 
 type Action = (prev: FormState, formData: FormData) => Promise<FormState>;
@@ -148,6 +151,7 @@ export function EntryForm({
   categoryAction = createCategoryFromEntryAction,
   draftKey,
   repeat,
+  tags = [],
 }: {
   wallets: WalletOption[];
   categories: CategoryOption[];
@@ -186,6 +190,8 @@ export function EntryForm({
    * `createTransactionAction`). `frequency` preselects it (the "New" button of /recurring); default Never.
    */
   repeat?: { frequency?: Frequency | "never" };
+  /** The user's tags, offered by the Tags field (expense / income). Empty: the field still takes typed names. */
+  tags?: readonly TagOption[];
 }) {
   const router = useRouter();
   const formId = useId();
@@ -253,7 +259,7 @@ export function EntryForm({
   const pending = isTransfer ? trPending : txPending;
   const err = state.fieldErrors ?? {};
   const v = state.values ?? {};
-  const fieldDefault = (field: "amount" | "receivedAmount" | "note") => carry[field] ?? v[field] ?? initial[field];
+  const fieldDefault = (field: "amount" | "receivedAmount" | "note" | "tags") => carry[field] ?? v[field] ?? initial[field];
 
   // A draft saved by "Manage categories" comes back once, on the next mount with the same key (then it is gone).
   // Read after mount: sessionStorage does not exist on the server.
@@ -289,6 +295,16 @@ export function EntryForm({
   // remounted, so focus would otherwise be lost to <body>, outside the dialog).
   // Each result is handled once, also when switching kinds brings an older result back into `state`.
   const handled = useRef(new WeakSet<FormState>([initialFormState]));
+  /** The tags of the last submitted expense / income, kept for the next entry after a "Keep open" save. */
+  const submittedTags = useRef("");
+  // Set when a "Keep open" save remounts the form with the kept tags: the amount of the remounted form takes the focus.
+  // Declared before the result effect below, so it only acts on the render after the one that set it.
+  const focusAmountNext = useRef(false);
+  useEffect(() => {
+    if (!focusAmountNext.current) return;
+    focusAmountNext.current = false;
+    (formRef.current?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+  });
   useEffect(() => {
     if (handled.current.has(state)) return;
     handled.current.add(state);
@@ -300,7 +316,16 @@ export function EntryForm({
         // The next entry starts without Repeat, so a second save cannot make a second rule by accident.
         // eslint-disable-next-line react-hooks/set-state-in-effect -- reacting to the action's result, once
         setFrequency("never");
-        (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+        // Its tags stay (a run of holiday expenses shares them); the amount and note are cleared.
+        // The form has already remounted empty; remount it once more with the tags as the field's default.
+        if (submittedTags.current.trim()) {
+          const next = remount + 1;
+          setCarried({ key: `${stateId(txState)}-${stateId(trState)}-${next}`, values: { tags: submittedTags.current } });
+          setRemount(next);
+          focusAmountNext.current = true;
+        } else {
+          (form?.elements.namedItem("amount") as HTMLInputElement | null)?.focus();
+        }
       } else {
         // Refresh once the page behind is back, so it shows the new entry (back() is asynchronous).
         window.addEventListener("popstate", () => router.refresh(), { once: true });
@@ -314,7 +339,7 @@ export function EntryForm({
         ? (invalid.querySelector<HTMLElement>("input:checked") ?? invalid.querySelector<HTMLElement>("input"))
         : invalid;
     target?.focus();
-  }, [state, keepOpen, router, isInline, onSaved]);
+  }, [state, keepOpen, router, isInline, onSaved, remount, txState, trState]);
 
   const byId = (id: string) => wallets.find((w) => String(w.id) === id);
   const wallet = byId(walletId);
@@ -341,13 +366,14 @@ export function EntryForm({
       const el = formRef.current?.elements.namedItem(name);
       return el instanceof HTMLInputElement ? el.value : undefined;
     };
-    const typed = { amount: field("amount"), note: field("note") };
+    const typed = { amount: field("amount"), note: field("note"), tags: field("tags") };
     setCarried({
       key: formKey,
       values: {
         ...carry,
         ...(typed.amount !== undefined && { amount: typed.amount }),
         ...(typed.note !== undefined && { note: typed.note }),
+        ...(typed.tags !== undefined && { tags: typed.tags }),
       },
     });
     // Categories belong to one kind; keep the choice only if it still fits.
@@ -367,6 +393,10 @@ export function EntryForm({
       ref={formRef}
       key={formKey}
       action={isTransfer ? trFormAction : txFormAction}
+      onSubmit={(e) => {
+        const tagsInput = e.currentTarget.elements.namedItem("tags");
+        submittedTags.current = tagsInput instanceof HTMLInputElement ? tagsInput.value : "";
+      }}
       className={isInline ? "space-y-4" : "space-y-6"}
       noValidate
     >
@@ -631,6 +661,10 @@ export function EntryForm({
             />
             <FieldError id={pid("note")}>{err.note}</FieldError>
           </div>
+
+          {!isTransfer && (
+            <TagsField id={pid("tags")} defaultValue={fieldDefault("tags") ?? ""} options={tags} error={err.tags} />
+          )}
         </>
       )}
 

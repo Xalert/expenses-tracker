@@ -17,6 +17,7 @@ import {
   renameCategory,
   unarchiveCategory,
 } from "@/server/categories";
+import { deleteTag, getTag, renameTag } from "@/server/tags";
 import { colorField, nameField, parseBudgetTarget, parseCategoryId, parseCategoryKind, parseReplacement } from "./form-input";
 
 const NOT_FOUND_STATE: FormState = { message: "Category not found. It may have been removed already." };
@@ -41,6 +42,59 @@ export async function createCategoryAction(kindArg: string, _prev: FormState, fo
   }
   revalidateCategories();
   return { ok: true, message: `Added “${name}”.` };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tags (the "Tags" card on /categories)
+
+const TAG_NOT_FOUND_STATE: FormState = { message: "Tag not found. It may have been removed already." };
+
+/** `merged`: the tag was renamed onto another tag's name and merged into it (so its row is gone). */
+export type TagRenameState = FormState & { merged?: boolean };
+
+/** Bind the tag id. Field `name`. Renaming onto another tag's name merges the two. Stays on /categories. */
+export async function renameTagAction(tagIdArg: number, _prev: TagRenameState, formData: FormData): Promise<TagRenameState> {
+  const user = await requireUser();
+  const values = formValues(formData);
+  const tagId = parseCategoryId(tagIdArg);
+  if (!tagId) return { ...TAG_NOT_FOUND_STATE, values };
+  const before = await getTag(user.id, tagId);
+  if (!before) {
+    revalidateCategories();
+    return { ...TAG_NOT_FOUND_STATE, values };
+  }
+  let result: Awaited<ReturnType<typeof renameTag>>;
+  try {
+    result = await renameTag(user.id, tagId, { name: formData.get("name") });
+  } catch (err) {
+    if (isServiceError(err) && err.code === "NOT_FOUND") revalidateCategories();
+    return serviceErrorState(err, values);
+  }
+  // Tag names show on entry rows and in the filters of every list.
+  revalidateCategories();
+  const { tag, mergedFrom } = result;
+  if (mergedFrom !== null) return { ok: true, merged: true, message: `Merged “${mergedFrom}” into “${tag.name}”.` };
+  return { ok: true, message: tag.name === before.name ? `Saved “${tag.name}”.` : `Renamed to “${tag.name}”.` };
+}
+
+/** Bind the tag id; no form fields. Removes the tag from its entries (they stay). Stays on /categories. */
+export async function deleteTagAction(tagIdArg: number): Promise<FormState> {
+  const user = await requireUser();
+  const tagId = parseCategoryId(tagIdArg);
+  if (!tagId) return TAG_NOT_FOUND_STATE;
+  let removed: Awaited<ReturnType<typeof deleteTag>>;
+  try {
+    removed = await deleteTag(user.id, tagId);
+  } catch (err) {
+    if (isServiceError(err) && err.code === "NOT_FOUND") revalidateCategories();
+    return serviceErrorState(err);
+  }
+  revalidateCategories();
+  const n = removed.transactionCount;
+  return {
+    ok: true,
+    message: n === 0 ? `Deleted “${removed.name}”.` : `Deleted “${removed.name}” and took it off ${n === 1 ? "1 entry" : `${n} entries`}.`,
+  };
 }
 
 /** Bind the category id. Stays on /categories. */

@@ -10,6 +10,7 @@ import { formValues, serviceErrorState, zodErrorState, type FormState } from "@/
 import { currencyDecimals, formatMoney, parseAmount } from "@/lib/money";
 import { MAX_RECURRING_INTERVAL, describeSchedule, isFrequency } from "@/lib/recurrence";
 import { safeReturnTo } from "@/lib/return-to";
+import { splitTagInput } from "@/lib/tags";
 import { createCategory } from "@/server/categories";
 import { createRecurringEntry, type RecurringView, type RepeatInput } from "@/server/recurring";
 import {
@@ -125,6 +126,12 @@ async function parseTransaction(
   if (!wallet) return { ok: false, state: { fieldErrors: { walletId: "Wallet not found." }, values } };
   const amount = amountFor(d.amount, wallet.currency);
   if ("error" in amount) return { ok: false, state: { fieldErrors: { amount: amount.error }, values } };
+  // Tags: one text field, names separated by commas (the form's base without JavaScript; scripts only help fill it).
+  // A form without the field leaves an edited entry's tags as they are.
+  const rawTags = formData.get("tags");
+  if (typeof rawTags === "string" && rawTags.length > 1000) {
+    return { ok: false, state: { fieldErrors: { tags: "That is too much text for tags." }, values } };
+  }
   return {
     ok: true,
     input: {
@@ -134,6 +141,7 @@ async function parseTransaction(
       amountMinor: amount.minor,
       date: d.date,
       note: d.note ?? null,
+      ...(typeof rawTags === "string" ? { tags: splitTagInput(rawTags) } : {}),
     },
   };
 }

@@ -23,6 +23,7 @@ import {
   type Schedule,
 } from "@/lib/recurrence";
 import { assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
+import { normalizeTagList, setEntryTags } from "./tags";
 import { getTransaction, validateTransactionInput, type TransactionInput, type TransactionView } from "./transactions";
 import { closedWalletMessage, getOwnedWalletRow } from "./wallets";
 
@@ -361,6 +362,7 @@ export async function createRecurringEntry(
   const db = await getDb();
   const { transactionId, ruleId, added } = await db.transaction(async (tx) => {
     const v = await validateTransactionInput(userId, input, tx);
+    const tagNames = input.tags === undefined ? [] : normalizeTagList(input.tags);
     const frequency = assertFrequency(repeat.frequency);
     const interval = assertInterval(repeat.interval ?? 1);
     const endDate = assertEndDate(repeat.endDate, v.date);
@@ -385,6 +387,8 @@ export async function createRecurringEntry(
       .insert(transactions)
       .values({ userId, ...v, transferId: null, recurringId: rule.id })
       .returning({ id: transactions.id });
+    // The tags go on this first entry only: rules do not carry tags (SPEC "Tags").
+    if (tagNames.length > 0) await setEntryTags(userId, entry.id, tagNames, tx);
     const caught = await catchUpRule(tx, userId, rule.id, today, MAX_OCCURRENCES_PER_RUN);
     return { transactionId: entry.id, ruleId: rule.id, added: caught.created };
   });

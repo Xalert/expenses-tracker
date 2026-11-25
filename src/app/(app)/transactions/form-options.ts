@@ -1,6 +1,8 @@
 import "server-only";
 import type { CategoryOption, WalletOption } from "@/components/transactions/entry-form";
+import type { TagOption } from "@/components/transactions/tags-field";
 import { listCategories, type CategoryView } from "@/server/categories";
+import { listTags, type TagView } from "@/server/tags";
 import { listWalletGroups } from "@/server/wallet-groups";
 import { getWallet, listWallets, type WalletView } from "@/server/wallets";
 
@@ -61,6 +63,15 @@ export async function categoryOptions(userId: number, keepCategoryIds: (number |
   const keep = new Set(keepCategoryIds.filter((id): id is number => id !== null));
   const all = await listCategories(userId, undefined, { includeArchived: keep.size > 0 });
   return toCategoryOptions(all.filter((c) => !c.archivedAt || keep.has(c.id)));
+}
+
+/** The entry form's Tags suggestions: every tag of the user with its use count. */
+export function toTagOptions(list: TagView[]): TagOption[] {
+  return list.map((t) => ({ name: t.name, count: t.transactionCount }));
+}
+
+export async function tagOptions(userId: number): Promise<TagOption[]> {
+  return toTagOptions(await listTags(userId));
 }
 
 /** First value of a search param. */

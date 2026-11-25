@@ -275,7 +275,7 @@ describe("transactions, dashboard, categories and insights by group", () => {
     expect(await rows(personal)).toBe(3); // two entries + the transfer (its incoming leg matches)
     // The group column names each row's wallet's group, and the wallet rows carry it too.
     const all = parseCsv(await buildTransactionsCsv(alice.id)).records.map((r) => r.cells);
-    expect(all[0].slice(10)).toEqual(["group", "archived", "kind"]);
+    expect(all[0].slice(10)).toEqual(["group", "archived", "kind", "tags"]);
     const wallets = all.filter((r) => r[1] === "wallet").map((r) => `${r[2]}|${r[10]}`);
     expect(wallets).toContain("Home|Personal");
     expect(wallets.some((w) => w.endsWith("|Business"))).toBe(true);

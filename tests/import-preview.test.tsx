@@ -23,6 +23,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     recurringToAdd: 0,
     duplicateRecurring: 0,
     budgetsToAdd: 0,
+    tagsToCreate: [],
     problems: [],
     problemCount: 0,
     notices: [],

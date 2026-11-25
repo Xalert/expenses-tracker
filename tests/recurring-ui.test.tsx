@@ -90,6 +90,7 @@ const row = (over: Partial<TransactionView>): TransactionView => ({
   transferId: null,
   counterparty: null,
   recurringId: null,
+  tags: [],
   ...over,
 });
 

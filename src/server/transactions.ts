@@ -2,10 +2,11 @@ import "server-only";
 import { and, desc, eq, gte, inArray, lte, ne, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DBOrTx } from "@/db";
-import { categories, transactions, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
+import { categories, transactions, transactionTags, wallets, type CategoryKind, type TransactionKind } from "@/db/schema";
 import { isValidDate, isValidMonth, monthRange } from "@/lib/dates";
 import { ServiceError } from "@/lib/errors";
 import { assertDate, assertId, assertPositiveAmount, isPgId, normalizeNote } from "./_validate";
+import { loadEntryTags, normalizeTagList, setEntryTags } from "./tags";
 import { closedWalletMessage, getOwnedWalletRow, signedAmountSql } from "./wallets";
 
 export type TransactionView = {
@@ -27,6 +28,8 @@ export type TransactionView = {
   counterparty: { walletId: number; walletName: string; currency: string; amountMinor: number } | null;
   /** The repeating rule that created this entry (src/server/recurring.ts), or null. */
   recurringId: number | null;
+  /** The entry's tag names (src/server/tags.ts), by name ignoring case; always empty for transfer legs. */
+  tags: string[];
 };
 
 export type TransactionFilters = {
@@ -35,6 +38,8 @@ export type TransactionFilters = {
   groupId?: number;
   kind?: "expense" | "income" | "transfer";
   categoryId?: number;
+  /** Only entries carrying this tag (an id of the user's; another user's matches nothing). */
+  tagId?: number;
   /** `YYYY-MM`: the month's first to last day. Ignored (but still validated) when `from` or `to` is given. */
   month?: string;
   /** Inclusive `YYYY-MM-DD`. */
@@ -55,6 +60,11 @@ export type TransactionInput = {
   amountMinor: number;
   date: string;
   note?: string | null;
+  /**
+   * The entry's tag names: replaces its whole set (missing tags are created). Omitted: create → none, update → the
+   * entry keeps the tags it has. See `normalizeTagList` for the rules (field `tags`).
+   */
+  tags?: string[];
 };
 
 export const DEFAULT_PAGE_SIZE = 50;
@@ -113,7 +123,7 @@ function baseQuery(db: DBOrTx, where: SQL | undefined) {
     .where(where);
 }
 
-function toView(r: Row): TransactionView {
+function toView(r: Row, tagNames: Map<number, string[]>): TransactionView {
   const negative = r.kind === "expense" || r.kind === "transfer_out";
   return {
     id: r.id,
@@ -138,7 +148,17 @@ function toView(r: Row): TransactionView {
           }
         : null,
     recurringId: r.recurringId,
+    tags: tagNames.get(r.id) ?? [],
   };
+}
+
+/** Rows → views, with every row's tags loaded in one query (none when no row can have tags). */
+async function toViews(db: DBOrTx, rows: Row[]): Promise<TransactionView[]> {
+  const tagNames = await loadEntryTags(
+    db,
+    rows.filter((r) => r.transferId === null).map((r) => r.id),
+  );
+  return rows.map((r) => toView(r, tagNames));
 }
 
 function escapeLike(s: string): string {
@@ -160,6 +180,12 @@ export function filterConditions(userId: number, f: TransactionFilters): SQL {
   }
   if (f.categoryId !== undefined) {
     conds.push(eq(transactions.categoryId, assertId(f.categoryId, "categoryId", "category")));
+  }
+  if (f.tagId !== undefined) {
+    const tagId = assertId(f.tagId, "tagId", "tag");
+    conds.push(
+      sql`exists (select 1 from ${transactionTags} where ${transactionTags.transactionId} = ${transactions.id} and ${transactionTags.tagId} = ${tagId})`,
+    );
   }
   if (f.month !== undefined) {
     if (!isValidMonth(f.month)) throw new ServiceError("VALIDATION", "Invalid month.", "month");
@@ -200,7 +226,7 @@ export async function listTransactions(
     .from(transactions)
     .where(where);
   const total = totalRow?.n ?? 0;
-  return { items: rows.map(toView), total };
+  return { items: await toViews(db, rows), total };
 }
 
 export type DayTotal = { date: string; currency: string; netMinor: number };
@@ -234,11 +260,12 @@ export async function listDayTotals(
 /** One owned transaction (including transfer legs), or null. */
 export async function getTransaction(userId: number, id: number, tx?: DBOrTx): Promise<TransactionView | null> {
   if (!isPgId(id)) return null;
-  const [row] = await baseQuery(tx ?? (await getDb()), and(eq(transactions.id, id), eq(transactions.userId, userId)));
-  return row ? toView(row) : null;
+  const db = tx ?? (await getDb());
+  const [row] = await baseQuery(db, and(eq(transactions.id, id), eq(transactions.userId, userId)));
+  return row ? (await toViews(db, [row]))[0] : null;
 }
 
-export type ValidatedTransactionInput = Required<Omit<TransactionInput, "note">> & { note: string | null };
+export type ValidatedTransactionInput = Required<Omit<TransactionInput, "note" | "tags">> & { note: string | null };
 /**
  * Internal (also used by src/server/recurring.ts): check an expense / income input against the account — an owned
  * wallet that takes entries, an owned category of the kind that is not archived (each kept when `previous` already
@@ -287,10 +314,12 @@ export async function createTransaction(userId: number, input: TransactionInput)
   const db = await getDb();
   const id = await db.transaction(async (tx) => {
     const v = await validateTransactionInput(userId, input, tx);
+    const tagNames = input.tags === undefined ? [] : normalizeTagList(input.tags);
     const [row] = await tx
       .insert(transactions)
       .values({ userId, ...v, transferId: null })
       .returning({ id: transactions.id });
+    if (tagNames.length > 0) await setEntryTags(userId, row.id, tagNames, tx);
     return row.id;
   });
   return (await getTransaction(userId, id))!;
@@ -321,10 +350,12 @@ export async function updateTransaction(userId: number, id: number, input: Trans
   await db.transaction(async (tx) => {
     const existing = await getEditableRow(userId, id, tx);
     const v = await validateTransactionInput(userId, input, tx, existing);
+    const tagNames = input.tags === undefined ? undefined : normalizeTagList(input.tags);
     await tx
       .update(transactions)
       .set(v)
       .where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
+    if (tagNames !== undefined) await setEntryTags(userId, id, tagNames, tx);
   });
   return (await getTransaction(userId, id))!;
 }
